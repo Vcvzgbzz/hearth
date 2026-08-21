@@ -1,0 +1,29 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json claims >=20. Until this runs, that claim is a guess —
+        # everything so far has only ever run on 22 and 24.
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The tests bind ephemeral ports on loopback and talk to fake backends in
+      # the same process, so there is nothing to stand up here. If that ever
+      # stops being true, this job is where it will show up first.
+      - run: npm run build

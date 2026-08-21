@@ -1,0 +1,10 @@
+{
+  // Build emits src only; this one exists purely to typecheck the tests too.
+  // Without it `tsc --noEmit` never looked at test/, so a test could pass an
+  // object missing a required field and nothing would say so — which is exactly
+  // what happened when LocalLoad grew a `loaded` field.
+  "extends": "./tsconfig.json",
+  // rootDir must widen too, or tsc refuses files outside src.
+  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

@@ -1,0 +1,60 @@
+{
+  "name": "@vcvzgbzz/hearth",
+  "version": "0.0.1",
+  "description": "A queue in front of your local inference server, and an optional way to lend the spare capacity to someone you trust.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vcvzgbzz/hearth.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Vcvzgbzz/hearth/issues"
+  },
+  "homepage": "https://github.com/Vcvzgbzz/hearth#readme",
+  "keywords": [
+    "llm",
+    "inference",
+    "queue",
+    "scheduler",
+    "llama-swap",
+    "openai-compatible",
+    "proxy",
+    "gpu"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "hearth": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "dev": "tsx src/cli.ts serve",
+    "test": "tsx test/scheduler.test.ts && tsx test/upstream.test.ts && tsx test/config.test.ts && tsx test/route.test.ts && tsx test/peers.test.ts && tsx test/server.test.ts && tsx test/backpressure.test.ts && tsx test/ui.test.ts && tsx test/backends.test.ts && tsx test/batch.test.ts && tsx test/alias.test.ts && tsx test/warm.test.ts && tsx test/control.test.ts && tsx test/sharing.test.ts && tsx test/state.test.ts && tsx test/saveconfig.test.ts && tsx test/security.test.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  }
+}
