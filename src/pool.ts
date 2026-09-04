@@ -171,8 +171,42 @@ export class BackendPool {
     return this.cfg.models[model]?.as ?? model;
   }
 
+  /**
+   * The BODY to put on the wire for a chat completion: the advertised id
+   * swapped for the backend's (`as`), and the route's `params` laid over what
+   * the client sent. The same object back, untouched, for a model with
+   * neither -- which is nearly all of them, so the common case allocates
+   * nothing. `params` win over the client's own values on purpose: the id is
+   * the user's choice, and a client that always sends `reasoning_effort:
+   * high` must not be able to undo the `-low` id it just picked.
+   */
+  outboundBody(model: string, payload: Record<string, unknown>): Record<string, unknown> {
+    const route = this.cfg.models[model];
+    const wire = route?.as ?? model;
+    const params = route?.params ?? null;
+    if (wire === model && params === null) return payload;
+    return { ...payload, ...(params ?? {}), model: wire };
+  }
+
   /** The advertised id for something a backend called `raw`, if we alias it.
    *  Backends speak their own vocabulary; this is the way back to ours. */
+  /**
+   * Every advertised id for something a backend called `raw`: each alias that
+   * points at it, plus `raw` itself when it is ALSO a first-class id (a route
+   * of its own, or no alias at all). Several aliases on one raw id is the
+   * `params` arrangement -- one resident model, several ids -- and a catalog
+   * that showed only the first of them would hide the very ids the operator
+   * added. The raw id stays hidden only when it exists purely to be renamed.
+   */
+  private advertisedIds(raw: string): string[] {
+    const ids: string[] = [];
+    for (const [id, route] of Object.entries(this.cfg.models)) {
+      if (route.as === raw) ids.push(id);
+    }
+    if (ids.length === 0 || this.cfg.models[raw] !== undefined) ids.push(raw);
+    return ids;
+  }
+
   private advertisedId(raw: string): string {
     // Built per call rather than cached: `models` is small, and a cache here
     // would need invalidating on any future config reload.
@@ -190,7 +224,7 @@ export class BackendPool {
         // the feature: /v1/models and the UI show `nomic-embed`, and the raw
         // `nomic-embed-text-v2-moe:latest` never leaks to a client that cannot
         // use it anyway.
-        out.add(this.advertisedId(m));
+        for (const id of this.advertisedIds(m)) out.add(id);
       }
     }
     return [...out];
@@ -205,13 +239,13 @@ export class BackendPool {
       // under every key, warm state included, so translate: if anything is
       // loaded there, its declared names are what is warm.
       if (s.cfg.serves.length) {
-        if (s.state.loaded().length) for (const m of s.cfg.serves) out.add(this.advertisedId(m));
+        if (s.state.loaded().length) for (const m of s.cfg.serves) for (const id of this.advertisedIds(m)) out.add(id);
         continue;
       }
       // Translated too, and this one is NOT cosmetic: warm state feeds the
       // scheduler's warm bonus and the "ready now" set. Left raw, an aliased
       // model would read as permanently cold and quietly lose its priority.
-      for (const m of s.state.loaded()) out.add(this.advertisedId(m));
+      for (const m of s.state.loaded()) for (const id of this.advertisedIds(m)) out.add(id);
     }
     return [...out];
   }
