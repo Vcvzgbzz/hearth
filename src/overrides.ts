@@ -153,6 +153,7 @@ const DEFAULT_ROUTE: ModelRoute = {
   spilloverAt: 1,
   fallbackLocal: true,
   concurrency: null,
+  params: null,
 };
 
 /** Quote anything that is not a plain YAML-safe scalar. Model ids carry colons
@@ -561,7 +562,7 @@ export class Overrides {
     const r = this.cfg.models[id];
     if (!r) return;
     const onlyAPolicy =
-      r.backend === null && r.as === null && r.concurrency === null && r.spilloverAt === 1;
+      r.backend === null && r.as === null && r.concurrency === null && r.spilloverAt === 1 && r.params === null;
     if (onlyAPolicy) delete this.cfg.models[id];
     else this.cfg.models[id] = { ...r, policy: "local", peers: [] };
   }
