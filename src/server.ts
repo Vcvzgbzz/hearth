@@ -1086,8 +1086,20 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         // than only whatever the first backend happens to list. Freshened first
         // so a model added since startup shows up.
         await Promise.all(pool.all().map((b) => b.state.ensureFresh()));
-        const upstream: { data?: { id: string }[] } = {
-          data: pool.catalog().map((id) => ({ id })),
+        // Carry warm state, the way llama-swap does on this route. Pointing an
+        // app at us instead of its backend is supposed to change nothing it can
+        // see, and a client that loses this field loses any idea of which model
+        // answers now and which one costs a load first.
+        const warm = new Set(pool.loaded());
+        const upstream: { data?: { id: string; status?: { value: string } }[] } = {
+          data: pool.catalog().map((id) => {
+            // A backend that cannot report warm state must not be flattened
+            // into cold. "We cannot see" and "nothing is loaded" are different
+            // claims and only one of them would be honest, so such a model
+            // carries no status at all rather than a made-up one.
+            if (pool.for(id).cfg.kind === "none") return { id };
+            return { id, status: { value: warm.has(id) ? "loaded" : "unloaded" } };
+          }),
         };
         // A peer only sees what it may use. This used to hand the whole backend
         // catalogue to anyone with a peer token. Unusable, since every other

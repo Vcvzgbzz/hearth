@@ -14,6 +14,9 @@
  * avoid. So a reported id we recognise is believed, and the translation is the
  * fallback rather than the rule.
  *
+ * The same question shows up on /v1/models, which is where anything pointed
+ * at this node reads warm state from, so that is asserted here too.
+ *
  *     npx tsx test/residency.test.ts
  */
 import assert from "node:assert/strict";
@@ -57,6 +60,15 @@ const node = createNode(
         kind: "llama-swap",
         concurrency: 1,
         serves: ["alpha", "beta", "gamma"],
+      },
+      // Cannot report warm state at all. Present so the /v1/models cases below
+      // can assert the difference between "cold" and "we cannot see".
+      {
+        name: "blind",
+        url: backend.url(),
+        kind: "none",
+        concurrency: 1,
+        serves: ["mystery"],
       },
     ],
   }),
@@ -106,6 +118,29 @@ async function loaded(): Promise<string[]> {
     ["alpha", "beta", "gamma"],
     "a backend reporting an id we cannot use falls back to what it declared",
   );
+}
+
+// --- /v1/models carries warm state ----------------------------------------
+// llama-swap puts `status` on this route, and pointing an app here instead of
+// at the backend is supposed to change nothing the app can see. Dropping the
+// field silently turns every model "unknown", which reads as "never warm" to
+// anything scheduling on it.
+{
+  reported = [{ model: "gamma", state: "ready" }];
+  await Promise.all(node.pool.all().map((b) => b.state.refresh()));
+  const r = await fetch(`${base}/v1/models`);
+  const body = (await r.json()) as {
+    data: { id: string; status?: { value: string } }[];
+  };
+  const by = (id: string) => body.data.find((m) => m.id === id);
+
+  assert.equal(by("gamma")?.status?.value, "loaded", "the resident model is loaded");
+  assert.equal(by("alpha")?.status?.value, "unloaded", "a cold sibling is not");
+
+  // The distinction the config is explicit about: a backend that cannot see
+  // must not be reported as cold, because that is a claim we cannot make.
+  assert.ok(by("mystery"), "the blind backend's model is still listed");
+  assert.equal(by("mystery")?.status, undefined, "and carries no status at all");
 }
 
 node.server.closeAllConnections();
