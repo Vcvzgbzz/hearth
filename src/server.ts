@@ -447,7 +447,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         t.startedAt = Date.now();
         // Their id, not ours. The far side might be another hearth, or a
         // llama-swap routing on this field, and a name it doesn't know is a 404.
-        const body = { ...payload, model: decision.theirModel };
+        // The route's `params` still ride along: the id the user picked meant
+        // the same thing wherever the job lands, and dropping them here made a
+        // `-low` request come back at full effort whenever it spilled over —
+        // silently, and differently again if fallbackLocal brought it home.
+        const body = pool.outboundBody(model, payload, decision.theirModel);
         try {
           const up = await send(`${peer.url}/v1/chat/completions`, {
             json: body,

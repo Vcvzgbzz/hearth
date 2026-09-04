@@ -73,11 +73,21 @@ export class BackendPool {
           resident: () => state.resident(),
           // A predicate, not one name: ollama holds several models resident at
           // once, and only the first would ever collect the bonus otherwise.
-          warm: (m) => state.isWarm(m),
+          //
+          // Asked in the BACKEND's vocabulary. Jobs carry the advertised id and
+          // isWarm() compares against the ids the backend reports, so an `as`
+          // route read as permanently cold and never collected the bonus —
+          // harmless while `as` was a rare rename, load-bearing now that
+          // `params` makes several aliased ids the normal way to front a seat.
+          warm: (m) => state.isWarm(this.outboundId(m)),
           // Keyed by the id we advertise, which is what submit() puts on a job.
           // Undeclared is null, not the backend's number: the scheduler owns
           // that fallback, and answering it here would freeze the value.
-          slots: (m) => cfg.models[m]?.concurrency ?? null,
+          slots: (m) => this.slotsOf(m),
+          // Two ids that resolve to the same resident model ARE the same model
+          // to a backend that batches; without this the scheduler sees a
+          // foreign job and refuses to run them together.
+          wire: (m) => this.outboundId(m),
         }),
       };
       this.slots.push(slot);
@@ -172,6 +182,23 @@ export class BackendPool {
   }
 
   /**
+   * A model's own slot ceiling, INHERITED from the seat it fronts when it does
+   * not declare one.
+   *
+   * Several ids on one resident model share that model's slots — they are one
+   * queue's worth, not one each. Read per advertised id, `concurrency: 8` on
+   * the seat left every `-low`/`-off` id on the backend's flat number, so the
+   * arrangement `params` exists for silently gave up batching unless the
+   * operator restated the ceiling on every id.
+   */
+  private slotsOf(model: string): number | null {
+    const r = this.cfg.models[model];
+    if (!r) return null;
+    if (r.as === null) return r.concurrency;
+    return r.concurrency ?? this.cfg.models[r.as]?.concurrency ?? null;
+  }
+
+  /**
    * The BODY to put on the wire for a chat completion: the advertised id
    * swapped for the backend's (`as`), and the route's `params` laid over what
    * the client sent. The same object back, untouched, for a model with
@@ -179,11 +206,20 @@ export class BackendPool {
    * nothing. `params` win over the client's own values on purpose: the id is
    * the user's choice, and a client that always sends `reasoning_effort:
    * high` must not be able to undo the `-low` id it just picked.
+   *
+   * `wire` overrides the id for the one caller that does not want ours: a job
+   * going to a peer is addressed by THEIR id. The params still go, because the
+   * id the user picked meant the same thing whichever box answers it — a `-low`
+   * request that spilled over must not come back at full effort. A peer that is
+   * another hearth applies its own route on top, which is the same rule one
+   * level out: the nearest config to the backend wins.
    */
-  outboundBody(model: string, payload: Record<string, unknown>): Record<string, unknown> {
-    const route = this.cfg.models[model];
-    const wire = route?.as ?? model;
-    const params = route?.params ?? null;
+  outboundBody(
+    model: string,
+    payload: Record<string, unknown>,
+    wire: string = this.outboundId(model),
+  ): Record<string, unknown> {
+    const params = this.cfg.models[model]?.params ?? null;
     if (wire === model && params === null) return payload;
     return { ...payload, ...(params ?? {}), model: wire };
   }
@@ -307,6 +343,10 @@ export class BackendPool {
     if (raw === null) return base;
     // Advertised, because that is the vocabulary the scheduler's slot counts
     // are keyed by. resident() answers in the backend's own ids.
+    //
+    // Whichever alias advertisedId() picks is fine even with several fronting
+    // one seat: slotsOf() has them all inherit the seat's ceiling, so they all
+    // answer the same number.
     const c = slot.scheduler.capacityFor(this.advertisedId(raw));
     return c.free < base.free || c.slots < base.slots ? c : base;
   }

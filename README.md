@@ -390,13 +390,21 @@ The rules:
   the `-low` id it just picked.
 - `model`, `messages`, `stream` and `lane` are refused at startup: `model` is
   what `as:` is for, and the others belong to the request, not the route.
-- Chat completions only, local dispatch only. A peer takes its id from its own
-  map and applies its own config; the passthrough (`/v1/embeddings` and the
-  rest) still forwards byte for byte apart from the `as:` rename.
+- Chat completions only. The passthrough (`/v1/embeddings` and the rest) still
+  forwards byte for byte apart from the `as:` rename.
+- They travel with the job. A request that spills over to a peer carries its
+  params, addressed by the peer's id — the id meant the same thing wherever it
+  lands, and a `-low` turn must not come back at full effort because the local
+  queue happened to be busy. A peer that is another hearth applies its own route
+  on top, same rule one level out: the config nearest the backend wins.
 - `/v1/models` advertises **every** id that fronts a seat, and the seat's own id
   too when it is a route of its own. (A raw id that exists only to be renamed
   stays hidden, as before.) Warm state follows the same rule, so none of the
   ids reads as cold while the seat is resident.
+- Several ids on one seat are **one seat** to the scheduler: they share the
+  warm bonus, they batch together where the model batches, and `concurrency:`
+  on the seat covers every id that fronts it. Slots belong to the weights, not
+  to the name you reached them by.
 
 ### Knowing what is warm
 

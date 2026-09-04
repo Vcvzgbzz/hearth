@@ -175,8 +175,112 @@ await node.pool.first().state.refresh();
   const plain = { model: SEAT, messages: [] };
   assert.equal(node.pool.outboundBody(SEAT, plain), plain, "identity for a route without as or params");
   assert.equal(node.pool.for("seat-low").name, "swap", "resolution follows the alias");
+
+  // Addressed by the peer's id, still stamped. A `-low` turn that spilled over
+  // came back at full effort otherwise — and at low effort again the moment
+  // fallbackLocal brought it home, which is the same id answering twice
+  // differently for a reason the caller cannot see.
+  const lent = node.pool.outboundBody("seat-low", body, "their-seat");
+  assert.equal(lent.model, "their-seat", "a peer is addressed in ITS vocabulary");
+  assert.equal(lent.reasoning_effort, "low", "params travel with the job");
 }
 
 await node.close();
 be.close();
+
+// --- several ids on one seat are ONE seat to the scheduler -------------------
+// Slots and warmth belong to the WEIGHTS, not to the name you reached them by.
+// Read per advertised id, `concurrency: 8` on the seat left every id fronting
+// it on the backend's flat 1, sibling ids refused to batch with each other
+// because the scheduler saw a foreign model, and none of them ever collected
+// the warm bonus — isWarm() answers in the backend's vocabulary and the jobs
+// carry ours.
+{
+  const swap = createServer((req, res) => {
+    const u = req.url ?? "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (u === "/running") res.end(JSON.stringify({ running: [{ model: SEAT, state: "ready" }] }));
+    else if (u === "/v1/models") res.end(JSON.stringify({ data: [{ id: SEAT }, { id: "other" }] }));
+    else res.end("{}");
+  });
+  await new Promise<void>((r) => swap.listen(0, "127.0.0.1", r));
+  const swapUrl = `http://127.0.0.1:${(swap.address() as AddressInfo).port}`;
+
+  const n2 = createNode(
+    parseConfig({
+      name: "me",
+      backends: [{ name: "swap", url: swapUrl, kind: "llama-swap", concurrency: 1 }],
+      models: {
+        [SEAT]: { backend: "swap", concurrency: 8 }, // the seat batches; the ids fronting it say nothing
+        "seat-low": { backend: "swap", as: SEAT, params: { reasoning_effort: "low" } },
+        "seat-off": { backend: "swap", as: SEAT, params: { reasoning_effort: "none" } },
+      },
+    }),
+    silentLogger,
+  );
+  await listen(n2);
+  const slot = n2.pool.first();
+  await slot.state.refresh();
+  assert.deepEqual(slot.state.loaded(), [SEAT], "the backend reports its own id, as always");
+
+  assert.equal(slot.scheduler.capacityFor("seat-low").slots, 8, "an id inherits its seat's ceiling");
+
+  // Batching across sibling ids: same weights, so the second one does not wait.
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  const a = slot.scheduler.submit({ lane: "chat", model: "seat-low", caller: "c" }, () => held);
+  const b = slot.scheduler.submit({ lane: "chat", model: "seat-off", caller: "c" }, () => held);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(
+    slot.scheduler.view().filter((j) => j.state === "running").length,
+    2,
+    "two ids on one seat batch together",
+  );
+  release();
+  await Promise.all([a, b]);
+
+  // The warm bonus: queued behind a foreign model, the aliased id goes first.
+  let letGo = () => {};
+  const busy = new Promise<void>((r) => (letGo = r));
+  const hog = slot.scheduler.submit({ lane: "chat", model: "other", caller: "c" }, () => busy);
+  await new Promise((r) => setImmediate(r));
+  const cold = slot.scheduler.submit({ lane: "chat", model: "nothing-loaded", caller: "c" }, async () => {});
+  const warm = slot.scheduler.submit({ lane: "chat", model: "seat-low", caller: "c" }, async () => {});
+  await new Promise((r) => setImmediate(r));
+  const at = (m: string) => slot.scheduler.view().find((j) => j.model === m)!.position;
+  assert.ok(
+    at("seat-low") < at("nothing-loaded"),
+    "an id fronting the resident seat is warm, so it outranks a cold model",
+  );
+  letGo();
+  await Promise.all([hog, cold, warm]);
+
+  await n2.close();
+
+  // The narrowing direction, which is the one that matters: loadedCapacity()
+  // reaches the resident seat through whichever alias it finds, so the
+  // inheritance has to hold there too. Without it a seat with FEWER slots than
+  // its backend does not narrow at all, and the node oversells itself to every
+  // peer scoring it.
+  {
+    const n3 = createNode(
+      parseConfig({
+        name: "me",
+        backends: [{ name: "swap", url: swapUrl, kind: "llama-swap", concurrency: 4 }],
+        models: {
+          [SEAT]: { backend: "swap", concurrency: 1 }, // llama.cpp --parallel 1 on a 4-slot seat
+          "seat-low": { backend: "swap", as: SEAT, params: { reasoning_effort: "low" } },
+        },
+      }),
+      silentLogger,
+    );
+    const s3 = n3.pool.first();
+    await s3.state.refresh();
+    assert.equal(n3.pool.loadedCapacity(s3).slots, 1, "the resident seat's own ceiling narrows the node");
+    await n3.close();
+  }
+
+  swap.close();
+}
+
 console.log("params.test.ts ok");
