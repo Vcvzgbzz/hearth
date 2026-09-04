@@ -201,11 +201,22 @@ export class BackendPool {
   loaded(): string[] {
     const out = new Set<string>();
     for (const s of this.slots) {
-      // A backend that declares `serves` reports unusable ids (a gguf path)
-      // under every key, warm state included, so translate: if anything is
-      // loaded there, its declared names are what is warm.
+      // A backend that declares `serves` MAY report unusable ids — a bare
+      // llama-server names the gguf path it was launched with, under every key,
+      // warm state included — so its declared names are all we can say is warm.
+      //
+      // But `serves` is not itself evidence of that: a llama-swap backend can
+      // declare what it serves and still report real ids. Believe those, or one
+      // loaded model marks every id on the backend warm, and the warm bonus
+      // fires for models that would in fact cost a full load.
       if (s.cfg.serves.length) {
-        if (s.state.loaded().length) for (const m of s.cfg.serves) out.add(this.advertisedId(m));
+        const raw = s.state.loaded();
+        const recognised = raw.filter((m) => s.cfg.serves.includes(m));
+        if (recognised.length) {
+          for (const m of recognised) out.add(this.advertisedId(m));
+        } else if (raw.length) {
+          for (const m of s.cfg.serves) out.add(this.advertisedId(m));
+        }
         continue;
       }
       // Translated too, and this one is NOT cosmetic: warm state feeds the
