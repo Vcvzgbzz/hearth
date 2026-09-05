@@ -275,7 +275,86 @@ point: sharing one queue would make the second backend worse than useless.
 
 Nothing schedules *across* backends. hearth works out where a job belongs and
 queues it there, and that is all. This is not the multi-GPU scheduler, which is
-still out of scope.
+still out of scope — a job never gets placed somewhere other than where its
+model lives.
+
+### Backends that share a card
+
+Independent queues are right until two of them are one piece of hardware. Two
+llama-swap instances pinned to different GPUs really are independent; a backend
+running a model large enough to span both cards is independent of neither, and
+neither queue can see it. Both dispatch, both load, and the card is
+over-committed — which on some drivers is not a slow request but a wedged GPU.
+
+Say what each backend consumes and the ones that overlap take turns:
+
+```yaml
+backends:
+  - { name: swap,       url: "http://127.0.0.1:9292", resources: [gpu0] }
+  - { name: swap-image, url: "http://127.0.0.1:9293", resources: [gpu1] }
+  - { name: deep,       url: "http://127.0.0.1:9294", resources: [gpu0, gpu1] }
+```
+
+`swap` and `swap-image` never wait for each other. `deep` waits for both, and
+both wait for `deep`. The names are yours and mean nothing outside this file.
+
+This is still not placement. Routing is untouched: a model resolves to exactly
+one backend by the same rules as before, and nothing decides a job would be
+better off elsewhere. What it adds is that a backend can *wait* for another —
+the one thing "each is its own admission domain" gets wrong when two domains
+are one card.
+
+A backend holds its resources while it has any job running, not per job — its
+`concurrency` already says how much work it may run at once. Before the first
+job goes, hearth unloads any llama-swap backend that overlaps, because winning
+the arbitration only means nobody else is *running* there: a neighbour that
+finished a minute ago still has weights resident, and on a card sized for one
+model that is the same as occupied. Eviction is expensive, so it is logged
+(`pool.evict`) and only happens on the idle-to-busy edge.
+
+Omit `resources` and nothing changes, which is every config that predates it.
+
+### Backends that don't speak the OpenAI API
+
+An A1111 `/sdapi/v1/txt2img`, a whisper server's `/asr`, a TTS or rerank or
+upscale sidecar, your own FastAPI in front of diffusers. These fit hearth
+exactly — request-scoped, GPU-bound, one job at a time — and are excluded only
+because their URL isn't `/v1/*`. The catch-all passthrough forwards them but
+deliberately doesn't queue: scheduling work it can't identify is guesswork.
+
+Naming the path is what identifies it:
+
+```yaml
+backends:
+  - { name: llm, url: "http://127.0.0.1:11434", resources: [gpu0] }
+  - name: sd
+    url: "http://127.0.0.1:7860"
+    resources: [gpu0]
+    routes:
+      - /sdapi/v1/txt2img
+      - { path: /sdapi/v1/progress, queue: false }
+```
+
+That is the one-GPU case: an LLM server and an image server on the same card,
+which today both load and thrash it. Now they take turns.
+
+`queue: false` is for the status endpoint every one of these has. It's what a
+client polls *during* the render it's asking about, so queueing it behind that
+render would give you a progress bar that updates once the work is finished.
+
+A route defaults to the lowest-priority lane you've configured (`batch` in the
+stock config) and reports under the backend's name. Both are overridable per
+route with `lane:` and `model:`. The body is never inspected — a declared path
+is forwarded byte for byte like everything else on that route.
+
+**Synchronous endpoints only.** ComfyUI's `POST /prompt` → poll `/history/{id}`
+does not fit: holding a slot across two unrelated requests leaks it the moment
+a client stops polling. That needs its own mechanism and doesn't have one yet.
+
+**hearth becomes the admission control for a declared path**, so whatever used
+to queue it has to stop. Two queues in series means the outer one holds a slot
+while the inner one waits, and `resources` will believe a card is free when it
+isn't.
 
 ### One backend, models with different ceilings
 

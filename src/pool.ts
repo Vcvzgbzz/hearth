@@ -17,9 +17,10 @@
  * Put it behind the GPU's queue and a 20ms embedding waits on a 40s generation,
  * which is the opposite of why it exists.
  */
-import type { BackendConfig, HearthConfig } from "./config.js";
+import type { BackendConfig, HearthConfig, RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import type { Logger } from "./log.js";
+import { ResourceArbiter } from "./resources.js";
 import { Scheduler } from "./scheduler.js";
 
 /** One backend, with the queue that fronts it. */
@@ -53,6 +54,20 @@ export class BackendPool {
   private readonly byName = new Map<string, BackendSlot>();
   /** Complained-about ambiguous ids, so a duplicate warns once and not per request. */
   private readonly warned = new Set<string>();
+  /**
+   * Hardware shared between backends, so the ones that overlap take turns.
+   *
+   * Still not scheduling across backends: routing is untouched and nothing here
+   * moves a job somewhere it did not belong. What this adds is that a backend
+   * can be made to WAIT for another — which is the one thing the "each is its
+   * own admission domain" model gets wrong when two of those domains are one
+   * GPU.
+   *
+   * Inert unless a backend declares `resources`.
+   */
+  private readonly arbiter = new ResourceArbiter();
+  /** Declared non-OpenAI paths -> who serves them. See BackendConfig.routes. */
+  private readonly byPath = new Map<string, { slot: BackendSlot; rule: RouteRule }>();
 
   constructor(
     private readonly cfg: HearthConfig,
@@ -88,10 +103,50 @@ export class BackendPool {
           // to a backend that batches; without this the scheduler sees a
           // foreign job and refuses to run them together.
           wire: (m) => this.outboundId(m),
+          resources: b.resources,
+          arbiter: this.arbiter,
+          // Winning the arbitration only means nobody else is RUNNING on this
+          // hardware. Anything that ran recently still has weights resident on
+          // it, which on a card sized for one model is the same as it being
+          // occupied — so ask the overlapping backends to let go before we
+          // load.
+          evict: b.resources.length > 0 ? () => this.evictFor(b) : undefined,
         }),
       };
       this.slots.push(slot);
       this.byName.set(b.name, slot);
+      for (const r of b.routes) this.byPath.set(r.path, { slot, rule: r });
+    }
+  }
+
+  /**
+   * The backend that declared this request path, if any.
+   *
+   * Exact match on the pathname, query string already stripped by the caller.
+   * No prefixes and no wildcards: these are a handful of named endpoints, and a
+   * pattern that matches more than the operator pictured would silently pull
+   * unrelated traffic into a queue.
+   */
+  forPath(pathname: string): { slot: BackendSlot; rule: RouteRule } | undefined {
+    return this.byPath.get(pathname);
+  }
+
+  /**
+   * Clear every other backend off the hardware `b` just took.
+   *
+   * Sequential and awaited: these are unload calls to servers that may be
+   * loading, and the point is to be sure the card is free before we put
+   * something on it. In practice it is one or two calls that are usually
+   * no-ops.
+   */
+  private async evictFor(b: BackendConfig): Promise<void> {
+    const overlap = this.slots.filter(
+      (s) => s.name !== b.name && s.cfg.resources.some((r) => b.resources.includes(r)),
+    );
+    for (const s of overlap) {
+      if (!s.state.resident()) continue;
+      this.log.info("pool.evict", { backend: s.name, for: b.name, resources: b.resources });
+      await s.state.unload();
     }
   }
 
@@ -271,11 +326,35 @@ export class BackendPool {
   loaded(): string[] {
     const out = new Set<string>();
     for (const s of this.slots) {
-      // A backend that declares `serves` reports unusable ids (a gguf path)
-      // under every key, warm state included, so translate: if anything is
-      // loaded there, its declared names are what is warm.
+      // A backend that declares `serves` MAY report unusable ids — a bare
+      // llama-server names the gguf path it was launched with, under every key,
+      // warm state included — so its declared names are all we can say is warm.
+      //
+      // But `serves` is not itself evidence of that: a llama-swap backend can
+      // declare what it serves and still report real ids. Believe those, or one
+      // loaded model marks every id on the backend warm, and the warm bonus
+      // fires for models that would in fact cost a full load.
       if (s.cfg.serves.length) {
-        if (s.state.loaded().length) for (const m of s.cfg.serves) for (const id of this.advertisedIds(m)) out.add(id);
+        // Two rules, and they compose rather than compete.
+        //
+        // Believe an id the backend actually named: a llama-swap that declares
+        // `serves` can still say exactly which one is resident, and marking all
+        // of them warm would fire the warm bonus for models that in fact cost a
+        // full load — the swap the bonus exists to avoid. Only when the
+        // reported id is unusable (a bare llama-server naming a gguf path) does
+        // the declared list become the best answer available.
+        //
+        // Then expand each through advertisedIds, because one resident model
+        // can be advertised under several ids once `params` gives them
+        // different defaults. They are the same weights on the same seat, so
+        // they are all warm together.
+        const raw = s.state.loaded();
+        const recognised = raw.filter((m) => s.cfg.serves.includes(m));
+        if (recognised.length) {
+          for (const m of recognised) for (const id of this.advertisedIds(m)) out.add(id);
+        } else if (raw.length) {
+          for (const m of s.cfg.serves) for (const id of this.advertisedIds(m)) out.add(id);
+        }
         continue;
       }
       // Translated too, and this one is NOT cosmetic: warm state feeds the

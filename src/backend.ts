@@ -58,6 +58,37 @@ export class BackendState {
 
   private useEvents: boolean;
 
+  /**
+   * Drop whatever is loaded, so someone else can have the hardware.
+   *
+   * Only llama-swap can be asked: it is the one that both holds a model
+   * resident on our behalf and offers a way to say stop. Ollama expires on its
+   * own keep_alive and `single` has nothing to unload by definition, so for
+   * those this is honestly a no-op rather than a pretend one.
+   *
+   * Never throws. The caller is trying to free a card before using it, and a
+   * backend that is already down — the common case, since down is exactly when
+   * nothing is loaded — has given us what we wanted. Failing the job over it
+   * would turn a successful outcome into an error.
+   */
+  async unload(): Promise<void> {
+    if (this.kind !== "llama-swap") return;
+    try {
+      const res = await send(`${this.url}/unload`, { method: "POST", headersTimeoutMs: 30_000 });
+      res.body.resume();
+      // Warm state is now stale in a way the event stream may take a moment to
+      // tell us. Say so ourselves rather than scoring the next job against a
+      // model we just evicted.
+      this.loadedIds = [];
+      this.lastUpdateAt = Date.now();
+    } catch (e) {
+      this.log.warn("backend.unload_failed", {
+        url: this.url,
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   /** Can this backend tell us what is loaded at all? */
   knowsWarm(): boolean {
     return this.warmIsKnown;
