@@ -35,6 +35,8 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { ResourceArbiter } from "./resources.js";
+
 export interface LaneConfig {
   /** Lower goes first. Put interactive lanes near zero. */
   priority: number;
@@ -82,6 +84,36 @@ export interface SchedulerOptions {
   slots?: (model: string) => number | null;
   /** Fires whenever the job list changes, for status surfaces. */
   onChange?: (jobs: JobView[]) => void;
+  /**
+   * Hardware this backend consumes, and the arbiter it competes in.
+   *
+   * Both or neither. With them, a job is admitted only once every named
+   * resource is free of OTHER backends, and they are held until this backend
+   * has nothing running. Without them — the default, and every config that
+   * predates the feature — admission is exactly what it was.
+   *
+   * Note the grain: the holder is the backend, not the job. `concurrency`
+   * already says how much work may run here at once, and a second job must not
+   * have to re-acquire what the first is already holding.
+   */
+  resources?: readonly string[];
+  arbiter?: ResourceArbiter;
+  /**
+   * Make the resources actually usable, once acquired and before the first job
+   * runs.
+   *
+   * Winning the arbitration means no other backend is RUNNING on this hardware.
+   * It does not mean the hardware is free: a swapping backend that finished a
+   * minute ago still has its weights resident, and on a card sized for one
+   * model that is the whole of it. So something has to tell the neighbours to
+   * let go, and only the caller knows how to ask.
+   *
+   * Awaited, so eviction happens before the load rather than racing it. Costly
+   * — an unload plus the next cold load — which is exactly why it is gated on
+   * winning the arbitration rather than done speculatively. If it rejects, the
+   * job fails instead of running on hardware that was never actually freed.
+   */
+  evict?: () => Promise<void>;
 }
 
 export interface JobSpec {
@@ -178,6 +210,9 @@ export class Scheduler {
   private readonly isWarm: (model: string) => boolean;
   private readonly slotsOf: (model: string) => number | null;
   private readonly onChange?: (jobs: JobView[]) => void;
+  private readonly resources: readonly string[];
+  private readonly arbiter?: ResourceArbiter;
+  private readonly evict?: () => Promise<void>;
 
   private readonly queued: Job[] = [];
   private readonly running = new Set<Job>();
@@ -193,6 +228,18 @@ export class Scheduler {
     this.isWarm = opts.warm ?? ((m) => m === this.resident());
     this.slotsOf = opts.slots ?? (() => null);
     this.onChange = opts.onChange;
+    // Only arbitrate when there is both something to hold and somewhere to hold
+    // it. Half of the pair is a config that meant to exclude and silently does
+    // not, so treat it as neither and let config validation be the place that
+    // complains.
+    this.resources = opts.arbiter ? (opts.resources ?? []) : [];
+    this.arbiter = this.resources.length > 0 ? opts.arbiter : undefined;
+    this.evict = opts.evict;
+    // A queue blocked on hardware someone else holds has nothing of its own to
+    // finish, so its usual triggers — a submission, a completion — never fire.
+    // Subscribing here rather than leaving it to whoever built us means the
+    // wake-up cannot be forgotten at a call site.
+    this.arbiter?.onRelease(() => this.pump());
   }
 
   /** Lane priority, or something large for an unknown lane, so a typo sorts to
@@ -283,6 +330,11 @@ export class Scheduler {
    * and a swap under load is the thrash this queue exists to prevent.
    */
   private canAdmit(job: Job): boolean {
+    // Before this backend's own ceilings, because they are about how much work
+    // it may run and this is about whether it may run at all. `available`
+    // ignores what we already hold, so a backend with a job in flight is not
+    // blocked by itself.
+    if (this.arbiter && !this.arbiter.available(this.resources, this)) return false;
     if (this.running.size >= this.limitFor(job.model)) return false;
     if (this.running.size < this.concurrency) return true;
     for (const j of this.running) if (j.model !== job.model) return false;
@@ -377,8 +429,9 @@ export class Scheduler {
    * against its own caller for a microtask. Invisible over a network, very
    * visible in a test.
    */
-  private execute(job: Job, release: () => void): void {
+  private execute(job: Job, release: () => void, prepare?: () => Promise<void>): void {
     void Promise.resolve()
+      .then(() => prepare?.())
       .then(() => job.run())
       .then(
         (v) => {
@@ -418,11 +471,23 @@ export class Scheduler {
       this.remove(job);
       job.state = "running";
       job.startedAt = Date.now();
+      // Taking the hardware and evicting off it happen on the idle->busy edge
+      // only. A backend already running holds its resources, and its
+      // neighbours were already cleared off them.
+      const takingHold = this.arbiter !== undefined && this.running.size === 0;
       this.running.add(job);
-      this.execute(job, () => {
-        this.running.delete(job);
-        this.sync();
-      });
+      if (takingHold) this.arbiter?.acquire(this.resources, this);
+      this.execute(
+        job,
+        () => {
+          this.running.delete(job);
+          // Last one out. Releasing while a sibling still runs would let a
+          // competing backend load on top of it.
+          if (this.running.size === 0) this.arbiter?.release(this);
+          this.sync();
+        },
+        takingHold ? this.evict : undefined,
+      );
     }
     this.sync();
   }

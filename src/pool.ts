@@ -20,6 +20,7 @@
 import type { BackendConfig, HearthConfig } from "./config.js";
 import { BackendState } from "./backend.js";
 import type { Logger } from "./log.js";
+import { ResourceArbiter } from "./resources.js";
 import { Scheduler } from "./scheduler.js";
 
 /** One backend, with the queue that fronts it. */
@@ -53,6 +54,18 @@ export class BackendPool {
   private readonly byName = new Map<string, BackendSlot>();
   /** Complained-about ambiguous ids, so a duplicate warns once and not per request. */
   private readonly warned = new Set<string>();
+  /**
+   * Hardware shared between backends, so the ones that overlap take turns.
+   *
+   * Still not scheduling across backends: routing is untouched and nothing here
+   * moves a job somewhere it did not belong. What this adds is that a backend
+   * can be made to WAIT for another — which is the one thing the "each is its
+   * own admission domain" model gets wrong when two of those domains are one
+   * GPU.
+   *
+   * Inert unless a backend declares `resources`.
+   */
+  private readonly arbiter = new ResourceArbiter();
 
   constructor(
     private readonly cfg: HearthConfig,
@@ -78,10 +91,37 @@ export class BackendPool {
           // Undeclared is null, not the backend's number: the scheduler owns
           // that fallback, and answering it here would freeze the value.
           slots: (m) => cfg.models[m]?.concurrency ?? null,
+          resources: b.resources,
+          arbiter: this.arbiter,
+          // Winning the arbitration only means nobody else is RUNNING on this
+          // hardware. Anything that ran recently still has weights resident on
+          // it, which on a card sized for one model is the same as it being
+          // occupied — so ask the overlapping backends to let go before we
+          // load.
+          evict: b.resources.length > 0 ? () => this.evictFor(b) : undefined,
         }),
       };
       this.slots.push(slot);
       this.byName.set(b.name, slot);
+    }
+  }
+
+  /**
+   * Clear every other backend off the hardware `b` just took.
+   *
+   * Sequential and awaited: these are unload calls to servers that may be
+   * loading, and the point is to be sure the card is free before we put
+   * something on it. In practice it is one or two calls that are usually
+   * no-ops.
+   */
+  private async evictFor(b: BackendConfig): Promise<void> {
+    const overlap = this.slots.filter(
+      (s) => s.name !== b.name && s.cfg.resources.some((r) => b.resources.includes(r)),
+    );
+    for (const s of overlap) {
+      if (!s.state.resident()) continue;
+      this.log.info("pool.evict", { backend: s.name, for: b.name, resources: b.resources });
+      await s.state.unload();
     }
   }
 

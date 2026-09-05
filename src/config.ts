@@ -97,6 +97,31 @@ export interface BackendConfig {
    * Defaults to scheduler.concurrency so a single-backend config is unchanged.
    */
   concurrency: number;
+  /**
+   * Hardware this backend consumes, so backends sharing it take turns.
+   *
+   * A backend is its own admission domain, which is right up until two of them
+   * are one piece of silicon — two llama-swap instances pinned to different
+   * cards are independent, but a backend running a model spanning both cards is
+   * not independent of either. The queues cannot see that on their own, so say
+   * it:
+   *
+   *     backends:
+   *       - name: swap
+   *         resources: [gpu0]
+   *       - name: swap-image
+   *         resources: [gpu1]
+   *       - name: deep          # spans the pair
+   *         resources: [gpu0, gpu1]
+   *
+   * Backends whose sets overlap will not run at the same time; backends whose
+   * sets are disjoint are unaffected, and neither is routing — a model still
+   * resolves to exactly one backend by exactly the rules it did before.
+   *
+   * The names are yours and mean nothing outside this file. Empty, the default,
+   * means competing for nothing, which is every config that predates this.
+   */
+  resources: string[];
 }
 
 export interface ModelRoute {
@@ -503,6 +528,7 @@ export function parseConfig(raw: unknown): HearthConfig {
         kind: warmSource(entry, `backends[${i}]`),
         serves: strList(entry.serves, `backends[${i}].serves`),
         concurrency: count(entry.concurrency, `backends[${i}].concurrency`, defaultConcurrency, 1),
+        resources: strList(entry.resources, `backends[${i}].resources`),
       });
     }
     const seen = new Set<string>();
@@ -537,6 +563,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       kind: warmSource(backend, "backend"),
       serves: strList(backend.serves, "backend.serves"),
       concurrency: count(backend.concurrency, "backend.concurrency", defaultConcurrency, 1),
+      resources: strList(backend.resources, "backend.resources"),
     });
   }
   const backendNames = new Set(backends.map((b) => b.name));

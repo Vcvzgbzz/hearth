@@ -275,7 +275,44 @@ point: sharing one queue would make the second backend worse than useless.
 
 Nothing schedules *across* backends. hearth works out where a job belongs and
 queues it there, and that is all. This is not the multi-GPU scheduler, which is
-still out of scope.
+still out of scope — a job never gets placed somewhere other than where its
+model lives.
+
+### Backends that share a card
+
+Independent queues are right until two of them are one piece of hardware. Two
+llama-swap instances pinned to different GPUs really are independent; a backend
+running a model large enough to span both cards is independent of neither, and
+neither queue can see it. Both dispatch, both load, and the card is
+over-committed — which on some drivers is not a slow request but a wedged GPU.
+
+Say what each backend consumes and the ones that overlap take turns:
+
+```yaml
+backends:
+  - { name: swap,       url: "http://127.0.0.1:9292", resources: [gpu0] }
+  - { name: swap-image, url: "http://127.0.0.1:9293", resources: [gpu1] }
+  - { name: deep,       url: "http://127.0.0.1:9294", resources: [gpu0, gpu1] }
+```
+
+`swap` and `swap-image` never wait for each other. `deep` waits for both, and
+both wait for `deep`. The names are yours and mean nothing outside this file.
+
+This is still not placement. Routing is untouched: a model resolves to exactly
+one backend by the same rules as before, and nothing decides a job would be
+better off elsewhere. What it adds is that a backend can *wait* for another —
+the one thing "each is its own admission domain" gets wrong when two domains
+are one card.
+
+A backend holds its resources while it has any job running, not per job — its
+`concurrency` already says how much work it may run at once. Before the first
+job goes, hearth unloads any llama-swap backend that overlaps, because winning
+the arbitration only means nobody else is *running* there: a neighbour that
+finished a minute ago still has weights resident, and on a card sized for one
+model that is the same as occupied. Eviction is expensive, so it is logged
+(`pool.evict`) and only happens on the idle-to-busy edge.
+
+Omit `resources` and nothing changes, which is every config that predates it.
 
 ### One backend, models with different ceilings
 
