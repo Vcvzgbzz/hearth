@@ -117,8 +117,11 @@ paths **are not queued**, see below.
 
 ## The status page
 
-`http://127.0.0.1:4141/ui`, once `hearth serve` is running. Plain HTML with no
-build step, no framework and no dependency, served from a string.
+`http://127.0.0.1:4141/ui`, once `hearth serve` is running. React and MUI,
+compiled to one file at build time and inlined into the page, so it is still a
+single response and still adds **nothing** to what `npm install` pulls down —
+the browser half is bundled from devDependencies and the package keeps its one
+runtime dependency.
 
 It shows four things the JSON endpoints make you assemble yourself:
 
@@ -888,8 +891,18 @@ on `/ui` from this machine's own LAN address, with a valid api key, to prove the
 loopback gate holds anyway. It skips itself on a host with no routable
 interface rather than pretending to have checked.
 
-The page lives in [`src/ui.ts`](src/ui.ts) as a template literal, so backticks
-and `${` inside it are escaped. Get that wrong and the build fails loudly
-rather than shipping something broken.
+The page lives in [`src/ui/`](src/ui/) as ordinary `.tsx`.
+[`src/ui.ts`](src/ui.ts) is only the HTML shell, and it reads
+`dist/ui-client.js` — the esbuild bundle — in at import time. So `npm test`
+builds the browser half first (`pretest`), and `npm run typecheck` checks it
+against [`tsconfig.ui.json`](tsconfig.ui.json), which is also the tsconfig
+esbuild is pointed at: the JSX setting has to be one fact, or the bundle
+compiles against a runtime that is not there and the page renders blank.
+
+It used to be one template literal holding the whole page, where backticks and
+`${` had to be escaped by hand. A `\"` in the inner layer collapses to a bare
+`"` on the way out, which terminates the emitted string, and tsc sees nothing
+wrong because the TypeScript is valid — the browser just renders nothing. That
+class of bug is gone rather than guarded.
 
 MIT.

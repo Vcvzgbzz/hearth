@@ -1,0 +1,15 @@
+{
+  // The browser half. Separate because it needs the DOM lib and JSX, and
+  // because tsc must NOT emit it: esbuild bundles src/ui/ into
+  // dist/ui-client.js, and a parallel set of loose .js files in dist would be
+  // dead weight that `files` would happily ship. noEmit here, typecheck only.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": []
+  },
+  "exclude": ["dist", "node_modules"],
+  "include": ["src/ui/**/*"]
+}

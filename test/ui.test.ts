@@ -7,9 +7,10 @@
  * bearer token. If that check ever softens into localCaller, a node bound to
  * 0.0.0.0 starts handing its queue contents and model inventory to the network.
  *
- * The second is that /ui/data actually carries what the page draws. The page is
- * one string in this repo and nothing type-checks the shape it consumes, so a
- * renamed field would surface as a blank panel rather than a failure.
+ * The second is that /ui/data actually carries what the page draws. src/ui/types.ts
+ * now states the shape the console consumes, but nothing connects it to the
+ * server that builds the payload, so a renamed field would still surface as a
+ * blank panel rather than a failure.
  */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -22,31 +23,38 @@ import { silentLogger } from "../src/log.js";
 import { createNode } from "../src/server.js";
 import { UI_HTML } from "../src/ui.js";
 
-// --- the page's own script must PARSE ---------------------------------------
-// The cheapest test here and the one with the best record, because this file is
-// a TypeScript template literal containing JavaScript, and the escaping between
-// the two layers has broken the page repeatedly:
+// --- the shell must actually carry the console -----------------------------
+// The class of bug this replaces is gone rather than tested for: the page was a
+// TypeScript template literal containing JavaScript, and a `\"` in the inner
+// layer collapsed to a bare `"` on the way out, terminating the emitted string
+// and making the script unparseable. tsc saw perfectly valid TypeScript, every
+// other test here passed, and the browser rendered a blank page. Shipped
+// exactly that on 2026-08-16 and only found it by opening a browser.
 //
-//   - a stray backtick in a comment ends the literal (caught by tsc, four times)
-//   - a backslash-escaped quote does NOT survive: \" collapses to a bare " on
-//     the way out, terminating the emitted string and making the script
-//     unparseable (NOT caught by tsc — the TypeScript is perfectly valid)
-//
-// The second kind is invisible to every other test in this file: /ui/data still
-// answers, the HTML still has its title, the server is fine — and the browser
-// renders a completely blank page because the whole script died at parse time.
-// Shipped exactly that on 2026-08-16 and only found it by opening a browser.
-//
-// new Function() parses without executing, so no DOM is needed.
+// src/ui/ is ordinary .tsx now, so esbuild fails the build on a syntax error
+// and `npm run typecheck` covers the rest. What is still worth asserting is the
+// join: `npm test` runs build:ui first, and if the bundle went missing or empty
+// the page would serve a mount point and nothing to mount into it — which looks
+// exactly like the old blank page.
 {
-  const scripts = [...UI_HTML.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
-  assert.ok(scripts.length > 0, "the page must actually contain a script");
-  for (const [i, src] of scripts.entries()) {
-    assert.doesNotThrow(
-      () => new Function(src),
-      `<script> #${i + 1} in UI_HTML does not parse — the page will render blank`,
-    );
-  }
+  assert.match(UI_HTML, /<div id="root">/, "the shell must have a mount point");
+  const script = UI_HTML.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
+  assert.ok(script.length > 10_000, "the compiled console must be inlined, not a stub");
+  assert.ok(script.includes("react-dom"), "and it must actually be the bundle");
+  // The HTML parser ends a script at the first literal `</script`, wherever it
+  // appears — inside a string literal included.
+  assert.ok(!script.includes("</script"), "nothing in the bundle may close the tag early");
+  // esbuild reads tsconfig.json by default, which does not set `jsx` because it
+  // is the config for the SERVER half. Built that way the bundle emits classic
+  // `React.createElement` against a global that nothing defines, and the page is
+  // blank with one ReferenceError in a console nobody is watching — which is how
+  // this was found. The fix is `--tsconfig=tsconfig.ui.json` in build:ui; this is
+  // what notices if it goes missing.
+  //
+  // ponytail: pins the one symptom rather than rendering the page. A real mount
+  // check wants jsdom; add it if a second bug of this shape gets through.
+  assert.ok(!script.includes("React.createElement"),
+    "the bundle must use the automatic JSX runtime — build:ui lost its --tsconfig");
 }
 
 // --- the ring buffer, on its own ------------------------------------------
@@ -115,22 +123,25 @@ const base = await new Promise<string>((ready) =>
     "a cached copy of a live status page is a lie");
   const html = await page.text();
   assert.match(html, /<title>Hearth Console<\/title>/);
-  // The escaping in src/ui.ts is mechanical and easy to get wrong. If a
-  // template literal was interpolated at build time this is where it shows.
   assert.match(html, /fetch\("\/ui\/data"/, "the page must fetch its own endpoint");
   assert.ok(!html.includes("MOCK_NETWORK"), "the draft's mock data must not ship");
 
+  // These used to name the DOM helpers that drew each thing. The bundle is
+  // minified, so every identifier in it is now a mangled two letters — but
+  // string literals survive verbatim, and the operator-facing copy is a better
+  // thing to pin anyway: it is what actually went missing the time this
+  // mattered, and a rename that keeps the words keeps the feature.
+  //
   // /network has always computed `unmapped`, and a redesign once dropped it
   // from the page — silently removing the only thing that tells you a peer
   // started offering something you cannot ask for. The data being on the wire
   // is tested in server.test.ts; this checks the page still does something
   // with it, because that is the half that went missing.
-  assert.match(html, /mapBlock/, "the page must still render unmapped peer models");
-  assert.match(html, /cannot reach/, "and say what it means in words");
-  // The two controls this page exists to offer now. Both are one DOM helper
-  // each, so a refactor that drops one leaves everything else looking fine.
-  assert.match(html, /function shareCell/, "the sharing toggle must survive");
-  assert.match(html, /function drawPending/, "and the record of what is not in the file");
+  assert.match(html, /offered here you cannot reach/,
+    "the page must still render unmapped peer models, and say what it means in words");
+  assert.match(html, /peers may use this model/, "the sharing toggle must survive");
+  assert.match(html, /not in the config file/,
+    "and the record of what is not in the file");
   assert.ok(!html.includes("secret-key"), "no credential may appear in the page");
 }
 

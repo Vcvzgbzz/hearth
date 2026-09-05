@@ -6,5 +6,6 @@
   "extends": "./tsconfig.json",
   // rootDir must widen too, or tsc refuses files outside src.
   "compilerOptions": { "noEmit": true, "rootDir": "." },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["src/ui"]
 }

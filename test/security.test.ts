@@ -10,7 +10,7 @@
  * whatever a visited web page tells it to.
  */
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,7 +19,9 @@ import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
 import { silentLogger } from "../src/log.js";
 import { createNode } from "../src/server.js";
-import { UI_HTML } from "../src/ui.js";
+import { yamlScalar as yq } from "../src/yamlq.js";
+
+const uiDir = new URL("../src/ui/", import.meta.url).pathname;
 
 const dir = mkdtempSync(join(tmpdir(), "hearth-sec-"));
 const cfgPath = join(dir, "hearth.yaml");
@@ -171,17 +173,20 @@ peers:
   await new Promise<void>((r) => hostile.close(() => r()));
 }
 
-/* ------------------------------------------- the page's own escaping helpers */
+/* -------------------------------------------- the page's own YAML quoting */
 
 {
-  // Extracted and run, not just parsed. The suite already checks the script
-  // PARSES, which cannot see a helper whose definition failed to land or a
-  // regex that a template literal quietly rewrote — both of which happened
-  // while writing this.
-  const script = UI_HTML.match(/<script>([\s\S]*)<\/script>/)![1]!;
-  const yq = new Function(`${script.match(/const yq = [^\n]+/)![0]}\nreturn yq;`)() as (v: string) => string;
-  const esc = new Function(`${script.match(/const esc = [\s\S]*?\}\)\[c\]\);/)![0]}\nreturn esc;`)() as (v: string) => string;
-
+  // Imported and run, not extracted out of the page's source with a regex and
+  // handed to new Function. That was the only way to test anything inside a
+  // template literal, and it caught two real bugs precisely because it RAN
+  // them — a helper whose definition failed to insert, and a character class
+  // where the literal ate `\-` and turned `.-/` into a RANGE that excluded the
+  // hyphen in every model id.
+  //
+  // The page's other escaping helper is gone rather than moved: `esc` existed
+  // for the one place the old page used innerHTML, and React escapes text
+  // children by construction. The assertion below is that nothing has quietly
+  // opened that hole again.
   assert.equal(yq("qwen3-coder-30b"), "qwen3-coder-30b",
     "an ordinary id is left alone — a hyphen inside a character class is easy to lose");
   assert.equal(yq("coder"), "coder");
@@ -189,8 +194,15 @@ peers:
   // told to paste into their config.
   assert.equal(yq("sneak\nevil: true"), '"sneak\\nevil: true"', "a newline cannot break out");
   assert.equal(yq("has space"), '"has space"');
-  assert.equal(esc('<img src=x onerror="p()">'),
-    "&lt;img src=x onerror=&quot;p()&quot;&gt;", "markup cannot reach innerHTML intact");
+
+  // This page is a privilege boundary: it is served on loopback, and a browser
+  // on loopback is what /control trusts. Script running here can change what
+  // this node lends and write the config file — and peer-chosen model ids are
+  // rendered all over it.
+  for (const f of readdirSync(uiDir)) {
+    assert.doesNotMatch(readFileSync(join(uiDir, f), "utf8"), /dangerouslySetInnerHTML/,
+      `${f} reintroduces raw markup into the console`);
+  }
 }
 
 await new Promise<void>((r) => backend.close(() => r()));

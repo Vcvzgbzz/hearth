@@ -32,6 +32,7 @@ import { parseDocument } from "yaml";
 
 import { ConfigError, parseConfig, type HearthConfig, type ModelRoute, type RoutePolicy } from "./config.js";
 import type { Logger } from "./log.js";
+import { yamlScalar as y } from "./yamlq.js";
 
 export interface MapChange {
   peer: string;
@@ -155,13 +156,6 @@ const DEFAULT_ROUTE: ModelRoute = {
   concurrency: null,
   params: null,
 };
-
-/** Quote anything that is not a plain YAML-safe scalar. Model ids carry colons
- *  (`nomic-embed-text-v2-moe:latest`) and an unquoted one as a KEY is a mapping
- *  inside a mapping, so the snippet would paste as something else entirely. */
-function y(s: string): string {
-  return /^[A-Za-z0-9_][A-Za-z0-9_.\-/]*$/.test(s) ? s : JSON.stringify(s);
-}
 
 export class Overrides {
   /** What the file said, cloned before anything is allowed to touch it. */
