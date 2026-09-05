@@ -40,6 +40,19 @@ export class BackendState {
    *  not "nothing is warm". Callers must not turn one into the other. */
   private warmIsKnown = true;
   private lastUpdateAt = 0;
+  /**
+   * Last time anything was successfully READ from this backend.
+   *
+   * Deliberately NOT lastUpdateAt. That one is stamped at the END of refresh()
+   * whatever happened, including when both requests failed — which is right for
+   * its job (it means "we asked recently, do not ask again"), and useless as a
+   * health signal: an unreachable backend keeps reporting itself fresh. Two
+   * identically-dead backends were drawing differently on the status page
+   * because of it, depending on which had been re-polled.
+   *
+   * Status surfaces only. Nothing schedules off this.
+   */
+  private lastOkAt = 0;
   private streaming = false;
   private stopped = false;
   private attempt = 0;
@@ -137,6 +150,7 @@ export class BackendState {
     this.catalogIds = models.map((m) => m.id);
     this.loadedIds = models.filter((m) => m.state === READY).map((m) => m.id);
     this.lastUpdateAt = Date.now();
+    this.lastOkAt = this.lastUpdateAt;
   }
 
   /**
@@ -178,6 +192,25 @@ export class BackendState {
     }
 
     this.lastUpdateAt = Date.now();
+    // Only if something actually came back. Both halves rejecting means the
+    // backend told us nothing, and stamping that as a reading is how a box that
+    // has been down for an hour reads as idle.
+    if (catalog.status === "fulfilled" || warm.status === "fulfilled") {
+      this.lastOkAt = this.lastUpdateAt;
+    }
+  }
+
+  /**
+   * Has anything come back from this backend lately?
+   *
+   * For the status page, and only meaningful where knowsWarm() is true: a
+   * `kind: none` backend is never read at all, so silence from one says
+   * nothing. Not a health check — hearth does not probe backends it is not
+   * using — but "we have not heard from this in a minute" is a fact, and it is
+   * the difference between a backend that is idle and one that is gone.
+   */
+  answering(): boolean {
+    return this.lastOkAt > 0 && Date.now() - this.lastOkAt <= STALE_MS;
   }
 
   /** Whatever this kind of backend calls "what is loaded right now". */

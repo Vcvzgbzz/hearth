@@ -68,6 +68,17 @@ export class BackendPool {
   private readonly arbiter = new ResourceArbiter();
   /** Declared non-OpenAI paths -> who serves them. See BackendConfig.routes. */
   private readonly byPath = new Map<string, { slot: BackendSlot; rule: RouteRule }>();
+  /**
+   * The last few handoffs, so a card changing hands is visible and not merely
+   * logged.
+   *
+   * An eviction is the expensive event on this node — 20-60s of reload the next
+   * request pays for — and it is the one thing the status page could not see at
+   * all: the resident model simply changed between two polls, with nothing
+   * saying why or what it cost. A ring of twenty, same as everything else here,
+   * dies with the process.
+   */
+  private readonly evicted: { t: number; backend: string; for: string; resources: string[] }[] = [];
 
   constructor(
     private readonly cfg: HearthConfig,
@@ -146,8 +157,38 @@ export class BackendPool {
     for (const s of overlap) {
       if (!s.state.resident()) continue;
       this.log.info("pool.evict", { backend: s.name, for: b.name, resources: b.resources });
+      this.evicted.push({ t: Date.now(), backend: s.name, for: b.name, resources: [...b.resources] });
+      while (this.evicted.length > 20) this.evicted.shift();
       await s.state.unload();
     }
+  }
+
+  /** Recent handoffs, oldest first. See `evicted`. */
+  evictions(): readonly { t: number; backend: string; for: string; resources: string[] }[] {
+    return [...this.evicted];
+  }
+
+  /**
+   * Every declared piece of hardware, who is on it, and who competes for it.
+   *
+   * The list is empty for a config that declares no `resources`, which is most
+   * of them — and the page then draws nothing rather than an empty box.
+   *
+   * `holder` is the backend currently RUNNING on the resource, not the one
+   * whose weights are resident: the arbiter is released the moment a backend's
+   * last job finishes, so a card with nothing running is genuinely free even
+   * though the model that just ran is still sitting in its memory.
+   */
+  resources(): { name: string; holder: string | null; backends: string[] }[] {
+    const held = new Map(this.arbiter.snapshot());
+    const names = [...new Set(this.slots.flatMap((s) => s.cfg.resources))].sort();
+    return names.map((name) => ({
+      name,
+      // Owner identity is the Scheduler instance, which is what acquire() was
+      // handed. Mapping it back to a name here keeps that private to the pool.
+      holder: this.slots.find((s) => held.get(name) === s.scheduler)?.name ?? null,
+      backends: this.slots.filter((s) => s.cfg.resources.includes(name)).map((s) => s.name),
+    }));
   }
 
   all(): BackendSlot[] {

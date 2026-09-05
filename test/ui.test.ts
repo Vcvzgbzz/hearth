@@ -22,6 +22,7 @@ import { History } from "../src/history.js";
 import { silentLogger } from "../src/log.js";
 import { createNode } from "../src/server.js";
 import { UI_HTML } from "../src/ui.js";
+import { blockers, waitReason } from "../src/ui/why.js";
 
 // --- the shell must actually carry the console -----------------------------
 // The class of bug this replaces is gone rather than tested for: the page was a
@@ -55,6 +56,46 @@ import { UI_HTML } from "../src/ui.js";
   // check wants jsdom; add it if a second bug of this shape gets through.
   assert.ok(!script.includes("React.createElement"),
     "the bundle must use the automatic JSX runtime — build:ui lost its --tsconfig");
+}
+
+// --- why a job is waiting -------------------------------------------------
+//
+// The page's one piece of real derivation, and the one thing on it that is a
+// claim rather than a readout: "blocked" and "full" and "cold" are different
+// problems with different answers, and getting the ORDER wrong is how a job
+// waiting on somebody else's GPU gets reported as this backend being busy.
+// Admission checks hardware before either of the backend's own ceilings, so
+// this must too.
+{
+  const gpu0 = { name: "gpu0", holder: "video", backends: ["swap", "video"] };
+  const free = { name: "gpu1", holder: null, backends: ["other"] };
+  const job = { lane: "chat", model: "coder", caller: "x", state: "queued" as const,
+                position: 3, since: 0 };
+
+  const swap = { name: "swap", resources: ["gpu0"], slots: 4, free: 0, evicts: true,
+                 knowsWarm: true, loaded: ["other-model"] };
+  assert.equal(waitReason(job, swap, [gpu0, free]).tone, "blocked",
+    "hardware held by another backend outranks this backend being full");
+  assert.match(waitReason(job, swap, [gpu0, free]).text, /gpu0/);
+
+  // Same backend, nobody on the card: now the ceiling is the real answer.
+  const idle = { ...gpu0, holder: null };
+  assert.equal(waitReason(job, swap, [idle, free]).tone, "busy");
+
+  // Room to run, but the wrong model is resident on a backend that evicts.
+  assert.equal(waitReason(job, { ...swap, free: 2 }, [idle]).tone, "cold");
+  assert.match(waitReason(job, { ...swap, free: 2 }, [idle]).text, /must unload/);
+
+  // A backend that keeps everything resident cannot make a job wait for a
+  // load, so claiming it did would be an invention.
+  assert.equal(waitReason(job, { ...swap, free: 2, evicts: false }, [idle]).tone, "lane");
+
+  // Holding the resource ourselves never blocks us: that is what concurrency
+  // is for, and a backend running its second job is not waiting on its first.
+  assert.deepEqual(blockers({ name: "video", resources: ["gpu0"] }, [gpu0]), []);
+  assert.equal(blockers({ name: "swap", resources: ["gpu0"] }, [gpu0]).length, 1);
+  assert.deepEqual(blockers({ name: "loner" }, [gpu0]), [],
+    "a backend that declares nothing competes for nothing");
 }
 
 // --- the ring buffer, on its own ------------------------------------------
@@ -184,6 +225,72 @@ const base = await new Promise<string>((ready) =>
   const later = (await (await fetch(`${base}/ui/data`)).json()) as typeof d;
   assert.deepEqual(later.hist.at(-1)!.residents, ["m1"],
     "once the backend has been read, the lane chart has something to draw");
+}
+
+// --- the hardware the page draws ------------------------------------------
+//
+// The three things the console could not express at all until it was given
+// them, and the reason each is on the wire:
+//
+//   resources  a card is the thing that decides whether a backend may run,
+//              and it appeared NOWHERE in the payload
+//   routes     a route backend has an empty `serves`, so without these it
+//              renders as a bare name with nothing beside it, forever
+//   holder     "free" and "somebody else has it" are the difference between
+//              idle and blocked, which the page drew identically
+//
+// Asserted here rather than in the components because this is the join: the
+// page can only draw a card if the server names one.
+{
+  const shared = createNode(
+    parseConfig({
+      name: "two-cards",
+      backends: [
+        { name: "swap", url: backendUrl, kind: "llama-swap", resources: ["gpu0"] },
+        { name: "img", url: backendUrl, kind: "llama-swap", serves: ["image"], resources: ["gpu1"] },
+        {
+          name: "video", url: backendUrl, kind: "none", concurrency: 1, resources: ["gpu1"],
+          routes: [{ path: "/generate", model: "video-wan" }],
+        },
+        { name: "embed", url: backendUrl, llamaSwapExtras: false, serves: ["embed"] },
+      ],
+    }),
+    silentLogger,
+  );
+  shared.start();
+  const at = await new Promise<string>((ready) =>
+    shared.server.listen(0, "127.0.0.1", () =>
+      ready(`http://127.0.0.1:${(shared.server.address() as AddressInfo).port}`)),
+  );
+  const d = (await (await fetch(`${at}/ui/data`)).json()) as {
+    net: {
+      resources: { name: string; holder: string | null; backends: string[] }[];
+      evictions: unknown[];
+      nodes: { self?: boolean; backends?: {
+        name: string; resources: string[]; answering: boolean;
+        routes: { path: string; model: string; lane: string; queue: boolean }[];
+      }[] }[];
+    };
+  };
+
+  assert.deepEqual(
+    d.net.resources.map((r) => [r.name, r.holder, r.backends.join("+")]),
+    [["gpu0", null, "swap"], ["gpu1", null, "img+video"]],
+    "every declared card, who is on it, and who takes turns for it",
+  );
+  assert.ok(Array.isArray(d.net.evictions), "handoffs are a list, empty until one happens");
+
+  const backends = d.net.nodes.find((n) => n.self)!.backends!;
+  const video = backends.find((b) => b.name === "video")!;
+  assert.deepEqual(video.resources, ["gpu1"]);
+  assert.deepEqual(video.routes, [{ path: "/generate", model: "video-wan", lane: "batch", queue: true }],
+    "a route backend is described by its paths, since it has no models to show");
+  assert.deepEqual(backends.find((b) => b.name === "embed")!.resources, [],
+    "a backend that declares nothing competes for nothing, and draws as unpinned");
+  assert.equal(typeof backends[0]!.answering, "boolean",
+    "and whether we have heard from it lately, so silence is not drawn as idle");
+
+  await shared.close();
 }
 
 // --- the gate --------------------------------------------------------------

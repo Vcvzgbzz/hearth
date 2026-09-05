@@ -83,6 +83,19 @@ export class ResourceArbiter {
     if (freed) for (const cb of [...this.listeners]) cb();
   }
 
+  /**
+   * Who holds what, right now.
+   *
+   * For status surfaces only — nothing schedules off this, and it is a copy so
+   * a reader cannot mutate the map it was handed. It exists because the whole
+   * point of `resources` is invisible otherwise: a backend sitting at 0/16 with
+   * an empty queue looks idle on every existing readout, when in fact it cannot
+   * start anything until the backend beside it lets go of the card.
+   */
+  snapshot(): [string, ResourceOwner][] {
+    return [...this.holders];
+  }
+
   /** Called whenever anything is released, so waiting schedulers re-pump. */
   onRelease(cb: () => void): () => void {
     this.listeners.add(cb);

@@ -10,12 +10,58 @@
  * adding one here should mean somebody is about to draw it.
  */
 
+/** A declared path on a backend that fronts something that is not OpenAI-shaped. */
+export interface Route {
+  path: string;
+  model: string;
+  lane: string;
+  /** false means the path is forwarded but never queued — a progress endpoint. */
+  queue: boolean;
+}
+
 export interface Backend {
   name: string;
+  url?: string;
+  kind?: string;
   loaded?: string[];
   serves?: string[];
   /** Only llama-swap. An ollama backend keeps its set resident, so it cannot thrash. */
   evicts?: boolean;
+  /** False when it cannot report warm state at all, which is not the same as cold. */
+  knowsWarm?: boolean;
+  /** False when nothing has come back from it in a minute. Not a health check,
+   *  and only meaningful where `knowsWarm` is true. */
+  answering?: boolean;
+  slots?: number;
+  free?: number;
+  queued?: number;
+  /** Hardware it consumes. Empty means it competes for nothing. */
+  resources?: string[];
+  /** Non-OpenAI endpoints it fronts. A route backend has these and no `serves`. */
+  routes?: Route[];
+}
+
+/**
+ * One piece of hardware, and the backends that take turns on it.
+ *
+ * `holder` is who is RUNNING on it, not whose weights are resident: the arbiter
+ * frees a card the moment the last job on it finishes, so free-and-still-loaded
+ * is the normal resting state and the page must not draw it as busy.
+ */
+export interface Resource {
+  name: string;
+  holder: string | null;
+  backends: string[];
+}
+
+/** One backend cleared off a card so another could use it. */
+export interface Eviction {
+  t: number;
+  /** Who was unloaded. */
+  backend: string;
+  /** Who took the card. */
+  for: string;
+  resources: string[];
 }
 
 export interface Node {
@@ -41,6 +87,10 @@ export interface Node {
 
 export interface Net {
   nodes: Node[];
+  /** Declared hardware. Empty for a config that never mentioned any. */
+  resources?: Resource[];
+  /** Recent handoffs, oldest first. */
+  evictions?: Eviction[];
   /** Everything reachable, ours and mapped peers' alike. */
   available: string[];
   /** Loaded somewhere reachable — a union across nodes. */

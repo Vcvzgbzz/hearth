@@ -1628,6 +1628,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             // backend that cannot see is not the same claim as one from a
             // backend that looked, and the page must not render it as such.
             knowsWarm: b.state.knowsWarm(),
+            // Whether anything has come back from it lately. A backend that
+            // stopped answering keeps its last known slot counts and an empty
+            // queue, which draws as "idle" — the one word it certainly is not.
+            // Not a health check and not claiming to be: "we have not heard
+            // from this in a minute" is the honest thing we actually know.
+            answering: b.state.answering(),
             // Only llama-swap evicts. An ollama backend keeps its set resident
             // and serves them together, so there is no thrash to warn about.
             evicts: b.cfg.kind === "llama-swap",
@@ -1638,6 +1644,20 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
               ? [...b.cfg.serves]
               : b.state.loaded(),
             serves: b.cfg.serves.length ? [...b.cfg.serves] : b.state.catalog(),
+            // The hardware this backend consumes. Empty for a backend that
+            // competes for nothing, which is every backend in a config that
+            // never declared any.
+            resources: [...b.cfg.resources],
+            // A backend fronting a non-OpenAI service has an EMPTY serves list,
+            // so without this it draws as a bare name with nothing beside it
+            // forever — the one row on the page that could never say what it
+            // does. Its work is addressed by path, so the path is the answer.
+            routes: b.cfg.routes.map((r) => ({
+              path: r.path,
+              model: r.model,
+              lane: r.lane,
+              queue: r.queue,
+            })),
           };
         }),
       },
@@ -1712,6 +1732,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
 
     return {
       nodes,
+      // The scarce thing. A backend is an admission domain; a card is what
+      // decides whether an admission domain may run at all, and it belongs at
+      // the top of the payload rather than inferred from a list of backends.
+      resources: pool.resources(),
+      // What the last few handoffs cost somebody.
+      evictions: pool.evictions(),
       readyNow: [...readyNow].sort(),
       available: [...available].sort(),
       unknownWarm: [...unknownWarm].sort(),
