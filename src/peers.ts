@@ -35,7 +35,7 @@ import { UpstreamError, getJson } from "./upstream.js";
  * model swap — and does not retry 4xx. Report a peer's 429 as a 502 and every
  * client politely backing off instead turns a rate limit into a retry storm
  * aimed at someone else's GPU. Observed exactly that on 2026-08-15: three
- * subagents hit treggat's batch-lane cap, and the 502 mapping turned three
+ * subagents hit a peer's batch-lane cap, and the 502 mapping turned three
  * rejections into six requests.
  *
  * Same lesson the warm route already learned about QueueFullError, one path
