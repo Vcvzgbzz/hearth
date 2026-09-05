@@ -65,6 +65,49 @@ export type WarmSource = "llama-swap" | "ollama" | "single" | "none";
  */
 export type UiControl = "off" | "key";
 
+/**
+ * One request path on a backend that speaks something other than the OpenAI API.
+ *
+ * hearth's own routes queue because it knows their shape: a model id, a lane, a
+ * caller. The catch-all passthrough deliberately does NOT queue, because
+ * scheduling work you cannot identify is guesswork. That leaves out a whole
+ * class of backend that is otherwise a perfect fit — request-scoped,
+ * GPU-bound, one job at a time — purely because its URL is not `/v1/*`:
+ * A1111's `/sdapi/v1/txt2img`, a whisper server's `/asr`, a TTS or rerank or
+ * upscale sidecar, any homemade FastAPI in front of diffusers.
+ *
+ * Naming the path is what makes it identifiable, and that is all this is. The
+ * body is still forwarded byte for byte and hearth never looks inside it.
+ *
+ * The case this is really for is one GPU with an LLM server and an image server
+ * on it. Today nothing coordinates them: both load, both thrash the card. With
+ * a path to queue on and a shared `resources` entry, they take turns.
+ *
+ * Limited to SYNCHRONOUS endpoints — ones that do the work and answer. A
+ * submit-then-poll API (ComfyUI's `/prompt` -> `/history/{id}`) does not fit:
+ * holding a slot across two unrelated requests leaks it the moment a client
+ * stops polling. That wants its own mechanism, and this shape leaves room for
+ * one rather than pretending to cover it.
+ */
+export interface RouteRule {
+  /** Exact pathname, query string ignored. `/sdapi/v1/txt2img`, `/generate`. */
+  path: string;
+  /** Which lane it queues in, and so what it yields to. */
+  lane: string;
+  /** The id this work is reported under — status, logs, the page. */
+  model: string;
+  /**
+   * false routes the path here but does not queue it.
+   *
+   * For the status endpoint every one of these backends has: A1111's
+   * `/sdapi/v1/progress`, a job-list, a health probe. They are cheap, they are
+   * not GPU work, and queueing them behind a render is worse than useless —
+   * a progress bar that only updates once the thing it is measuring has
+   * finished.
+   */
+  queue: boolean;
+}
+
 export interface BackendConfig {
   /** How this backend is named in `models.<id>.backend` and in status output.
    *  A single-backend config gets "default" without having to say so. */
@@ -122,6 +165,13 @@ export interface BackendConfig {
    * means competing for nothing, which is every config that predates this.
    */
   resources: string[];
+  /**
+   * Non-OpenAI paths this backend serves, and whether they are work.
+   *
+   * Empty for anything that speaks `/v1`, which is most backends and every
+   * config that predates this.
+   */
+  routes: RouteRule[];
 }
 
 export interface ModelRoute {
@@ -492,6 +542,37 @@ function strList(v: unknown, where: string): string[] {
   return v as string[];
 }
 
+/**
+ * `routes:` entries, as a bare path or an object.
+ *
+ * The bare form is the common case — one endpoint that does the work — and it
+ * should not cost four lines of YAML to say so. `lane` and `model` are left
+ * empty here and filled in once the lanes exist; see resolveRoutes.
+ */
+function routeList(v: unknown, where: string): RouteRule[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) throw new ConfigError(`${where} must be a list`);
+  return v.map((raw, i) => {
+    const at = `${where}[${i}]`;
+    const entry = typeof raw === "string" ? { path: raw } : asRecord(raw, at);
+    const path = str(entry.path, `${at}.path`);
+    // A path that does not start with "/" cannot ever match a request, so it is
+    // a typo that would otherwise fail silently at 3am rather than at startup.
+    if (!path.startsWith("/")) {
+      throw new ConfigError(`${at}.path must start with "/" (got ${path})`);
+    }
+    if (path.includes("?")) {
+      throw new ConfigError(`${at}.path must not include a query string (got ${path})`);
+    }
+    return {
+      path,
+      lane: str(entry.lane, `${at}.lane`, ""),
+      model: str(entry.model, `${at}.model`, ""),
+      queue: bool(entry.queue, `${at}.queue`, true),
+    };
+  });
+}
+
 function trimUrl(u: string, where: string): string {
   if (!/^https?:\/\//.test(u)) {
     throw new ConfigError(`${where} must start with http:// or https:// (got ${u})`);
@@ -529,6 +610,7 @@ export function parseConfig(raw: unknown): HearthConfig {
         serves: strList(entry.serves, `backends[${i}].serves`),
         concurrency: count(entry.concurrency, `backends[${i}].concurrency`, defaultConcurrency, 1),
         resources: strList(entry.resources, `backends[${i}].resources`),
+        routes: routeList(entry.routes, `backends[${i}].routes`),
       });
     }
     const seen = new Set<string>();
@@ -564,6 +646,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       serves: strList(backend.serves, "backend.serves"),
       concurrency: count(backend.concurrency, "backend.concurrency", defaultConcurrency, 1),
       resources: strList(backend.resources, "backend.resources"),
+      routes: routeList(backend.routes, "backend.routes"),
     });
   }
   const backendNames = new Set(backends.map((b) => b.name));
@@ -583,6 +666,44 @@ export function parseConfig(raw: unknown): HearthConfig {
   // See WARM_LANE_PRIORITY. Added rather than defaulted, so it survives an
   // explicit `lanes:` block that would otherwise replace it.
   if (lanes[WARM_LANE] === undefined) lanes[WARM_LANE] = { priority: WARM_LANE_PRIORITY };
+
+  // Routes are filled in HERE rather than where they are parsed, because their
+  // defaults depend on the lanes, and the lanes are not known until now.
+  //
+  // The default lane is the lowest-priority one you configured — `batch` in the
+  // stock config. A path worth naming is nearly always the heavy, uninteractive
+  // half of the box (a render, a transcription, a batch of images), and the
+  // thing it shares a GPU with is nearly always someone waiting on a chat
+  // response. Yielding is the right default; say `lane:` when it isn't.
+  const fallbackLane = Object.entries(lanes)
+    .filter(([n]) => n !== WARM_LANE)
+    .sort((a, b) => b[1].priority - a[1].priority)[0]![0];
+  const claimedPaths = new Map<string, string>();
+  for (const b of backends) {
+    for (const r of b.routes) {
+      if (r.lane === "") r.lane = fallbackLane;
+      else if (!(r.lane in lanes)) {
+        throw new ConfigError(
+          `backends "${b.name}" route ${r.path} names lane "${r.lane}", which is not in scheduler.lanes`,
+        );
+      }
+      // Named for the backend, since one backend's paths are one thing as far
+      // as anything watching is concerned. Two paths on one backend reporting
+      // the same id is correct: they are the same GPU doing the same job.
+      if (r.model === "") r.model = b.name;
+      // A path resolves to exactly one backend, the same way a model id does.
+      // Two backends claiming it is someone meaning two different things by one
+      // URL, and picking either silently is worse than saying so.
+      const owner = claimedPaths.get(r.path);
+      if (owner) {
+        throw new ConfigError(
+          `backends "${owner}" and "${b.name}" both declare the route ${r.path} — ` +
+            `one path cannot mean two backends`,
+        );
+      }
+      claimedPaths.set(r.path, b.name);
+    }
+  }
 
   const peers: PeerConfig[] = [];
   const peersRaw = root.peers === undefined ? [] : root.peers;

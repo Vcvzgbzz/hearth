@@ -17,7 +17,7 @@
  * Put it behind the GPU's queue and a 20ms embedding waits on a 40s generation,
  * which is the opposite of why it exists.
  */
-import type { BackendConfig, HearthConfig } from "./config.js";
+import type { BackendConfig, HearthConfig, RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import type { Logger } from "./log.js";
 import { ResourceArbiter } from "./resources.js";
@@ -66,6 +66,8 @@ export class BackendPool {
    * Inert unless a backend declares `resources`.
    */
   private readonly arbiter = new ResourceArbiter();
+  /** Declared non-OpenAI paths -> who serves them. See BackendConfig.routes. */
+  private readonly byPath = new Map<string, { slot: BackendSlot; rule: RouteRule }>();
 
   constructor(
     private readonly cfg: HearthConfig,
@@ -103,7 +105,20 @@ export class BackendPool {
       };
       this.slots.push(slot);
       this.byName.set(b.name, slot);
+      for (const r of b.routes) this.byPath.set(r.path, { slot, rule: r });
     }
+  }
+
+  /**
+   * The backend that declared this request path, if any.
+   *
+   * Exact match on the pathname, query string already stripped by the caller.
+   * No prefixes and no wildcards: these are a handful of named endpoints, and a
+   * pattern that matches more than the operator pictured would silently pull
+   * unrelated traffic into a queue.
+   */
+  forPath(pathname: string): { slot: BackendSlot; rule: RouteRule } | undefined {
+    return this.byPath.get(pathname);
   }
 
   /**

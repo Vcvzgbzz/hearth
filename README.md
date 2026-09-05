@@ -314,6 +314,48 @@ model that is the same as occupied. Eviction is expensive, so it is logged
 
 Omit `resources` and nothing changes, which is every config that predates it.
 
+### Backends that don't speak the OpenAI API
+
+An A1111 `/sdapi/v1/txt2img`, a whisper server's `/asr`, a TTS or rerank or
+upscale sidecar, your own FastAPI in front of diffusers. These fit hearth
+exactly — request-scoped, GPU-bound, one job at a time — and are excluded only
+because their URL isn't `/v1/*`. The catch-all passthrough forwards them but
+deliberately doesn't queue: scheduling work it can't identify is guesswork.
+
+Naming the path is what identifies it:
+
+```yaml
+backends:
+  - { name: llm, url: "http://127.0.0.1:11434", resources: [gpu0] }
+  - name: sd
+    url: "http://127.0.0.1:7860"
+    resources: [gpu0]
+    routes:
+      - /sdapi/v1/txt2img
+      - { path: /sdapi/v1/progress, queue: false }
+```
+
+That is the one-GPU case: an LLM server and an image server on the same card,
+which today both load and thrash it. Now they take turns.
+
+`queue: false` is for the status endpoint every one of these has. It's what a
+client polls *during* the render it's asking about, so queueing it behind that
+render would give you a progress bar that updates once the work is finished.
+
+A route defaults to the lowest-priority lane you've configured (`batch` in the
+stock config) and reports under the backend's name. Both are overridable per
+route with `lane:` and `model:`. The body is never inspected — a declared path
+is forwarded byte for byte like everything else on that route.
+
+**Synchronous endpoints only.** ComfyUI's `POST /prompt` → poll `/history/{id}`
+does not fit: holding a slot across two unrelated requests leaks it the moment
+a client stops polling. That needs its own mechanism and doesn't have one yet.
+
+**hearth becomes the admission control for a declared path**, so whatever used
+to queue it has to stop. Two queues in series means the outer one holds a slot
+while the inner one waits, and `resources` will believe a card is free when it
+isn't.
+
 ### One backend, models with different ceilings
 
 llama.cpp decodes one request at a time, so one GPU means one job and the queue

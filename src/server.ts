@@ -1261,12 +1261,18 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // one base url", so anything not claimed above gets proxied as-is: method,
     // body, the lot.
     //
-    // Not queued, on purpose. These are control-plane calls and non-chat
-    // generation endpoints whose shapes we don't know, and scheduling work you
-    // can't identify is guesswork. Anything sending them almost certainly has
-    // its own admission control. Queueing here would also deadlock a caller
-    // that's holding its own slot while it waits on us.
-    if (localCaller(req) === null) {
+    // Not queued by default, on purpose. These are control-plane calls and
+    // non-chat generation endpoints whose shapes we don't know, and scheduling
+    // work you can't identify is guesswork. Anything sending them almost
+    // certainly has its own admission control. Queueing here would also
+    // deadlock a caller that's holding its own slot while it waits on us.
+    //
+    // `backends[].routes` is how an operator says otherwise for a specific
+    // path. That resolves the objection rather than ignoring it: a named path
+    // IS identified, and naming it is a statement that hearth is the admission
+    // control for it — which also means whatever used to queue it must stop.
+    const who = localCaller(req);
+    if (who === null) {
       apiError(res, 401, "unauthorized", "authentication_error");
       return;
     }
@@ -1284,6 +1290,10 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
       throw e;
     }
+    // A declared route wins over every heuristic below it, being the only
+    // statement here the operator actually made.
+    const routed = pool.forPath(url.pathname);
+
     // Which backend? These paths are not chat, so there is no route table to
     // consult, but most of them still name a model somewhere: /v1/embeddings
     // and friends carry it in the body, and llama-swap's /upstream/<model>/...
@@ -1299,8 +1309,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         // Not JSON, or not ours to understand. The fallback covers it.
       }
     }
-    const named = viaPath ?? viaBody;
-    const target = named ? pool.for(named) : pool.first();
+    const named = routed ? undefined : (viaPath ?? viaBody);
+    const target = routed ? routed.slot : named ? pool.for(named) : pool.first();
     if (named && !pool.single) {
       log.debug("passthrough.resolved", { path, model: named, backend: target.name });
     }
@@ -1341,7 +1351,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     res.on("close", () => {
       if (!res.writableEnded) ctrl.abort();
     });
-    try {
+    const proxy = async (): Promise<void> => {
       const up = await send(`${target.cfg.url}${outPath}${url.search}`, {
         method: req.method ?? "GET",
         ...(outBody && outBody.length > 0 ? { raw: outBody } : {}),
@@ -1360,7 +1370,32 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       });
       log.debug("passthrough", { path, status: up.status });
       await pipeThrough(up, res);
+    };
+
+    try {
+      // A route declared `queue: false` — a progress endpoint, a job list —
+      // goes straight through. Those are what the caller polls WHILE the work
+      // it is asking about holds the slot, so queueing them behind it would
+      // make a progress bar that only moves once there is nothing left to
+      // report.
+      if (routed?.rule.queue) {
+        const { lane, model } = routed.rule;
+        await target.scheduler.submit(
+          { lane, model, caller: who, signal: ctrl.signal },
+          proxy,
+        );
+      } else {
+        await proxy();
+      }
     } catch (e) {
+      // Same reasoning as the warm route: a full lane is the caller's cue to
+      // back off, and dressing it as a 502 makes a client that retries on 429
+      // give up on a queue that just needed a moment.
+      if (e instanceof QueueFullError) {
+        if (!res.headersSent) apiError(res, 429, e.message, "rate_limit_error");
+        else res.end();
+        return;
+      }
       if (!res.headersSent) {
         apiError(res, 502, e instanceof Error ? e.message : String(e), "server_error");
       } else {
