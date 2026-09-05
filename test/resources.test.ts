@@ -160,6 +160,49 @@ function pool(concurrency = 1) {
   assert.equal(await c, "c");
 }
 
+// --- a blocked backend reports NO free slots -------------------------------
+// This is not a display detail. `capacity()` is what /peer/state serves, so a
+// peer scores us on it: reporting 16 free while another backend holds the card
+// sends us work that then sits in the queue, which is precisely the over-commit
+// the arbiter exists to prevent. `slots` still describes the backend; `free`
+// has to describe this second.
+{
+  const arbiter = new ResourceArbiter();
+  const busy = new Scheduler({ lanes, concurrency: 1, resources: ["gpu0"], arbiter });
+  // `batchy` has its own ceiling ABOVE the backend's, which is the only way
+  // capacityFor takes its own path — with no override it returns capacity()
+  // unchanged and would prove nothing. It is also the dangerous direction: 32
+  // advertised free slots on a card somebody else is holding.
+  const blocked = new Scheduler({
+    lanes,
+    concurrency: 16,
+    resources: ["gpu0"],
+    arbiter,
+    slots: (m) => (m === "batchy" ? 32 : null),
+  });
+
+  assert.equal(blocked.capacity().free, 16, "idle, so all of them");
+  assert.equal(blocked.capacityFor("batchy").free, 32, "and a batching model gets its own ceiling");
+
+  const g = gate();
+  const held = busy.submit({ lane: "chat", model: "m", caller: "c" }, async () => {
+    await g.wait();
+    return 1;
+  });
+  await tick();
+
+  const cap = blocked.capacity();
+  assert.equal(cap.free, 0, "no free slots while another backend holds the card");
+  assert.equal(cap.slots, 16, "but it still has 16 slots — free is the live number");
+  assert.equal(cap.running, 0, "and it is not running anything, which is the point");
+  assert.equal(blocked.capacityFor("batchy").free, 0, "nor does a batching model advertise 32 of them");
+
+  g.open();
+  await held;
+  await tick();
+  assert.equal(blocked.capacity().free, 16, "and they come back when the card does");
+}
+
 // --- eviction runs on the idle->busy edge, before the job ------------------
 // Winning the arbitration means nobody else is RUNNING on the hardware, not
 // that it is free: a swapping neighbour that finished a minute ago still has

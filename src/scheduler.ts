@@ -329,12 +329,22 @@ export class Scheduler {
    * kind: one foreign job running means the next admission would force a swap,
    * and a swap under load is the thrash this queue exists to prevent.
    */
+  /**
+   * Could this backend take work at all right now, hardware included?
+   *
+   * False only while ANOTHER backend holds a resource this one declared. What
+   * we hold ourselves does not block us — that is what `concurrency` is for.
+   */
+  private hardwareFree(): boolean {
+    return !this.arbiter || this.arbiter.available(this.resources, this);
+  }
+
   private canAdmit(job: Job): boolean {
     // Before this backend's own ceilings, because they are about how much work
     // it may run and this is about whether it may run at all. `available`
     // ignores what we already hold, so a backend with a job in flight is not
     // blocked by itself.
-    if (this.arbiter && !this.arbiter.available(this.resources, this)) return false;
+    if (!this.hardwareFree()) return false;
     if (this.running.size >= this.limitFor(job.model)) return false;
     if (this.running.size < this.concurrency) return true;
     for (const j of this.running) if (j.model !== job.model) return false;
@@ -368,7 +378,9 @@ export class Scheduler {
       // a model can be told it has 2 while 3 of its jobs are still running, if
       // its number arrived (or shrank) after they started.
       slots: Math.max(limit, this.running.size),
-      free: Math.max(0, limit - this.running.size),
+      // Same rule as capacity(): a model's own ceiling is still zero while the
+      // card is somebody else's.
+      free: this.hardwareFree() ? Math.max(0, limit - this.running.size) : 0,
     };
   }
 
@@ -384,12 +396,19 @@ export class Scheduler {
     const queued: Record<string, number> = {};
     for (const lane of Object.keys(this.lanes)) queued[lane] = 0;
     for (const j of this.queued) queued[j.lane] = (queued[j.lane] ?? 0) + 1;
+    // A backend waiting on hardware someone else holds has NO free slots, and
+    // saying otherwise is not a display quirk — this number is what a peer
+    // scores us on. Reporting 16 free while the card is held sends us work that
+    // then sits in the queue, which is the over-commit the whole thing exists to
+    // prevent. `slots` still says what this backend is, `free` says what it can
+    // do this second.
+    const free = this.hardwareFree() ? Math.max(0, this.concurrency - this.running.size) : 0;
     return {
       // Never fewer slots than there are jobs holding them. A batching model
       // runs above `concurrency` on purpose, and a status page that reported
       // "4 busy of 1" would read as a bug in the queue rather than the feature.
       slots: Math.max(this.concurrency, this.running.size),
-      free: Math.max(0, this.concurrency - this.running.size),
+      free,
       running: this.running.size,
       offbox: this.offbox.size,
       queued,
