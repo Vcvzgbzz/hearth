@@ -351,10 +351,12 @@ is forwarded byte for byte like everything else on that route.
 does not fit: holding a slot across two unrelated requests leaks it the moment
 a client stops polling. That needs its own mechanism and doesn't have one yet.
 
-**hearth becomes the admission control for a declared path**, so whatever used
-to queue it has to stop. Two queues in series means the outer one holds a slot
-while the inner one waits, and `resources` will believe a card is free when it
-isn't.
+**Check what already queues that path.** hearth becoming a second gate in front
+of an existing one is safe when they nest — an app slot taken before hearth's
+resource, never the reverse — and it buys you the callers the app's own queue
+cannot see. It is not safe when the two disagree about placement, and it always
+costs the outer slot being held while the inner one waits. Decide which queue
+owns the card and make the other one a backstop.
 
 ### One backend, models with different ceilings
 
