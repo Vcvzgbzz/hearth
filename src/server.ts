@@ -386,11 +386,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     const runLocal = async (): Promise<void> => {
       await local.state.ensureFresh();
       // Our id out, the backend's id in — the same rewrite the peer path below
-      // does with theirModel, just for a local backend. Identity unless the
-      // model sets `as`, so the common payload is untouched.
-      const wire = pool.outboundId(model);
+      // does with theirModel, just for a local backend — plus the route's
+      // `params` stamped over the client's. Identity unless the model sets
+      // one of them, so the common payload is untouched.
       const up = await send(`${local.cfg.url}/v1/chat/completions`, {
-        json: wire === model ? payload : { ...payload, model: wire },
+        json: pool.outboundBody(model, payload),
         signal,
       });
       await pipeThrough(up, res);
@@ -447,7 +447,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         t.startedAt = Date.now();
         // Their id, not ours. The far side might be another hearth, or a
         // llama-swap routing on this field, and a name it doesn't know is a 404.
-        const body = { ...payload, model: decision.theirModel };
+        // The route's `params` still ride along: the id the user picked meant
+        // the same thing wherever the job lands, and dropping them here made a
+        // `-low` request come back at full effort whenever it spilled over —
+        // silently, and differently again if fallbackLocal brought it home.
+        const body = pool.outboundBody(model, payload, decision.theirModel);
         try {
           const up = await send(`${peer.url}/v1/chat/completions`, {
             json: body,
@@ -1193,8 +1197,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
               async () => {
                 t.startedAt = Date.now();
                 await serving.state.ensureFresh();
+                // A peer asked in OUR vocabulary, so the same rewrite and the same
+                // stamped params apply on the way to the backend as for a local
+                // caller. (Before, a lent `as` model reached the backend under
+                // the advertised id and 404'd.)
                 const up = await send(`${serving.cfg.url}/v1/chat/completions`, {
-                  json: payload,
+                  json: pool.outboundBody(model, payload),
                   signal: ctrl.signal,
                 });
                 await pipeThrough(up, res);

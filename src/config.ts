@@ -199,6 +199,19 @@ export interface ModelRoute {
   /** Fall back to the local backend if no peer can take it. */
   fallbackLocal: boolean;
   /**
+   * Request fields stamped on every chat completion routed through this id,
+   * AFTER the `as` rewrite and OVER whatever the client sent. The id is the
+   * user's choice, so a client that also sends the field does not undo it.
+   *
+   * The other half of `as`: several advertised ids can front ONE resident
+   * backend model and differ only in the defaults they carry
+   * (`reasoning_effort: low` on one id, `none` on another) -- no second
+   * process, so no seat swap on a one-GPU box. Local dispatch only: a peer
+   * takes its id from its own map and applies its own config. null for every
+   * model without it, which is nearly all of them.
+   */
+  params: Record<string, unknown> | null;
+  /**
    * How many jobs for THIS model may run at once locally, or null to use the
    * backend's own `concurrency`.
    *
@@ -459,6 +472,29 @@ function count(v: unknown, where: string, fallback: number, min = 1): number {
     throw new ConfigError(`${where} must be a whole number >= ${min} (got ${n})`);
   }
   return n;
+}
+
+/**
+ * `models.<id>.params`: a flat object of chat-completion fields to stamp on the
+ * body. The keys a request cannot function without are refused, because
+ * stamping them is never what anyone meant: `model` is what `as` is for,
+ * `messages` would replace the conversation, `stream` would change the response
+ * shape under the client, and `lane` is hearth's own routing field, stripped
+ * before forwarding. An empty object is the same as not saying it.
+ */
+function modelParams(raw: unknown, id: string): Record<string, unknown> | null {
+  if (raw === undefined || raw === null) return null;
+  const where = `models.${id}.params`;
+  const rec = asRecord(raw, where);
+  for (const k of ["model", "messages", "stream", "lane"]) {
+    if (k in rec) {
+      throw new ConfigError(
+        `${where}.${k} cannot be stamped -- ` +
+          (k === "model" ? "use `as` to rename the model on the wire" : `${k} belongs to the request, not the route`),
+      );
+    }
+  }
+  return Object.keys(rec).length === 0 ? null : rec;
 }
 
 /**
@@ -777,6 +813,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       );
     }
     const alias = str(entry.as, `models.${id}.as`, "");
+    const params = modelParams(entry.params, id);
     // `as` and a peer policy used to be refused together, on the grounds that
     // two rewrites of one id is ambiguous. They are not ambiguous, they are the
     // two destinations: `as` is applied by pool.outboundId() and ONLY on the
@@ -796,6 +833,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       spilloverAt: count(entry.spilloverAt, `models.${id}.spilloverAt`, 1, 1),
       fallbackLocal: bool(entry.fallbackLocal, `models.${id}.fallbackLocal`, true),
       concurrency: modelConcurrency(entry, id),
+      params,
     };
   }
 

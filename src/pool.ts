@@ -88,11 +88,21 @@ export class BackendPool {
           resident: () => state.resident(),
           // A predicate, not one name: ollama holds several models resident at
           // once, and only the first would ever collect the bonus otherwise.
-          warm: (m) => state.isWarm(m),
+          //
+          // Asked in the BACKEND's vocabulary. Jobs carry the advertised id and
+          // isWarm() compares against the ids the backend reports, so an `as`
+          // route read as permanently cold and never collected the bonus —
+          // harmless while `as` was a rare rename, load-bearing now that
+          // `params` makes several aliased ids the normal way to front a seat.
+          warm: (m) => state.isWarm(this.outboundId(m)),
           // Keyed by the id we advertise, which is what submit() puts on a job.
           // Undeclared is null, not the backend's number: the scheduler owns
           // that fallback, and answering it here would freeze the value.
-          slots: (m) => cfg.models[m]?.concurrency ?? null,
+          slots: (m) => this.slotsOf(m),
+          // Two ids that resolve to the same resident model ARE the same model
+          // to a backend that batches; without this the scheduler sees a
+          // foreign job and refuses to run them together.
+          wire: (m) => this.outboundId(m),
           resources: b.resources,
           arbiter: this.arbiter,
           // Winning the arbitration only means nobody else is RUNNING on this
@@ -226,8 +236,68 @@ export class BackendPool {
     return this.cfg.models[model]?.as ?? model;
   }
 
+  /**
+   * A model's own slot ceiling, INHERITED from the seat it fronts when it does
+   * not declare one.
+   *
+   * Several ids on one resident model share that model's slots — they are one
+   * queue's worth, not one each. Read per advertised id, `concurrency: 8` on
+   * the seat left every `-low`/`-off` id on the backend's flat number, so the
+   * arrangement `params` exists for silently gave up batching unless the
+   * operator restated the ceiling on every id.
+   */
+  private slotsOf(model: string): number | null {
+    const r = this.cfg.models[model];
+    if (!r) return null;
+    if (r.as === null) return r.concurrency;
+    return r.concurrency ?? this.cfg.models[r.as]?.concurrency ?? null;
+  }
+
+  /**
+   * The BODY to put on the wire for a chat completion: the advertised id
+   * swapped for the backend's (`as`), and the route's `params` laid over what
+   * the client sent. The same object back, untouched, for a model with
+   * neither -- which is nearly all of them, so the common case allocates
+   * nothing. `params` win over the client's own values on purpose: the id is
+   * the user's choice, and a client that always sends `reasoning_effort:
+   * high` must not be able to undo the `-low` id it just picked.
+   *
+   * `wire` overrides the id for the one caller that does not want ours: a job
+   * going to a peer is addressed by THEIR id. The params still go, because the
+   * id the user picked meant the same thing whichever box answers it — a `-low`
+   * request that spilled over must not come back at full effort. A peer that is
+   * another hearth applies its own route on top, which is the same rule one
+   * level out: the nearest config to the backend wins.
+   */
+  outboundBody(
+    model: string,
+    payload: Record<string, unknown>,
+    wire: string = this.outboundId(model),
+  ): Record<string, unknown> {
+    const params = this.cfg.models[model]?.params ?? null;
+    if (wire === model && params === null) return payload;
+    return { ...payload, ...(params ?? {}), model: wire };
+  }
+
   /** The advertised id for something a backend called `raw`, if we alias it.
    *  Backends speak their own vocabulary; this is the way back to ours. */
+  /**
+   * Every advertised id for something a backend called `raw`: each alias that
+   * points at it, plus `raw` itself when it is ALSO a first-class id (a route
+   * of its own, or no alias at all). Several aliases on one raw id is the
+   * `params` arrangement -- one resident model, several ids -- and a catalog
+   * that showed only the first of them would hide the very ids the operator
+   * added. The raw id stays hidden only when it exists purely to be renamed.
+   */
+  private advertisedIds(raw: string): string[] {
+    const ids: string[] = [];
+    for (const [id, route] of Object.entries(this.cfg.models)) {
+      if (route.as === raw) ids.push(id);
+    }
+    if (ids.length === 0 || this.cfg.models[raw] !== undefined) ids.push(raw);
+    return ids;
+  }
+
   private advertisedId(raw: string): string {
     // Built per call rather than cached: `models` is small, and a cache here
     // would need invalidating on any future config reload.
@@ -245,7 +315,7 @@ export class BackendPool {
         // the feature: /v1/models and the UI show `nomic-embed`, and the raw
         // `nomic-embed-text-v2-moe:latest` never leaks to a client that cannot
         // use it anyway.
-        out.add(this.advertisedId(m));
+        for (const id of this.advertisedIds(m)) out.add(id);
       }
     }
     return [...out];
@@ -265,19 +335,32 @@ export class BackendPool {
       // loaded model marks every id on the backend warm, and the warm bonus
       // fires for models that would in fact cost a full load.
       if (s.cfg.serves.length) {
+        // Two rules, and they compose rather than compete.
+        //
+        // Believe an id the backend actually named: a llama-swap that declares
+        // `serves` can still say exactly which one is resident, and marking all
+        // of them warm would fire the warm bonus for models that in fact cost a
+        // full load — the swap the bonus exists to avoid. Only when the
+        // reported id is unusable (a bare llama-server naming a gguf path) does
+        // the declared list become the best answer available.
+        //
+        // Then expand each through advertisedIds, because one resident model
+        // can be advertised under several ids once `params` gives them
+        // different defaults. They are the same weights on the same seat, so
+        // they are all warm together.
         const raw = s.state.loaded();
         const recognised = raw.filter((m) => s.cfg.serves.includes(m));
         if (recognised.length) {
-          for (const m of recognised) out.add(this.advertisedId(m));
+          for (const m of recognised) for (const id of this.advertisedIds(m)) out.add(id);
         } else if (raw.length) {
-          for (const m of s.cfg.serves) out.add(this.advertisedId(m));
+          for (const m of s.cfg.serves) for (const id of this.advertisedIds(m)) out.add(id);
         }
         continue;
       }
       // Translated too, and this one is NOT cosmetic: warm state feeds the
       // scheduler's warm bonus and the "ready now" set. Left raw, an aliased
       // model would read as permanently cold and quietly lose its priority.
-      for (const m of s.state.loaded()) out.add(this.advertisedId(m));
+      for (const m of s.state.loaded()) for (const id of this.advertisedIds(m)) out.add(id);
     }
     return [...out];
   }
@@ -339,6 +422,10 @@ export class BackendPool {
     if (raw === null) return base;
     // Advertised, because that is the vocabulary the scheduler's slot counts
     // are keyed by. resident() answers in the backend's own ids.
+    //
+    // Whichever alias advertisedId() picks is fine even with several fronting
+    // one seat: slotsOf() has them all inherit the seat's ceiling, so they all
+    // answer the same number.
     const c = slot.scheduler.capacityFor(this.advertisedId(raw));
     return c.free < base.free || c.slots < base.slots ? c : base;
   }

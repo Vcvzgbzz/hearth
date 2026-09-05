@@ -433,6 +433,58 @@ Without `as:` the workaround is to duplicate the tag in the backend
 (`ollama cp long-name nice-name`), which leaves both names in its catalog and
 only works for Ollama.
 
+### One resident model, several ids, different defaults
+
+`params:` is the other half of `as:`. Where `as:` renames a model on the way to
+the backend, `params:` stamps request fields on the body — so several advertised
+ids can front **one** resident backend model and differ only in the defaults
+they carry:
+
+```yaml
+models:
+  Qwen3.8-Fable-735:                         # the seat itself, still usable as-is
+    backend: swap
+  Qwen3.8-Fable-735-low:
+    backend: swap
+    as: Qwen3.8-Fable-735                    # same model on the wire, no second process
+    params: { reasoning_effort: low }
+  Qwen3.8-Fable-735-off:
+    backend: swap
+    as: Qwen3.8-Fable-735
+    params: { reasoning_effort: none }
+```
+
+A request for `Qwen3.8-Fable-735-low` reaches the backend as `Qwen3.8-Fable-735`
+with `reasoning_effort: low` on it. This is for the client that only has a model
+picker: a llama-swap alias carries no parameters, a second llama-swap entry is a
+second process (and on a one-GPU box, a seat swap), and a chat template cannot
+see the model id. hearth already parses every chat body and already rewrites
+the id, so stamping fields here costs nothing on the common path — a route
+without `as:` or `params:` forwards the caller's object untouched.
+
+The rules:
+
+- **The route's values win.** The id *is* the user's choice. A client that sends
+  `reasoning_effort: high` on every request (some do) must not be able to undo
+  the `-low` id it just picked.
+- `model`, `messages`, `stream` and `lane` are refused at startup: `model` is
+  what `as:` is for, and the others belong to the request, not the route.
+- Chat completions only. The passthrough (`/v1/embeddings` and the rest) still
+  forwards byte for byte apart from the `as:` rename.
+- They travel with the job. A request that spills over to a peer carries its
+  params, addressed by the peer's id — the id meant the same thing wherever it
+  lands, and a `-low` turn must not come back at full effort because the local
+  queue happened to be busy. A peer that is another hearth applies its own route
+  on top, same rule one level out: the config nearest the backend wins.
+- `/v1/models` advertises **every** id that fronts a seat, and the seat's own id
+  too when it is a route of its own. (A raw id that exists only to be renamed
+  stays hidden, as before.) Warm state follows the same rule, so none of the
+  ids reads as cold while the seat is resident.
+- Several ids on one seat are **one seat** to the scheduler: they share the
+  warm bonus, they batch together where the model batches, and `concurrency:`
+  on the seat covers every id that fronts it. Slots belong to the weights, not
+  to the name you reached them by.
+
 ### Knowing what is warm
 
 Only llama-swap has `/api/events`, so `kind` says how each backend should be

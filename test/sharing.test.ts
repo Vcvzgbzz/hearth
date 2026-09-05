@@ -73,7 +73,7 @@ import { createNode } from "../src/server.js";
 
   // An existing route that names its peers is an operator being specific.
   // Widening it to everyone would send work to boxes they left out.
-  cfg.models.pinned = { backend: null, as: null, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null };
+  cfg.models.pinned = { backend: null, as: null, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null, params: null };
   ov.link("friend", "pinned", "pinned", "peer", true);
   assert.deepEqual(cfg.models.pinned!.peers, ["friend"], "an existing peer list is kept");
 

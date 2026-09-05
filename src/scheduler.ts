@@ -82,6 +82,18 @@ export interface SchedulerOptions {
    * that has not been told otherwise.
    */
   slots?: (model: string) => number | null;
+  /**
+   * The id a model actually occupies the backend under, for the ONE question
+   * this scheduler asks about model identity: would running these two together
+   * force a swap?
+   *
+   * Identity by default, and identity is right for every id that means its own
+   * model. It is wrong for several advertised ids fronting one resident model
+   * (`as`/`params`), where a job on `seat-low` and a job on `seat-off` are the
+   * same weights and can batch — read as different models they never do, and
+   * the model's own slot count above `concurrency` is unreachable.
+   */
+  wire?: (model: string) => string;
   /** Fires whenever the job list changes, for status surfaces. */
   onChange?: (jobs: JobView[]) => void;
   /**
@@ -209,6 +221,7 @@ export class Scheduler {
   private readonly resident: () => string | null;
   private readonly isWarm: (model: string) => boolean;
   private readonly slotsOf: (model: string) => number | null;
+  private readonly wireOf: (model: string) => string;
   private readonly onChange?: (jobs: JobView[]) => void;
   private readonly resources: readonly string[];
   private readonly arbiter?: ResourceArbiter;
@@ -227,6 +240,7 @@ export class Scheduler {
     this.resident = opts.resident ?? (() => null);
     this.isWarm = opts.warm ?? ((m) => m === this.resident());
     this.slotsOf = opts.slots ?? (() => null);
+    this.wireOf = opts.wire ?? ((m) => m);
     this.onChange = opts.onChange;
     // Only arbitrate when there is both something to hold and somewhere to hold
     // it. Half of the pair is a config that meant to exclude and silently does
@@ -347,7 +361,8 @@ export class Scheduler {
     if (!this.hardwareFree()) return false;
     if (this.running.size >= this.limitFor(job.model)) return false;
     if (this.running.size < this.concurrency) return true;
-    for (const j of this.running) if (j.model !== job.model) return false;
+    const wire = this.wireOf(job.model);
+    for (const j of this.running) if (this.wireOf(j.model) !== wire) return false;
     return true;
   }
 
@@ -370,7 +385,8 @@ export class Scheduler {
     const limit = this.limitFor(model);
     if (limit === this.concurrency) return base;
     if (limit > this.concurrency) {
-      for (const j of this.running) if (j.model !== model) return base;
+      const wire = this.wireOf(model);
+      for (const j of this.running) if (this.wireOf(j.model) !== wire) return base;
     }
     return {
       ...base,
