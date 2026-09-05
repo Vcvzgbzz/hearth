@@ -548,13 +548,13 @@ this. Setting both is an error rather than a silent preference.
 
 ## Warming a model on purpose
 
-`POST /v1/warm {"model": "coder-max"}` asks a backend to make a model resident
+`POST /v1/warm {"model": "chat-large"}` asks a backend to make a model resident
 without generating anything. It probes that model's own upstream, which is what
 starts its server — cheaper and more honest than a one-token completion.
 
 ```bash
 curl -X POST localhost:4141/v1/warm -H 'content-type: application/json' \
-     -d '{"model":"coder-max"}'
+     -d '{"model":"chat-large"}'
 ```
 
 **It goes through the scheduler, in its own `warm` lane.** On a llama-swap
