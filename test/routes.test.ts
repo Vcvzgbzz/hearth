@@ -23,6 +23,7 @@ import type { AddressInfo } from "node:net";
 
 import { ConfigError, parseConfig } from "../src/config.js";
 import { silentLogger } from "../src/log.js";
+import { BackendPool } from "../src/pool.js";
 import { createNode } from "../src/server.js";
 
 // --- config: shorthand, defaults, and the mistakes worth naming ------------
@@ -242,3 +243,74 @@ b.server.close();
 other.closeAllConnections();
 other.close();
 console.log("routes.test.ts ok");
+
+// --- {model} routes --------------------------------------------------------
+// The model is IN the path for a backend fronted by llama-swap
+// (/upstream/<model>/generate), so an exact route would need one entry per
+// model — and a model added later would silently go back to being unqueued,
+// which is the failure this whole feature exists to prevent.
+//
+// The narrowness is the point. The old comment refused wildcards because "a
+// pattern that matches more than the operator pictured would silently pull
+// unrelated traffic into a queue", and that objection is answered rather than
+// overridden: the captured segment IS the model id, and the route only matches
+// when the backend actually serves it.
+{
+  const cfg = parseConfig({
+    name: "pat",
+    backends: [
+      {
+        name: "img", url: "http://127.0.0.1:1",
+        serves: ["image", "image-eikon"],
+        routes: [{ path: "/upstream/{model}/generate", lane: "batch" }],
+      },
+      { name: "llm", url: "http://127.0.0.1:2", serves: ["coder"] },
+    ],
+  });
+  const pool = new BackendPool(cfg, silentLogger);
+
+  const hit = pool.forPath("/upstream/image-eikon/generate");
+  assert.ok(hit, "a served model matches the pattern");
+  assert.equal(hit.slot.name, "img");
+  assert.equal(hit.rule.model, "image-eikon", "the captured segment IS the model id");
+  assert.equal(hit.rule.lane, "batch");
+  assert.equal(hit.rule.queue, true);
+
+  // The whole objection to wildcards, answered.
+  assert.equal(pool.forPath("/upstream/coder/generate"), undefined,
+    "a model this backend does not serve must fall through to the passthrough");
+  assert.equal(pool.forPath("/upstream/image/generate/extra"), undefined,
+    "{model} is one segment, not a prefix");
+  assert.equal(pool.forPath("/upstream/image"), undefined,
+    "and the rest of the path still has to match");
+
+  // A pattern route reports under the requested model, never the backend name.
+  assert.notEqual(pool.forPath("/upstream/image/generate")!.rule.model, "img");
+}
+
+// A path may carry at most one placeholder, as a whole segment, and may not
+// also name a model — the path already supplies it.
+for (const bad of [
+  { path: "/a/{model}/b/{model}", why: "two placeholders" },
+  { path: "/a/x{model}/b", why: "glued to a segment" },
+  { path: "/a/{lane}/b", why: "an unknown placeholder" },
+]) {
+  assert.throws(
+    () => parseConfig({
+      name: "n", backends: [{ name: "b", url: "http://127.0.0.1:1", routes: [{ path: bad.path }] }],
+    }),
+    /at most one \{model\}|whole path segment|only placeholder is \{model\}/,
+    bad.why,
+  );
+}
+assert.throws(
+  () => parseConfig({
+    name: "n",
+    backends: [{
+      name: "b", url: "http://127.0.0.1:1",
+      routes: [{ path: "/upstream/{model}/go", model: "pinned" }],
+    }],
+  }),
+  /both \{model\} in the path and model:/,
+  "naming a model as well as capturing one is two answers to one question",
+);

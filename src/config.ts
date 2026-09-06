@@ -90,7 +90,14 @@ export type UiControl = "off" | "key";
  * one rather than pretending to cover it.
  */
 export interface RouteRule {
-  /** Exact pathname, query string ignored. `/sdapi/v1/txt2img`, `/generate`. */
+  /**
+   * Exact pathname, query string ignored. `/sdapi/v1/txt2img`, `/generate`.
+   *
+   * May contain ONE `{model}` placeholder standing for a whole path segment —
+   * `/upstream/{model}/generate` — for a backend that puts the model in the URL
+   * rather than the body. See Pool.forPath for what stops that matching more
+   * than the operator pictured.
+   */
   path: string;
   /** Which lane it queues in, and so what it yields to. */
   lane: string;
@@ -600,6 +607,26 @@ function routeList(v: unknown, where: string): RouteRule[] {
     if (path.includes("?")) {
       throw new ConfigError(`${at}.path must not include a query string (got ${path})`);
     }
+    // One placeholder, standing for one whole segment. More than one, or one
+    // glued to other characters, is a pattern nobody can predict the reach of —
+    // which is the objection that kept wildcards out of here in the first place.
+    const holes = path.split("{model}").length - 1;
+    if (holes > 1) {
+      throw new ConfigError(`${at}.path may contain at most one {model} (got ${path})`);
+    }
+    if (holes === 1 && !path.split("/").includes("{model}")) {
+      throw new ConfigError(
+        `${at}.path must use {model} as a whole path segment, not part of one (got ${path})`,
+      );
+    }
+    if (/\{(?!model\})[^}]*\}/.test(path)) {
+      throw new ConfigError(`${at}.path: the only placeholder is {model} (got ${path})`);
+    }
+    if (holes === 1 && typeof entry.model === "string" && entry.model !== "") {
+      throw new ConfigError(
+        `${at} sets both {model} in the path and model: — the path supplies the id`,
+      );
+    }
     return {
       path,
       lane: str(entry.lane, `${at}.lane`, ""),
@@ -726,7 +753,10 @@ export function parseConfig(raw: unknown): HearthConfig {
       // Named for the backend, since one backend's paths are one thing as far
       // as anything watching is concerned. Two paths on one backend reporting
       // the same id is correct: they are the same GPU doing the same job.
-      if (r.model === "") r.model = b.name;
+      //
+      // A {model} route is the exception: its id comes from the request, so
+      // defaulting it here would report every render under the backend's name.
+      if (r.model === "" && !r.path.includes("{model}")) r.model = b.name;
       // A path resolves to exactly one backend, the same way a model id does.
       // Two backends claiming it is someone meaning two different things by one
       // URL, and picking either silently is worse than saying so.
