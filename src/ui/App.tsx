@@ -30,11 +30,11 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import { ThemeProvider } from "@mui/material/styles";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ThemeProvider, useTheme } from "@mui/material/styles";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { CopyButton, Dot, mono, Pre, Row, Section, Spacer, Tag, Why } from "./bits.js";
-import { Depth, HistTable, Lanes } from "./charts.js";
+import { CopyButton, Dot, mono, Pre, Row, Section, Spacer, StatTile, Tag, Why } from "./bits.js";
+import { Depth, HistTable, Lanes, CallsTable } from "./charts.js";
 import { Hardware } from "./hardware.js";
 import { load, postWrite, since } from "./lib.js";
 import { waitReason } from "./why.js";
@@ -322,7 +322,7 @@ function nodeOf(net: Net, model: string): string | null {
  * card that backend competes for — because that is what decides whether asking
  * for this model right now costs a queue, a load, or somebody else's eviction.
  */
-function Where({ r }: { r: ModelRow }) {
+function Where({ r, d }: { r: ModelRow; d: UiData }) {
   const peers = r.on.filter((n) => !n.self);
   if (!r.backends.length && !peers.length) {
     return <Box component="span" sx={{ color: "faint" }}>—</Box>;
@@ -334,7 +334,8 @@ function Where({ r }: { r: ModelRow }) {
           has a small copy, and naming one of them sends the reader to the wrong
           card. */}
       {r.backends.map((b) => {
-        const hot = (b.loaded ?? []).includes(r.model);
+        // Check wire id too: backends report their own wire ids, not the advertised id.
+        const hot = backendHas(d, b, r.model, "loaded");
         return (
           <Row key={b.name} spacing={0.75} align="baseline" component="span" sx={{ display: "inline-flex" }}>
             <Box component="span"
@@ -376,11 +377,62 @@ interface ModelRow {
   route?: { path: string; model: string; lane: string; queue: boolean };
 }
 
+/**
+ * Resolve an advertised model id to its wire id.
+ *
+ * Two id spaces: the advertised id is what the console displays and what
+ * clients request; the wire id is what backends actually receive and report
+ * in their `serves` and `loaded` lists. A backend's `serves`/`loaded` carry
+ * the backend's own wire ids (ollama: "nomic-embed-text-v2-moe:latest";
+ * swap: "Qwen3.8-Fable-735"). The `aliases` map is the bridge between the
+ * two: aliases[advertised] = wire. When checking whether a backend serves
+ * or has loaded an advertised model id m, check for both m and aliases[m].
+ */
+function wireOf(d: UiData, m: string): string {
+  return d.aliases?.[m] ?? m;
+}
+
+/**
+ * Whether a backend serves (or has loaded) an advertised model id,
+ * checking both the advertised id and its wire id.
+ */
+function backendHas(d: UiData, b: Backend, m: string, list: "serves" | "loaded"): boolean {
+  const ids = b[list] ?? [];
+  return ids.includes(m) || ids.includes(wireOf(d, m));
+}
+
+/**
+ * Build variant groups from the aliases map.
+ *
+ * An id X is a variant of P when aliases[X] === P and P is itself in
+ * net.available. An `as` that names something not in net.available is a
+ * rename, not a variant — that row stands alone.
+ */
+function variantGroups(d: UiData): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  if (!d.aliases) return groups;
+  for (const [adv, as] of Object.entries(d.aliases)) {
+    if (adv === as) continue; // not a variant, same name
+    if (d.net.available.includes(as) && d.net.available.includes(adv)) {
+      if (!groups.has(as)) groups.set(as, []);
+      groups.get(as)!.push(adv);
+    }
+  }
+  return groups;
+}
+
 function Models({ d, ctx }: { d: UiData; ctx: Ctx }) {
+  const t = useTheme();
   const { net } = d;
   const unknown = net.unknownWarm ?? [];
   const self = net.nodes.find((n) => n.self);
   const backends = self?.backends ?? [];
+  const groups = variantGroups(d);
+  // Track which parent groups are expanded. State survives the 3s poll.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (parent: string) =>
+    setExpanded((e) => ({ ...e, [parent]: !e[parent] }));
+
   // Every node that can serve this model, not just the first one found. At two
   // nodes "the first" was harmless; at seven it hides most of the fleet's
   // redundancy, which is the main thing this page is consulted for. A peer's
@@ -389,19 +441,30 @@ function Models({ d, ctx }: { d: UiData; ctx: Ctx }) {
   const holders = (m: string) => net.nodes.filter((n) =>
     (n.serves ?? []).includes(m) || (n.configured ?? []).includes(m));
 
-  const rows: ModelRow[] = net.available.map((m) => {
+  // Build the set of every variant id so we skip them as top-level rows;
+  // they render only nested under their parent.
+  const variantIds = new Set<string>();
+  for (const variants of groups.values()) {
+    for (const v of variants) variantIds.add(v);
+  }
+
+  // Build ALL rows first (including variants) so we can look up variant data
+  // when rendering nested rows. Then filter for top-level rendering.
+  const allRows: ModelRow[] = net.available.map((m) => {
     const on = holders(m);
-    const mine = backends.filter((b) => (b.serves ?? []).includes(m));
+    const mine = backends.filter((b) => backendHas(d, b, m, "serves"));
     return {
       model: m,
       on,
       backends: mine,
       warmOn: on.filter((n) => (n.loaded ?? []).includes(m)),
       warm: net.readyNow.includes(m),
-      warmHere: mine.some((b) => (b.loaded ?? []).includes(m)),
+      warmHere: mine.some((b) => backendHas(d, b, m, "loaded")),
       unknown: !net.readyNow.includes(m) && unknown.includes(m),
     };
   });
+
+  const rows = allRows.filter((r) => !variantIds.has(r.model));
 
   // Route models are real work with real ids that queue and appear in the queue
   // table, and they were in NO list on this page: they are not in the catalog,
@@ -423,9 +486,25 @@ function Models({ d, ctx }: { d: UiData; ctx: Ctx }) {
   rows.sort((x, y) => Number(y.warm) - Number(x.warm) || x.model.localeCompare(y.model));
 
   return (
-    <Section title="Models" note={
+    <Section title="Models" card note={
       <Typography component="span" variant="body2" sx={{ color: "faint" }}>
-        {rows.filter((r) => r.warm).length} of {rows.length} loaded
+        {rows.filter((r) => r.warm).length} of {rows.length} models loaded
+        {(() => {
+          // Count raw ids (including variants) that are loaded
+          const loadedIds = new Set<string>();
+          for (const r of rows) {
+            if (r.warm) loadedIds.add(r.model);
+            const variants = groups.get(r.model);
+            if (variants && r.warm) {
+              for (const v of variants) {
+                const vr = allRows.find((x) => x.model === v);
+                if (vr?.warm) loadedIds.add(v);
+              }
+            }
+          }
+          const totalIds = net.available.length;
+          return ` (${loadedIds.size} of ${totalIds} ids)`;
+        })()}
       </Typography>
     }>
       <Box sx={{ overflowX: "auto" }}>
@@ -433,48 +512,115 @@ function Models({ d, ctx }: { d: UiData; ctx: Ctx }) {
           <TableHead>
             <TableRow>
               <TableCell>Model</TableCell><TableCell>Where</TableCell><TableCell>State</TableCell>
-              <TableCell>Shared</TableCell><TableCell align="right" />
+              <TableCell>Shared</TableCell><TableCell align="right">Load</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {!rows.length && (
               <TableRow><TableCell colSpan={5} sx={{ color: "faint", py: 1.75 }}>no models reachable</TableCell></TableRow>
             )}
-            {rows.map((r) => (
-              <TableRow key={r.model}>
-                <TableCell sx={mono}>{r.model}</TableCell>
-                <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={r} /></TableCell>
-                <TableCell>
-                  <Tooltip title={
-                    // Warmth is a UNION across nodes, so "warm" can mean "warm
-                    // somewhere else". A local request would still pay the load.
-                    r.route ? "a path, not a model id — this backend does not report what it holds, so neither can we"
-                    : r.unknown ? "this backend does not report what it has loaded"
-                    : r.warm && r.warmOn.length && !r.warmOn.some((n) => n.self)
-                      ? `loaded on ${r.warmOn.map((n) => n.name).join(", ")}, not here`
-                      : ""
-                  }>
-                    <Typography component="span" variant="caption"
-                                sx={{ fontFamily: MONO, color: r.warm ? "success.main" : "text.secondary",
-                                      fontWeight: r.warm ? 600 : 400 }}>
-                      {/* A WORD, not a pill. Pills everywhere is the look this
-                          page was deliberately built away from. */}
-                      <Dot color={r.warm ? "success.main" : r.route || r.unknown ? "faint" : "text.secondary"} />
-                      {r.warm ? "warm" : r.route || r.unknown ? "unknown" : "cold"}
-                    </Typography>
-                  </Tooltip>
-                </TableCell>
-                <TableCell><ShareCell model={r.model} d={d} ctx={ctx} /></TableCell>
-                <TableCell align="right">
-                  {/* No load button for a route model: /v1/warm takes a model id
-                      and this one is only ever reached by path, so the button
-                      would resolve it to whichever backend happens to be first. */}
-                  {!r.warm && !r.unknown && !r.route && ctx.canWarm && (
-                    <LoadButton model={r.model} peer={nodeOf(net, r.model)} ctx={ctx} />
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
+            {rows.map((r) => {
+              const variants = groups.get(r.model);
+              const isExpanded = expanded[r.model];
+              return (
+                <Fragment key={r.model}>
+                  <TableRow
+                    key={r.model}
+                    sx={r.warm ? { bgcolor: "inherit" } : { opacity: t.palette.mode === "light" ? 0.6 : 0.4 }}>
+                    <TableCell sx={{ ...mono, whiteSpace: "nowrap" }}>
+                      {variants && variants.length > 0 ? (
+                        <Box component="span"
+                             onClick={() => toggle(r.model)}
+                             sx={{ cursor: "pointer", display: "inline-flex", alignItems: "baseline",
+                                   userSelect: "none", fontFamily: MONO, fontSize: 12.5 }}>
+                          {r.model}
+                          <Typography component="span" variant="caption"
+                                      sx={{ color: "faint", ml: 0.5, cursor: "default" }}>
+                            (+{variants.length} variant{variants.length === 1 ? "" : "s"})
+                          </Typography>
+                          <Box component="span"
+                               sx={{ ml: 0.5, transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                                     transition: "transform 150ms ease", display: "inline-block",
+                                     width: 10, height: 10 }}>
+                            <svg viewBox="0 0 10 10" width="10" height="10" fill="currentColor">
+                              <path d="M3 2l4 3-4 3V2z" />
+                            </svg>
+                          </Box>
+                        </Box>
+                      ) : (
+                        r.model
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={r} d={d} /></TableCell>
+                    <TableCell>
+                      {/* Warmth is a UNION across nodes, so "warm" can mean "warm
+                          somewhere else". A local request would still pay the load. */}
+                      <Tooltip title={
+                        r.route ? "a path, not a model id — this backend does not report what it holds, so neither can we"
+                        : r.unknown ? "this backend does not report what it has loaded"
+                        : r.warm && r.warmOn.length && !r.warmOn.some((n) => n.self)
+                          ? `loaded on ${r.warmOn.map((n) => n.name).join(", ")}, not here`
+                          : ""
+                      }>
+                        <Typography component="span" variant="caption"
+                                    sx={{ fontFamily: MONO, color: r.warm ? "success.main" : "faint",
+                                          fontWeight: r.warm ? 600 : 400 }}>
+                          {/* A WORD, not a pill. Pills everywhere is the look this
+                              page was deliberately built away from. */}
+                          <Dot color={r.warm ? "success.main" : r.route || r.unknown ? "faint" : "text.secondary"} />
+                          {r.warm ? "warm" : r.route || r.unknown ? "unknown" : "cold"}
+                        </Typography>
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell><ShareCell model={r.model} d={d} ctx={ctx} /></TableCell>
+                    <TableCell align="right">
+                      {/* No load button for a route model: /v1/warm takes a model id
+                          and this one is only ever reached by path, so the button
+                          would resolve it to whichever backend happens to be first. */}
+                      {!r.warm && !r.unknown && !r.route && ctx.canWarm && (
+                        <LoadButton model={r.model} peer={nodeOf(net, r.model)} ctx={ctx} />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  {variants && isExpanded && variants.map((v) => {
+                    // Find the variant's row data from allRows (rows has variants filtered out)
+                    const vr = allRows.find((x) => x.model === v);
+                    if (!vr) return null;
+                    return (
+                      <TableRow key={v} sx={{ bgcolor: "action.hover" }}>
+                        <TableCell sx={{
+                          ...mono, pl: 3, borderLeft: "2px solid",
+                          borderColor: "divider", whiteSpace: "nowrap" }}>
+                          {v}
+                        </TableCell>
+                        <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={vr} d={d} /></TableCell>
+                        <TableCell>
+                          <Tooltip title={
+                            vr.unknown ? "this backend does not report what it has loaded"
+                            : vr.warm && vr.warmOn.length && !vr.warmOn.some((n) => n.self)
+                              ? `loaded on ${vr.warmOn.map((n) => n.name).join(", ")}, not here`
+                              : ""
+                          }>
+                            <Typography component="span" variant="caption"
+                                        sx={{ fontFamily: MONO, color: vr.warm ? "success.main" : "faint",
+                                              fontWeight: vr.warm ? 600 : 400, cursor: "default" }}>
+                              <Dot color={vr.warm ? "success.main" : vr.unknown ? "faint" : "text.secondary"} />
+                              {vr.warm ? "warm" : vr.unknown ? "unknown" : "cold"}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell><ShareCell model={v} d={d} ctx={ctx} /></TableCell>
+                        <TableCell align="right">
+                          {!vr.warm && !vr.unknown && !vr.route && ctx.canWarm && (
+                            <LoadButton model={v} peer={nodeOf(net, v)} ctx={ctx} />
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       </Box>
@@ -648,7 +794,7 @@ function Nodes({ d, ctx }: { d: UiData; ctx: Ctx }) {
     );
   }
   return (
-    <>
+    <Box>
       {peers.map((n) => {
         const busy = (n.slots ?? 0) - (n.free ?? 0);
         // The hot flag paints the number amber -- "working", the middle state in
@@ -662,32 +808,39 @@ function Nodes({ d, ctx }: { d: UiData; ctx: Ctx }) {
           </Box>
         );
         return (
-          <Row key={n.name} spacing={1.25} align="baseline" wrap
-                 sx={{ py: 1.1, borderBottom: 1, borderColor: "divider", "&:last-of-type": { borderBottom: 0 } }}>
-            <Typography component="span" sx={{ fontFamily: MONO, fontSize: 13, fontWeight: 600 }}>{n.name}</Typography>
-            <Typography component="span" variant="caption"
-                        sx={{ fontFamily: MONO, color: n.up ? "text.secondary" : "error.main" }}>
-              <Dot color={n.up ? "success.main" : "error.main"} />
-              {n.up ? "up" : "down"}
-            </Typography>
-            {n.lastError && (
-              <Typography component="span" variant="body2" sx={{ color: "text.secondary" }}>
-                {String(n.lastError).slice(0, 80)}
+          <Box key={n.name} sx={{
+            border: "1px solid", borderColor: n.up ? "line" : "error.main",
+            borderRadius: 3,
+            p: 1.5,
+            mb: 1,
+            bgcolor: "background.default",
+          }}>
+            <Row spacing={1.25} align="baseline" wrap>
+              <Typography component="span" sx={{ fontFamily: MONO, fontSize: 13, fontWeight: 600 }}>{n.name}</Typography>
+              <Typography component="span" variant="caption"
+                          sx={{ fontFamily: MONO, color: n.up ? "success.main" : "error.main" }}>
+                <Dot color={n.up ? "success.main" : "error.main"} />
+                {n.up ? "up" : "down"}
               </Typography>
-            )}
-            <Spacer />
-            <Row spacing={2} sx={{ fontFamily: MONO, fontSize: 12, color: "text.secondary" }}>
-              {num("busy", `${busy}/${n.slots ?? "?"}`, n.up && n.free === 0 && (n.slots ?? 0) > 0)}
-              {num("queued", n.queued ?? 0, (n.queued ?? 0) > 0)}
-              {n.sending ? num("sending", n.sending) : null}
+              {n.lastError && (
+                <Typography component="span" variant="body2" sx={{ color: "text.secondary" }}>
+                  {String(n.lastError).slice(0, 80)}
+                </Typography>
+              )}
+              <Spacer />
+              <Row spacing={2} wrap sx={{ fontFamily: MONO, fontSize: 12, color: "text.secondary" }}>
+                {num("busy", `${busy}/${n.slots ?? "?"}`, n.up && n.free === 0 && (n.slots ?? 0) > 0)}
+                {num("queued", n.queued ?? 0, (n.queued ?? 0) > 0)}
+                {n.sending ? num("sending", n.sending) : null}
+              </Row>
             </Row>
             {/* What we may ask this peer for, and what it offers that we have
                 not claimed. */}
             <MapBlock n={n} ctx={ctx} />
-          </Row>
+          </Box>
         );
       })}
-    </>
+    </Box>
   );
 }
 
@@ -792,12 +945,37 @@ function Queue({ d }: { d: UiData }) {
   const resources = d.net.resources ?? [];
   const waiting = jobs.filter((j) => j.state === "queued").length;
 
+  if (!jobs.length) {
+    return (
+      <Section title="Queue" card>
+        <Box sx={{ overflowX: "auto" }}>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>Lane</TableCell><TableCell>Model</TableCell><TableCell>Where</TableCell>
+                <TableCell>Caller</TableCell><TableCell>Status</TableCell>
+                <TableCell align="right">Waited</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              <TableRow>
+                <TableCell colSpan={6} sx={{ ...mono, color: "faint", textAlign: "center", py: 2 }}>
+                  nothing in flight
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </Box>
+      </Section>
+    );
+  }
+
   return (
-    <Section title="Queue" note={
-      <Typography component="span" variant="body2" sx={{ color: "faint" }}>
-        {jobs.length - waiting} running · {waiting} waiting
-      </Typography>
-    }>
+      <Section title="Queue" card note={
+        <Typography component="span" variant="body2" sx={{ color: "faint" }}>
+          {jobs.length - waiting} running · {waiting} waiting
+        </Typography>
+      }>
       <Box sx={{ overflowX: "auto" }}>
         <Table>
           <TableHead>
@@ -808,16 +986,13 @@ function Queue({ d }: { d: UiData }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {!jobs.length && (
-              <TableRow><TableCell colSpan={6} sx={{ color: "faint", py: 1.75 }}>nothing in flight</TableCell></TableRow>
-            )}
             {jobs.map((j) => {
               const b = backends.find((x) => x.name === j.backend);
               const wait = j.state === "queued" ? waitReason(j, b, resources) : null;
               return (
                 <TableRow key={`${j.model}:${j.caller}:${j.since}`}>
                   <TableCell sx={{ ...mono, color: j.lane === "chat" ? "success.main" : "text.secondary" }}>{j.lane}</TableCell>
-                  <TableCell sx={mono}>{j.model}</TableCell>
+                  <TableCell sx={{ ...mono, whiteSpace: "nowrap" }}>{j.model}</TableCell>
                   <TableCell sx={{ ...mono, color: "text.secondary" }}>
                     <Row spacing={0.75} align="baseline" wrap component="span" sx={{ display: "inline-flex" }}>
                       <Box component="span">{j.offbox ? j.peer ?? "peer" : j.backend ?? "—"}</Box>
@@ -857,25 +1032,7 @@ function Queue({ d }: { d: UiData }) {
 
 /* ------------------------------------------------------------------ page */
 
-/**
- * One vital, and whether it is worth looking at.
- *
- * `hot` paints the number amber — "working", the middle state in the palette's
- * three. Everything quiet stays quiet, so the one number that has changed is
- * findable without reading the row.
- */
-function Vital({ n, label, hot, title }: {
-  n: React.ReactNode; label: string; hot?: boolean; title: string;
-}) {
-  return (
-    <Tooltip title={title}>
-      <Box component="span" sx={{ cursor: "help" }}>
-        <Box component="b" sx={{ color: hot ? "warning.main" : "text.primary", fontWeight: 600 }}>{n}</Box>
-        {` ${label}`}
-      </Box>
-    </Tooltip>
-  );
-}
+
 
 function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }) {
   const self = d?.net.nodes.find((n) => n.self);
@@ -901,52 +1058,57 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
           number and a sentence underneath explaining it -- which is a lot of
           page for four numbers, and the sentences said things the numbers
           already said.
-
-          What is NOT here any more is `free/slots`. It summed the free slots of
-          every backend, including backends that share a card and can never be
-          free at the same time: a node whose two llama-swaps declare `gpu1`
-          reported 32 free slots for 16 that exist. Summing across an exclusion
-          set is exactly the error per-backend `free` used to make, one level up,
-          and there is no honest single number to replace it with — so the
-          headline counts work and cards, and slots live on the backend rows
-          where they mean something. */}
-      <Row spacing={1.5} align="baseline" wrap
-             sx={{ pb: 1.25, borderBottom: 1, borderColor: "line" }}>
-        <Typography component="span" sx={{ fontSize: 15, fontWeight: 650, letterSpacing: "-.01em" }}>
-          hea<Box component="span" sx={{ color: "success.main" }}>r</Box>th
-        </Typography>
-        <Typography component="span" sx={{ color: "text.secondary" }}>
-          node <Box component="b" sx={{ color: "text.primary", fontFamily: MONO, fontSize: 13 }}>
-            {dead ? "unreachable" : self?.name ?? "—"}
+          Status band: node identity + vitals as readable stat tiles. */}
+      <Box sx={{
+        bgcolor: "background.paper",
+        border: "1px solid", borderColor: "line",
+        borderRadius: 3,
+        p: 2,
+        mb: 1,
+      }}>
+        <Row spacing={1.5} align="center" wrap sx={{ mb: 1.5 }}>
+          <Typography component="span" sx={{ fontSize: 16, fontWeight: 700, letterSpacing: "-.01em" }}>
+            hea<Box component="span" sx={{ color: "success.main" }}>r</Box>th
+          </Typography>
+          <Tag>{dead ? "unreachable" : self?.name ?? "—"}</Tag>
+          <Box component="span" sx={{ color: "faint", fontFamily: MONO, fontSize: 11 }}>
+            <Dot color="success.main" />live
           </Box>
-        </Typography>
-        {d && <Spacer />}
+          {d && cap?.resident && (
+            <Tooltip title="the first model currently loaded on this node">
+              <Box component="span" sx={{ fontFamily: MONO, fontSize: 11, color: "text.secondary", cursor: "help" }}>
+                resident: <Box component="span" sx={{ color: "success.main" }}>{cap.resident}</Box>
+              </Box>
+            </Tooltip>
+          )}
+        </Row>
         {d && (
-          <Row spacing={2.25} align="baseline" wrap
-                 sx={{ fontFamily: MONO, fontSize: 12.5, color: "text.secondary" }}>
+          <Box sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: 1,
+          }}>
             {resources.length > 0 && (
-              <Vital n={`${cardsBusy}/${resources.length}`} label="cards busy" hot={cardsBusy > 0}
-                     title="hardware with a backend running on it right now. Everything else declared on that card is waiting." />
+              <StatTile label="cards busy" value={`${cardsBusy}/${resources.length}`} hot={cardsBusy > 0}
+                title="hardware with a backend running on it right now. Everything else declared on that card is waiting." />
             )}
-            <Vital n={running} label="running" hot={running > 0}
-                   title="jobs in flight on this box" />
-            <Vital n={queuedTotal} label="queued" hot={queuedTotal > 0}
-                   title="jobs admitted to a queue and not started. The Queue table says why each one waits." />
+            <StatTile label="running" value={running} hot={running > 0}
+              title="jobs in flight on this box" />
+            <StatTile label="queued" value={queuedTotal} hot={queuedTotal > 0}
+              title="jobs admitted to a queue and not started. The Queue table says why each one waits." />
             {cap?.offbox ? (
-              <Vital n={cap.offbox} label="off-box" title="our jobs currently running on a peer" />
+              <StatTile label="off-box" value={cap.offbox}
+                title="our jobs currently running on a peer" />
             ) : null}
-            <Vital n={d.net.readyNow.length} label="warm"
-                   title="models loaded somewhere reachable — here or on a peer" />
+            <StatTile label="warm" value={d.net.readyNow.length}
+              title="models loaded somewhere reachable — here or on a peer" />
             {peers.length > 0 && (
-              <Vital n={`${peers.filter((n) => n.up).length}/${peers.length}`} label="peers"
-                     hot={peers.some((n) => !n.up)} title="peers answering their /peer/state probe" />
+              <StatTile label="peers" value={`${peers.filter((n) => n.up).length}/${peers.length}`}
+                hot={peers.some((n) => !n.up)} title="peers answering their /peer/state probe" />
             )}
-            <Box component="span" sx={{ color: "faint" }}>
-              <Dot color="success.main" />live
-            </Box>
-          </Row>
+          </Box>
         )}
-      </Row>
+      </Box>
 
       {!d ? (
         <Typography sx={{ color: "faint", mt: 4 }}>{dead ? "no answer from /ui/data" : "loading…"}</Typography>
@@ -961,26 +1123,38 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
 
           <Models d={d} ctx={ctx} />
 
-          <Section title="Peers" right={
+          <Section title="Peers" card right={
             // Rendered in the heading so a paused node says so at the top rather
             // than leaving you to infer it from an empty list further down.
-            <Row spacing={2} align="center">
+            <Box sx={{
+              display: { xs: "flex", md: "inline-flex" },
+              flexDirection: "row", gap: 2, alignItems: "center",
+              width: { xs: "100%", md: "auto" },
+              mt: { xs: 1, md: 0 },
+            }}>
               <FedSwitch dir="lending" on={d.controls.lending !== false} ctx={ctx} />
               <FedSwitch dir="borrowing" on={d.controls.borrowing !== false} ctx={ctx} />
-            </Row>
+            </Box>
           }>
             <Nodes d={d} ctx={ctx} />
             <Pending d={d} ctx={ctx} />
           </Section>
 
-          <Section title="Last 10 minutes">
+          <Section title="Last 10 minutes" card>
             <Box sx={{ mb: 2.75 }}>
               <Typography variant="body2" sx={{ mb: 0.75 }}>Jobs waiting for the local backend</Typography>
-              <Depth hist={d.hist} />
+              <Depth hist={d.hist} aliases={d.aliases} available={d.net.available} />
             </Box>
             <Box sx={{ mb: 2.75 }}>
               <Row align="baseline" spacing={1.25} sx={{ mb: 0.75 }}>
-                <Typography variant="body2">Which model was loaded</Typography>
+                <Typography variant="body2">
+                  {d.calls ? "Which model was in use" : "Which model was loaded"}
+                </Typography>
+                {d.calls && (
+                  <Typography variant="caption" sx={{ color: "faint", fontFamily: MONO }}>
+                    track = loaded, segment = one request
+                  </Typography>
+                )}
                 <Spacer />
                 <Typography variant="caption" sx={{ color: "faint", fontFamily: MONO }}>
                   {/* Only say "thrash" where something actually evicts. An ollama
@@ -990,7 +1164,7 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
                     : "each change of row is a cold load"}
                 </Typography>
               </Row>
-              <Lanes hist={d.hist} thrashy={thrashy} />
+              <Lanes hist={d.hist} calls={d.calls} thrashy={thrashy} aliases={d.aliases} available={d.net.available} />
             </Box>
             <NumbersTable d={d} />
           </Section>
@@ -998,7 +1172,7 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
       )}
 
       <Divider sx={{ mt: 5.5, borderColor: "line" }} />
-      <Typography variant="body2" sx={{ pt: 1.75, color: "faint" }}>
+      <Typography variant="body2" sx={{ pt: 1.75, color: "faint", overflowWrap: "anywhere" }}>
         Polls <Box component="code" sx={{ fontFamily: MONO, fontSize: 11.5 }}>/ui/data</Box> every 3s.
         Cards come from each backend&rsquo;s <Box component="code" sx={{ fontFamily: MONO, fontSize: 11.5 }}>resources:</Box>{" "}
         — a backend that declares none competes for nothing and appears under &ldquo;unpinned&rdquo;.
@@ -1018,7 +1192,8 @@ function NumbersTable({ d }: { d: UiData }) {
         </Typography>
       </AccordionSummary>
       <AccordionDetails>
-        <Box sx={{ overflowX: "auto" }}><HistTable hist={d.hist} /></Box>
+        <Box sx={{ overflowX: "auto" }}><HistTable hist={d.hist} aliases={d.aliases} available={d.net.available} /></Box>
+        <CallsTable calls={d.calls} aliases={d.aliases} available={d.net.available} />
       </AccordionDetails>
     </Accordion>
   );

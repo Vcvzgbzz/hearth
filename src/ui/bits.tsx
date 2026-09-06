@@ -146,20 +146,84 @@ export function Why({ children }: { children: React.ReactNode }) {
  * belongs to the word above it, not to the other end of a 900px rule. `right`
  * is for the controls that do.
  */
-export function Section({ title, note, right, children }: {
+export function Section({ title, note, right, children, card }: {
   title: string;
   note?: React.ReactNode;
   right?: React.ReactNode;
+  card?: boolean;
   children: React.ReactNode;
 }) {
+  const header = (
+    <Row spacing={1.5} align="baseline" wrap sx={{ mb: card ? 1.5 : 1.5 }}>
+      <Typography variant="h2">{title}</Typography>
+      {note}
+      {right ? <><Spacer />{right}</> : null}
+    </Row>
+  );
+  if (card) {
+    return (
+      <Box component="section" sx={{
+        mt: 3,
+        border: "1px solid", borderColor: "line",
+        borderRadius: 3,
+        p: 2,
+        bgcolor: "background.paper",
+      }}>
+        {header}
+        {children}
+      </Box>
+    );
+  }
   return (
-    <Box component="section" sx={{ mt: 3.75 }}>
-      <Row spacing={1.5} align="baseline" wrap sx={{ mb: 1.5 }}>
-        <Typography variant="h2">{title}</Typography>
-        {note}
-        {right ? <><Spacer />{right}</> : null}
-      </Row>
+    <Box component="section" sx={{ mt: 3 }}>
+      {header}
       {children}
     </Box>
+  );
+}
+
+/**
+ * One vital, and whether it is worth looking at.
+ *
+ * `hot` paints the number amber — "working", the middle state in the palette's
+ * three. Everything quiet stays quiet, so the one number that has changed is
+ * findable without reading the row.
+ *
+ * StatTile replaced Vital (a bare bold number) with a labelled box so each
+ * vital is legible on its own, not just by position in a list.
+ */
+export function StatTile({ label, value, hot, title }: {
+  label: string;
+  value: React.ReactNode;
+  hot?: boolean;
+  title: string;
+}) {
+  return (
+    <Tooltip title={title}>
+      <Box component="span"
+           sx={{
+             display: "inline-flex", flexDirection: "column",
+             px: 1.5, py: 0.75,
+             border: "1px solid", borderColor: hot ? "warning.main" : "divider",
+             borderRadius: 3,
+             background: "background.default",
+             minWidth: "64px",
+           }}>
+        <Box component="span"
+              sx={{
+                fontFamily: MONO, fontSize: 20, fontWeight: 700, lineHeight: 1.1,
+                color: hot ? "warning.main" : "text.primary",
+              }}>
+          {value}
+        </Box>
+        <Box component="span"
+             sx={{
+               fontFamily: MONO, fontSize: 10, color: "faint",
+               textTransform: "uppercase", letterSpacing: ".03em",
+             }}>
+          {label}
+        </Box>
+      </Box>
+    </Tooltip>
   );
 }

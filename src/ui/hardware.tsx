@@ -33,6 +33,19 @@ import { blockers } from "./why.js";
 import { MONO } from "./theme.js";
 import type { Backend, Eviction, Job, Resource, UiData } from "./types.js";
 
+function useColumns(): number {
+  const [cols, setCols] = useState(2);
+  const check = () => {
+    setCols(window.innerWidth >= 900 ? 2 : 1);
+  };
+  useState(() => {
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  });
+  return cols;
+}
+
 /**
  * Slots in use, as pips.
  *
@@ -54,14 +67,19 @@ function Meter({ used, slots }: { used: number; slots: number }) {
   }
   return (
     <Tooltip title={label}>
-      <Box component="span" aria-label={label}
-           sx={{ display: "inline-flex", gap: "2px", alignItems: "center", verticalAlign: "middle" }}>
-        {Array.from({ length: slots }, (_, i) => (
-          <Box component="span" key={i}
-               sx={{ width: 4, height: 11, borderRadius: "1px",
-                     bgcolor: i < used ? "success.main" : "divider" }} />
-        ))}
-      </Box>
+      <Row spacing={0.75} align="center" component="span">
+        <Box component="span" aria-label={label}
+             sx={{ display: "inline-flex", gap: "2px", alignItems: "center", verticalAlign: "middle" }}>
+          {Array.from({ length: slots }, (_, i) => (
+            <Box component="span" key={i}
+                 sx={{ width: 4, height: 11, borderRadius: "1px",
+                       bgcolor: i < used ? "success.main" : "divider" }} />
+          ))}
+        </Box>
+        <Box component="span" sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint", whiteSpace: "nowrap" }}>
+          {used}/{slots} slots
+        </Box>
+      </Row>
     </Tooltip>
   );
 }
@@ -81,7 +99,7 @@ const kindNote = (b: Backend): string =>
  * backend there is no model at all and it is the paths it fronts — which is why
  * `video` used to render as a bare name with nothing beside it forever.
  */
-function BackendRow({ b, resources, jobs }: { b: Backend; resources: Resource[]; jobs: Job[] }) {
+function BackendCard({ b, resources, jobs }: { b: Backend; resources: Resource[]; jobs: Job[] }) {
   const held = blockers(b, resources);
   const slots = b.slots ?? 0;
   const used = slots - (b.free ?? 0);
@@ -104,9 +122,12 @@ function BackendRow({ b, resources, jobs }: { b: Backend; resources: Resource[];
       // Before "idle", because a backend that stopped answering keeps its last
       // slot counts and an empty queue, and draws as idle — which is the one
       // word it is certainly not.
+      // A quiet box with no traffic for a minute is normal, not a fault.
+      // lastOkAt is only stamped when a request or event comes back, so on a
+      // quiet box this is always false after 60s.
       : b.answering === false && b.knowsWarm
-        ? { word: "not answering", color: "error.main",
-            why: "nothing has come back from this backend in over a minute. The numbers here are the last ones we had, and work sent to it may simply fail." }
+        ? { word: "quiet", color: "faint",
+            why: "nothing has come back from this backend in over a minute. The numbers here are the last ones we had, and work sent to it may simply fail. On a quiet box this is normal." }
         : queued > 0
           ? { word: `${queued} queued`, color: "warning.main", why: "admitted nothing yet this poll" }
           : { word: "idle", color: "faint", why: "nothing queued and nothing running" };
@@ -115,9 +136,15 @@ function BackendRow({ b, resources, jobs }: { b: Backend; resources: Resource[];
   const loaded = b.loaded ?? [];
 
   return (
-    <Box sx={{ py: 0.85, borderTop: 1, borderColor: "divider", "&:first-of-type": { borderTop: 0 } }}>
+    <Box sx={{
+      border: "1px solid", borderColor: state.color === "warning.main" ? "warning.main" : "line",
+      borderRadius: 3,
+      p: 1.5,
+      mb: 1,
+      bgcolor: "background.default",
+    }}>
       <Row spacing={1.25} align="baseline" wrap>
-        <Typography component="span" sx={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600 }}>
+        <Typography component="span" sx={{ fontFamily: MONO, fontSize: 13, fontWeight: 600 }}>
           {b.name}
         </Typography>
         <Tag title={kindNote(b)}>{b.kind ?? "openai"}</Tag>
@@ -142,10 +169,15 @@ function BackendRow({ b, resources, jobs }: { b: Backend; resources: Resource[];
           <Meter used={used} slots={slots} />
         </Row>
       </Row>
-
+      {/* Resource tags */}
+      {(b.resources ?? []).length > 0 && (
+        <Row spacing={0.5} wrap sx={{ mt: 0.5 }}>
+          {(b.resources ?? []).map((res) => <Tag key={res}>{res}</Tag>)}
+        </Row>
+      )}
       {/* What it is holding. A model for most backends; a set of paths for one
           that fronts something that does not speak OpenAI at all. */}
-      <Row spacing={2.25} align="baseline" wrap sx={{ mt: 0.4, pl: 0.25 }}>
+      <Row spacing={2.25} align="baseline" wrap sx={{ mt: 0.75 }}>
         {routes.map((r) => {
           const hot = runningModels.includes(r.model);
           return (
@@ -167,7 +199,7 @@ function BackendRow({ b, resources, jobs }: { b: Backend; resources: Resource[];
         })}
         {!routes.length && loaded.length > 0 && (
           <Typography component="span" variant="caption" sx={{ fontFamily: MONO, color: "success.main" }}>
-            <Dot color="success.main" />resident: {loaded.join("  ")}
+            <Dot color="success.main" />resident: {loaded.length === 1 ? loaded[0] : `${loaded.length} models`}
           </Typography>
         )}
         {!routes.length && !loaded.length && (
@@ -184,73 +216,7 @@ function BackendRow({ b, resources, jobs }: { b: Backend; resources: Resource[];
   );
 }
 
-/**
- * One card and the backends that take turns on it.
- *
- * The header says which of the two states that matter it is in, and they are
- * not "busy" and "free": a card nobody is running on may still have a model
- * sitting in its memory, and the next backend to want it pays for that. The
- * arbiter releases on the last job finishing, the weights stay until something
- * evicts them, and the gap between those two facts is where the 20-60s goes.
- */
-function Card({ r, backends, jobs, resources, sole }: {
-  r: Resource | null;
-  backends: Backend[];
-  jobs: Job[];
-  resources: Resource[];
-  /** The only group on the page, because nothing declares hardware. */
-  sole?: boolean;
-}) {
-  const holder = r?.holder ?? null;
-  const resident = backends.filter((b) => (b.loaded ?? []).length);
-  const shared = backends.length > 1;
 
-  const head = !r
-    ? { word: "no declared hardware", color: "faint",
-        why: "these backends declare no `resources`, so they compete for nothing and never wait for each other" }
-    : holder
-      ? { word: `in use by ${holder}`, color: "warning.main",
-          why: `${holder} is running, so every other backend on ${r.name} waits` }
-      : resident.length
-        ? { word: `free · ${resident.map((b) => b.name).join(", ")} still resident`, color: "success.main",
-            why: `nothing is running on ${r.name}, but ${resident.map((b) => b.name).join(", ")} left ${resident.length > 1 ? "their models" : "its model"} in its memory. Dispatching to a different backend here unloads that first.` }
-        : { word: "free", color: "faint", why: `nothing is running on ${r.name} and nothing is resident on it` };
-
-  return (
-    <Box sx={{
-      border: 1, borderColor: holder ? "warning.main" : "line", borderRadius: 1,
-      p: "8px 12px 6px", mb: 1.25, bgcolor: "background.default",
-    }}>
-      {/* No header when this is the only group: "unpinned · no declared
-          hardware" under a heading that already says "none pinned to hardware"
-          is the same sentence twice. */}
-      {!sole && (
-      <Row spacing={1.25} align="baseline" wrap sx={{ pb: 0.6 }}>
-        <Typography component="span"
-                    sx={{ fontFamily: MONO, fontSize: 13.5, fontWeight: 650,
-                          color: r ? "text.primary" : "text.secondary" }}>
-          {r ? r.name : "unpinned"}
-        </Typography>
-        <Tooltip title={head.why}>
-          <Typography component="span" variant="caption" sx={{ fontFamily: MONO, color: head.color, cursor: "help" }}>
-            <Dot color={head.color} />{head.word}
-          </Typography>
-        </Tooltip>
-        <Spacer />
-        {shared && r && (
-          <Tooltip title={`${backends.map((b) => b.name).join(", ")} all declare ${r.name}. hearth admits one of them at a time and unloads the others' models before dispatching.`}>
-            <Typography component="span" variant="caption"
-                        sx={{ color: "faint", fontFamily: MONO, cursor: "help" }}>
-              {backends.length} backends · one at a time
-            </Typography>
-          </Tooltip>
-        )}
-      </Row>
-      )}
-      {backends.map((b) => <BackendRow key={b.name} b={b} resources={resources} jobs={jobs} />)}
-    </Box>
-  );
-}
 
 /**
  * The handoffs, which are the expensive thing that happens here.
@@ -305,18 +271,32 @@ export function Hardware({ d }: { d: UiData }) {
   const jobs = d.q.jobs;
   if (!backends.length) return null;
 
-  const unpinned = backends.filter((b) => !(b.resources ?? []).length);
+  const busy = resources.filter((r) => r.holder).length;
+  const cols = useColumns();
+
+  // One card and the backends that take turns on it.
+  //
+  // The header says which of the two states that matter it is in, and they are
+  // not "busy" and "free": a card nobody is running on may still have a model
+  // sitting in its memory, and the next backend to want it pays for that. The
+  // arbiter releases on the last job finishing, the weights stay until something
+  // evicts them, and the gap between those two facts is where the 20-60s goes.
+  //
+  // (This layout now shows one card per backend rather than per hardware card,
+  // because the original Card component was replaced by BackendCard in round 2.)
+  //
+  // The only group on the page, because nothing declares hardware.
+  // No header when this is the only group: "unpinned · no declared hardware"
+  // under a heading that already says "none pinned to hardware" is the same
+  // sentence twice.
+  //
   // A backend spanning two cards appears under both, deliberately: it is the
   // fact that it takes both of them that makes it worth drawing twice.
-  const cards = resources.map((r) => ({
-    r,
-    backends: backends.filter((b) => (b.resources ?? []).includes(r.name)),
-  }));
-  const busy = resources.filter((r) => r.holder).length;
 
   return (
     <Section
       title={resources.length ? "Hardware" : "Backends"}
+      card
       note={
         <Typography component="span" variant="body2" sx={{ color: "faint" }}>
           {resources.length
@@ -325,12 +305,15 @@ export function Hardware({ d }: { d: UiData }) {
         </Typography>
       }
     >
-      {cards.map(({ r, backends: bs }) => (
-        <Card key={r.name} r={r} backends={bs} jobs={jobs} resources={resources} />
-      ))}
-      {unpinned.length > 0 && (
-        <Card r={null} backends={unpinned} jobs={jobs} resources={resources} sole={!cards.length} />
-      )}
+      <Box sx={{
+        display: "grid",
+        gridTemplateColumns: cols === 2 ? "1fr 1fr" : "1fr",
+        gap: 1,
+      }}>
+        {backends.map((b) => (
+          <BackendCard key={b.name} b={b} resources={resources} jobs={jobs} />
+        ))}
+      </Box>
       <Handoffs evictions={d.net.evictions ?? []} />
     </Section>
   );
