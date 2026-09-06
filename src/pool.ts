@@ -68,6 +68,8 @@ export class BackendPool {
   private readonly arbiter = new ResourceArbiter();
   /** Declared non-OpenAI paths -> who serves them. See BackendConfig.routes. */
   private readonly byPath = new Map<string, { slot: BackendSlot; rule: RouteRule }>();
+  /** Routes carrying a {model} segment, in declaration order. */
+  private readonly patterns: { slot: BackendSlot; rule: RouteRule; re: RegExp }[] = [];
   /**
    * The last few handoffs, so a card changing hands is visible and not merely
    * logged.
@@ -126,7 +128,18 @@ export class BackendPool {
       };
       this.slots.push(slot);
       this.byName.set(b.name, slot);
-      for (const r of b.routes) this.byPath.set(r.path, { slot, rule: r });
+      for (const r of b.routes) {
+        if (r.path.includes("{model}")) {
+          const re = new RegExp(
+            "^" + r.path.split("{model}")
+              .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+              .join("([^/]+)") + "$",
+          );
+          this.patterns.push({ slot, rule: r, re });
+        } else {
+          this.byPath.set(r.path, { slot, rule: r });
+        }
+      }
     }
   }
 
@@ -134,12 +147,47 @@ export class BackendPool {
    * The backend that declared this request path, if any.
    *
    * Exact match on the pathname, query string already stripped by the caller.
-   * No prefixes and no wildcards: these are a handful of named endpoints, and a
-   * pattern that matches more than the operator pictured would silently pull
-   * unrelated traffic into a queue.
+   * No prefixes and no open wildcards: these are a handful of named endpoints,
+   * and a pattern that matches more than the operator pictured would silently
+   * pull unrelated traffic into a queue.
+   *
+   * `{model}` is the one exception, and it is narrow enough to keep that
+   * promise. It matches a single segment, and ONLY when the backend actually
+   * serves the model that segment names — so `/upstream/{model}/generate` on the
+   * image backend cannot swallow `/upstream/coder/generate`, which falls through
+   * to the unqueued passthrough exactly as it did before. The captured segment
+   * IS the id the work queues under, so a pattern cannot pull in traffic without
+   * also naming a model this backend admits.
    */
   forPath(pathname: string): { slot: BackendSlot; rule: RouteRule } | undefined {
-    return this.byPath.get(pathname);
+    const exact = this.byPath.get(pathname);
+    if (exact) return exact;
+    for (const p of this.patterns) {
+      const m = p.re.exec(pathname);
+      if (!m) continue;
+      let model: string;
+      try {
+        model = decodeURIComponent(m[1]!);
+      } catch {
+        continue; // a malformed escape is not a model id
+      }
+      if (!this.declaredBy(p.slot, model)) continue;
+      return { slot: p.slot, rule: { ...p.rule, model } };
+    }
+    return undefined;
+  }
+
+  /**
+   * Does this backend actually serve this id?
+   *
+   * `for()` deliberately falls back to the first backend for an id nobody
+   * claims, which is right for dispatch and wrong here: it would make every
+   * pattern match everything. So this asks the narrower question directly —
+   * what the backend DECLARED, or failing that what it reported it can serve.
+   */
+  private declaredBy(slot: BackendSlot, model: string): boolean {
+    if (slot.cfg.serves.length) return slot.cfg.serves.includes(model);
+    return slot.state.catalog().includes(model);
   }
 
   /**
