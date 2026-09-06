@@ -28,10 +28,13 @@ declare module "@mui/material/styles" {
     faint: string;
     /** The heavier rule, under section headings and table heads. */
     line: string;
+    /** A healthy peer machine — the one hue that is not a state. */
+    peer: { main: string };
   }
   interface PaletteOptions {
     faint: string;
     line: string;
+    peer?: { main: string };
   }
 }
 
@@ -59,6 +62,7 @@ const swatches = {
     live: "#8DB580",       // success
     work: "#f59e0b",       // warning
     fault: "#f87171",      // error
+    peer: "#7FA3C7",       // a healthy peer — cool against self's green
   },
   light: {
     bg: "#DDD1C7",
@@ -72,6 +76,7 @@ const swatches = {
     live: "#8DB580",
     work: "#b45309",
     fault: "#dc2626",
+    peer: "#2F6690",
   },
 } as const;
 
@@ -85,6 +90,7 @@ export function makeTheme(mode: "light" | "dark"): Theme {
       success: { main: c.live },
       warning: { main: c.work },
       error: { main: c.fault },
+      peer: { main: c.peer },
       divider: c.hair,
       faint: c.faint,
       line: c.line,

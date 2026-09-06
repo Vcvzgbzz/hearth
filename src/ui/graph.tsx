@@ -30,6 +30,7 @@ import Typography from "@mui/material/Typography";
 import { useTheme } from "@mui/material/styles";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { backendIcon, TypeIcon, type IconKind } from "./icons.js";
 import { MONO } from "./theme.js";
 import { displayId } from "./lib.js";
 import { blockers } from "./why.js";
@@ -51,7 +52,7 @@ export const selEq = (a: Sel, b: Sel): boolean =>
 
 const GAP = 18;
 const PAD = 10;
-const H = { self: 76, peer: 76, backend: 80, resource: 58 } as const;
+const H = { self: 82, peer: 82, backend: 86, resource: 66 } as const;
 /** Below this the columns stop being readable and the stage scrolls instead. */
 const MIN_STAGE = 640;
 /** The tightest the three rows go before the edges are too short to read. */
@@ -160,7 +161,7 @@ function layout(width: number, height: number, self: Node | undefined, peers: No
   // rather than squeezing a name into 60px.
   const n = backends.length;
   if (n) {
-    const bw = Math.min(170, Math.max(104, (inner - (n - 1) * GAP) / n));
+    const bw = Math.min(184, Math.max(118, (inner - (n - 1) * GAP) / n));
     const span = n * bw + (n - 1) * GAP;
     const start = PAD + Math.max(0, (inner - span) / 2);
     backends.forEach((b, i) => nodes.set(`backend:${b.name}`, {
@@ -288,10 +289,13 @@ function useSparks(calls: Call[] | undefined): Spark[] {
 /* ----------------------------------------------------------------- nodes */
 
 /** The shell every node shares: the click target, the selected ring, the tone. */
-function NodeBox({ p, tone, selected, dim, onSelect, onHover, title, children }: {
+function NodeBox({ p, tone, icon, selected, peer, dim, onSelect, onHover, title, children }: {
   p: Placed;
   tone: "live" | "work" | "fault" | "idle";
+  icon: IconKind;
   selected: boolean;
+  /** A peer machine: a live peer takes the peer hue, self takes the success green. */
+  peer?: boolean;
   /** Something else is hovered and this is not connected to it. */
   dim?: boolean;
   onSelect: () => void;
@@ -299,8 +303,14 @@ function NodeBox({ p, tone, selected, dim, onSelect, onHover, title, children }:
   title: string;
   children: React.ReactNode;
 }) {
-  const edge = tone === "live" ? "success.main" : tone === "work" ? "warning.main"
-    : tone === "fault" ? "error.main" : "line";
+  // A healthy peer reads as the cool peer hue rather than self's green, so
+  // same-shape machines still tell apart at a glance; down and busy keep the
+  // shared state colours, which must stay consistent across the stage.
+  const colour = tone === "live" ? (peer ? "peer.main" : "success.main")
+    : tone === "work" ? "warning.main" : tone === "fault" ? "error.main" : "faint";
+  // Big enough to be the thing you see first, and still inside a node narrow
+  // enough that nine backends fit a laptop without the stage scrolling.
+  const glyph = Math.round(Math.max(26, Math.min(36, p.w * 0.26)));
   return (
     <Tooltip title={title}>
       <Box
@@ -316,19 +326,31 @@ function NodeBox({ p, tone, selected, dim, onSelect, onHover, title, children }:
         sx={{
           position: "absolute", left: p.x, top: p.y, width: p.w, height: p.h,
           opacity: dim ? 0.35 : 1,
-          boxSizing: "border-box", px: 1.5, py: 1, cursor: "pointer",
-          display: "flex", flexDirection: "column", justifyContent: "center", gap: 0.5,
-          borderRadius: 2.5, border: "1px solid", borderColor: selected ? "success.main" : edge,
-          bgcolor: "background.paper",
-          // The selected ring is a shadow rather than a thicker border so the
-          // box does not change size and shift its own text on click.
-          boxShadow: selected ? "0 0 0 2px rgba(141,181,128,.35)" : "0 1px 2px rgba(0,0,0,.18)",
-          transition: "border-color 180ms, box-shadow 180ms, transform 180ms, opacity 180ms",
-          "&:hover": { transform: "translateY(-1px)", borderColor: selected ? "success.main" : "text.secondary" },
+          boxSizing: "border-box", px: 1, py: 0.75, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 1.25,
+          // No border and no fill at rest. The mark is the node now; a box
+          // around every one of them was the thing making a GPU and a peer look
+          // like the same object. The surface comes back on hover and selection,
+          // where it is doing a job — saying which one you are about to act on.
+          borderRadius: 2.5,
+          border: "1px solid",
+          borderColor: selected ? "success.main" : "transparent",
+          bgcolor: selected ? "background.paper" : "transparent",
+          boxShadow: selected ? "0 0 0 2px rgba(141,181,128,.3)" : "none",
+          transition: "border-color 160ms, background-color 160ms, box-shadow 160ms, opacity 180ms",
+          "&:hover": {
+            bgcolor: "background.paper",
+            borderColor: selected ? "success.main" : "line",
+          },
           "&:focus-visible": { outline: "2px solid", outlineColor: "success.main", outlineOffset: 2 },
         }}
       >
-        {children}
+        <Box sx={{ color: colour, display: "flex", transition: "color 200ms" }}>
+          <TypeIcon kind={icon} size={glyph} />
+        </Box>
+        <Box sx={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
+          {children}
+        </Box>
       </Box>
     </Tooltip>
   );
@@ -336,11 +358,9 @@ function NodeBox({ p, tone, selected, dim, onSelect, onHover, title, children }:
 
 /** The node's name line: a status dot, the name, and a number on the right. */
 function Head({ tone, name, right }: { tone: string; name: string; right?: React.ReactNode }) {
+  void tone; // the mark carries it now
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
-      <Box component="span" aria-hidden sx={{
-        width: 6, height: 6, borderRadius: "50%", flexShrink: 0, bgcolor: tone,
-      }} />
       <Typography component="span" sx={{
         fontFamily: MONO, fontSize: 12.5, fontWeight: 600, minWidth: 0,
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
@@ -633,7 +653,8 @@ export function Graph({ d, sel, onSelect }: {
             const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
             const queued = Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0);
             return (
-              <NodeBox p={p} tone={queued ? "work" : "live"} selected={sel?.kind === "self"}
+              <NodeBox p={p} tone={queued ? "work" : "live"} icon="self"
+                       selected={sel?.kind === "self"}
                        dim={dimmed("self")} onHover={(on) => setHover(on ? "self" : null)}
                        onSelect={() => onSelect({ kind: "self" })}
                        title="this node — click for federation switches and unsaved runtime changes">
@@ -657,7 +678,8 @@ export function Graph({ d, sel, onSelect }: {
             const busy = (n.slots ?? 0) - (n.free ?? 0);
             const unmapped = (n.unmapped ?? []).length;
             return (
-              <NodeBox key={n.name} p={p} tone={!n.up ? "fault" : n.free === 0 ? "work" : "live"}
+              <NodeBox key={n.name} p={p} peer tone={!n.up ? "fault" : n.free === 0 ? "work" : "live"}
+                       icon="peer"
                        selected={sel?.kind === "peer" && sel.id === n.name}
                        dim={dimmed(`peer:${n.name}`)}
                        onHover={(on) => setHover(on ? `peer:${n.name}` : null)}
@@ -701,6 +723,7 @@ export function Graph({ d, sel, onSelect }: {
               : used > 0 || proxied.length ? "live" : q > 0 ? "work" : "idle";
             return (
               <NodeBox key={b.name} p={p} tone={tone}
+                       icon={backendIcon(b.kind, (b.routes ?? []).length > 0)}
                        selected={sel?.kind === "backend" && sel.id === b.name}
                        dim={dimmed(`backend:${b.name}`)}
                        onHover={(on) => setHover(on ? `backend:${b.name}` : null)}
@@ -718,7 +741,7 @@ export function Graph({ d, sel, onSelect }: {
                 <Sub color={stalled ? "warning.main" : loaded.length ? "success.main" : "faint"}>
                   {stalled ? `blocked · ${held.map((r) => r.name).join(", ")}`
                     : loaded.length ? loaded.join(", ")
-                    : held.length ? `idle · ${held.map((r) => r.name).join(", ")} busy`
+                    : held.length ? `${held.map((r) => r.name).join(", ")} busy`
                     : b.knowsWarm === false ? "warmth unknown" : "nothing loaded"}
                 </Sub>
                 {q > 0 && <Sub color="warning.main">{q} waiting</Sub>}
@@ -726,7 +749,7 @@ export function Graph({ d, sel, onSelect }: {
                   // The model is already on the line above; repeating it here
                   // only bought a truncated ellipsis.
                   <Sub color="warning.main">
-                    {proxied.length} passing through
+                    {proxied.length} forwarded
                   </Sub>
                 )}
                 <Sparks calls={(d.calls ?? []).filter((c) => c.backend === b.name)} now={now} />
@@ -747,6 +770,7 @@ export function Graph({ d, sel, onSelect }: {
               && (b.proxying ?? []).length > 0);
             return (
               <NodeBox key={r.name} p={p} tone={r.holder ? "live" : unqueued.length ? "work" : "idle"}
+                       icon="card"
                        selected={sel?.kind === "resource" && sel.id === r.name}
                        dim={dimmed(`resource:${r.name}`)}
                        onHover={(on) => setHover(on ? `resource:${r.name}` : null)}
