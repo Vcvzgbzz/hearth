@@ -118,12 +118,40 @@ export interface Capacity {
   slots: number;
   queued: Record<string, number>;
   offbox?: number;
+  /** The first model currently loaded, if any. */
+  resident?: string | null;
 }
 
 export interface Sample {
   t: number;
   queued: number;
   residents?: string[];
+  /**
+   * Models with a job RUNNING on a local backend at the instant of the reading.
+   * Residency says what is loaded; this says what is being used. A model can
+   * sit warm for an hour and never appear here.
+   */
+  active?: string[];
+}
+
+/**
+ * One request that ran on a local backend, recorded when it ENDED.
+ *
+ * The samples above cannot see a call that starts and finishes between two
+ * readings, and cannot place a boundary more finely than 5s. This can: it is
+ * the same record llama-swap's activity page keeps, made here so it exists for
+ * every backend kind and for exactly the traffic that went through the queue.
+ */
+export interface Call {
+  /** When it finished. Start is `t - ms`. */
+  t: number;
+  model: string;
+  backend: string;
+  /** Run time, once it had a slot. */
+  ms: number;
+  /** Time spent queued before that. */
+  waitedMs: number;
+  ok: boolean;
 }
 
 export interface Overrides {
@@ -160,4 +188,18 @@ export interface UiData {
   net: Net;
   q: { jobs: Job[]; capacity: Capacity };
   hist: Sample[];
+  /**
+   * Advertised id -> the `as` it is sent to the backend under.
+   *
+   * Used to detect variants: if aliases[X] === P and P is itself in
+   * net.available, then X is a variant of P (same weights, different advertised
+   * name). An `as` naming something not in net.available is a rename, not a
+   * variant — those rows stand alone.
+   */
+  aliases?: Record<string, string>;
+  /**
+   * Every request that ran on a local backend and ended inside the same
+   * 10-minute window as the samples, oldest first.
+   */
+  calls?: Call[];
 }

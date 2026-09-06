@@ -112,6 +112,24 @@ import { blockers, waitReason } from "../src/ui/why.js";
   // start() takes one immediately: a graph that is blank for the first 5s
   // reads as broken.
   const h2 = new History(() => ({ queued: 7, residents: [], perBackend: [] }), 10_000, 5);
+  // A reader that reports usage sees it stored per reading, one entry per
+  // finished call; a reader that does not report it gets empty lists, not
+  // undefined, so the chart never has to guard.
+  const h3 = new History(() => ({ queued: 0, residents: ["m1"], perBackend: [], active: ["m1"] }), 10_000, 2, 3);
+  h3.sample();
+  assert.deepEqual(h3.all()[0]!.active, ["m1"]);
+  h.sample();
+  assert.deepEqual(h.all().at(-1)!.active, [], "absent usage reads as none");
+  // Calls are their own ring: one entry per finished request, capped, and
+  // reported only inside the samples' window so the two never disagree about
+  // how far back the page can see.
+  const call = (t: number) => ({ t, model: "m1", backend: "b", ms: 100, waitedMs: 0, ok: true });
+  h3.record(call(Date.now() - 60_000_000)); // long before the window
+  h3.record(call(Date.now() - 1000));
+  h3.record(call(Date.now()));
+  assert.equal(h3.calls().length, 2, "a call older than the window is not reported");
+  h3.record(call(Date.now())); h3.record(call(Date.now()));
+  assert.equal(h3.calls().length, 3, "the ring is capped at keepCalls");
   h2.start();
   assert.equal(h2.all().length, 1, "start() samples once up front");
   h2.stop();
@@ -197,7 +215,8 @@ const base = await new Promise<string>((ready) =>
     net: { nodes: { name: string; self?: boolean; slots?: number | null }[];
            readyNow: string[]; available: string[] };
     q: { jobs: unknown[]; capacity: { slots: number; queued: Record<string, number> } };
-    hist: { t: number; queued: number; residents: string[] }[];
+    hist: { t: number; queued: number; residents: string[]; active: string[] }[];
+    calls: { t: number; model: string; backend: string; ms: number; waitedMs: number; ok: boolean }[];
   };
 
   // Every field the page reads, in one assertion block, so a rename fails here
@@ -219,6 +238,11 @@ const base = await new Promise<string>((ready) =>
   // the honest answer — we genuinely do not know yet — and it self-corrects
   // within one interval, so it is asserted rather than papered over.
   assert.deepEqual(d.hist[0]!.residents, [], "nothing is known to be loaded yet");
+  // Usage rides on the same reading as residency. Nothing has run yet, so both
+  // are empty; the shape is what the lanes chart keys off to tell "loaded"
+  // from "in use", and a missing field would silently draw everything idle.
+  assert.deepEqual(d.hist[0]!.active, [], "nothing is running at the first reading");
+  assert.deepEqual(d.calls, [], "and no call has finished here yet");
 
   await node.pool.first().state.ensureFresh();
   node.history.sample();
@@ -509,6 +533,40 @@ const base = await new Promise<string>((ready) =>
     "while protocol 2 asks per model and gets the real one",
   );
   await capped.close();
+}
+
+// --- which ids are one seat under another name -----------------------------
+//
+// `models.<id>.as` rewrites an advertised id on the way to a local backend.
+// When the target is itself an advertised model, the two ids are one set of
+// weights with different defaults (per-model `params`), and a page that draws
+// them as unrelated rows is wrong about how many models there are. The console
+// folds those under their parent, which it can only do if the server says
+// which ids alias which - so the join is asserted here, like `resources` and
+// `routes` above.
+{
+  const aliased = createNode(
+    parseConfig({
+      name: "aliases",
+      backend: { url: backendUrl, kind: "llama-swap" },
+      models: {
+        "m1-fast": { as: "m1" },
+        // A rename onto a backend-only wire id, not a variant. Sent the same
+        // way; the page decides, because it is the one holding the catalog.
+        friendly: { as: "m2-on-the-wire" },
+      },
+    }),
+    silentLogger,
+  );
+  aliased.start();
+  const abase = await new Promise<string>((ready) =>
+    aliased.server.listen(0, "127.0.0.1", () =>
+      ready(`http://127.0.0.1:${(aliased.server.address() as AddressInfo).port}`)),
+  );
+  const d = (await (await fetch(`${abase}/ui/data`)).json()) as { aliases: Record<string, string> };
+  assert.deepEqual(d.aliases, { "m1-fast": "m1", friendly: "m2-on-the-wire" },
+    "every `as` goes on the wire, keyed by the advertised id");
+  await aliased.close();
 }
 
 await node.close();

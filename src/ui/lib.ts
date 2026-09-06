@@ -18,6 +18,40 @@ export const since = (ms: number): string => {
 /** Wall clock, HH:MM. */
 export const clock = (t: number): string => new Date(t).toTimeString().slice(0, 5);
 
+/**
+ * Resolve any model id to its canonical display form.
+ *
+ * Three cases:
+ *   1. Variant id (aliases[id] is an advertised model in available) -> return parent
+ *   2. Backend wire id (some advertised id A has aliases[A] === id) -> return A
+ *   3. Already an advertised id -> return it
+ *
+ * This means "nomic-embed-text-v2-moe:latest" (the wire id) displays as
+ * "nomic-embed" everywhere on the page: lanes, charts, tables, hover readouts.
+ */
+export const displayId = (
+  id: string,
+  aliases?: Record<string, string>,
+  available?: string[],
+): string => {
+  if (!aliases) return id;
+  const avail = new Set(available ?? []);
+  // Variant -> parent
+  const as = aliases[id];
+  if (as && as !== id && avail.has(as)) return as;
+  // An advertised id that is nobody's variant is already the display form.
+  // This check has to come BEFORE the reverse lookup: the parent of a variant
+  // family is also the `as` target of every variant, so without it the parent
+  // "resolved" to its first variant while the variant resolved to the parent,
+  // and the lanes chart drew both. Found on the live node, 2026-09-05.
+  if (avail.has(id)) return id;
+  // Wire id -> advertised (reverse lookup)
+  for (const [a, w] of Object.entries(aliases)) {
+    if (w === id && avail.has(a)) return a;
+  }
+  return id;
+};
+
 export async function load(): Promise<UiData> {
   const r = await fetch("/ui/data", { cache: "no-store" });
   if (!r.ok) throw new Error(`/ui/data returned ${r.status}`);
