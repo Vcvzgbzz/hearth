@@ -127,10 +127,13 @@ It shows four things the JSON endpoints make you assemble yourself:
 
 - **Queue depth over the last ten minutes**, which is how you tell whether the
   queue is doing anything or you have added a hop for nothing.
-- **Which model was loaded, when.** One lane per model, filled where it was
-  resident. A GPU flipping between two models draws a staircase, and the caption
-  counts the swaps. That thrash is the thing hearth exists to prevent, and you
-  cannot see it in an instantaneous reading.
+- **Which model was in use, when.** One lane per model: a faint track where it
+  was resident, and a bright segment for every request that ran on it, so a
+  30-second call and a burst of two-second ones look different. A GPU flipping
+  between two models draws a staircase, and the caption counts the swaps. That
+  thrash is the thing hearth exists to prevent, and you cannot see it in an
+  instantaneous reading. Ids that are one seat under several names (`as`) fold
+  into one lane, and the raw samples and calls sit under "Show the numbers".
 - **Every model, on one row each**: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
   view, and a model that appears on four of them appeared four times before
