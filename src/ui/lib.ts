@@ -39,6 +39,12 @@ export const displayId = (
   // Variant -> parent
   const as = aliases[id];
   if (as && as !== id && avail.has(as)) return as;
+  // An advertised id that is nobody's variant is already the display form.
+  // This check has to come BEFORE the reverse lookup: the parent of a variant
+  // family is also the `as` target of every variant, so without it the parent
+  // "resolved" to its first variant while the variant resolved to the parent,
+  // and the lanes chart drew both. Found on the live node, 2026-09-05.
+  if (avail.has(id)) return id;
   // Wire id -> advertised (reverse lookup)
   for (const [a, w] of Object.entries(aliases)) {
     if (w === id && avail.has(a)) return a;

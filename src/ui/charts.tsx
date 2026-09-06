@@ -28,6 +28,10 @@ import type { Sample, Call } from "./types.js";
 
 const axis = { fontSize: 10, fontFamily: MONO } as const;
 const fill = { display: "block", width: "100%", height: "auto", overflow: "visible" } as const;
+// Shared grid layout for Depth and Lanes so their x-axes align.
+const LABEL_COL = "minmax(150px, 22%)";
+const TRACK_COL = "1fr";
+const COL_GAP = 1; // MUI spacing units (8px)
 
 function Empty({ msg }: { msg: string }) {
   const t = useTheme();
@@ -54,7 +58,9 @@ export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: 
   const [at, setAt] = useState<number | null>(null);
   if (!hist || hist.length < 2) return <Empty msg="warming up" />;
 
-  const W = 900, H = 120, L = 38, R = 8, TOP = 10, B = 24;
+  const W = 900, H = 120, TOP = 10, B = 24;
+  // L=0, R=0 so the plot fills the track column edge to edge, aligned with Lanes.
+  const L = 0, R = 0;
   const peak = Math.max(1, ...hist.map((d) => d.queued));
   const flatZero = peak === 0 || !hist.some((d) => d.queued > 0);
   const x = (i: number) => L + (i / (hist.length - 1)) * (W - L - R);
@@ -71,92 +77,127 @@ export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: 
   const fold = (id: string): string => displayId(id, aliases, available);
 
   // Y-axis: 0 and the peak only; anything more is noise at this size.
-  // (Gridlines at each integer were added in round 2 to give the chart context;
-  // they are recessive, not labels.)
+  // (Gridlines at each integer were added in the redesign to give the line
+  // context; they are recessive, not labels.) The labels live in the left
+  // grid column as HTML, at the same percentage heights as the gridlines, so
+  // the plot itself can span the track column edge to edge like a lane.
+  const yLabels = [];
+  for (let v = 0; v <= peak; v++) {
+    if (v !== 0 && v !== peak) continue;
+    const pct = ((TOP + (1 - v / peak) * (H - TOP - B)) / H) * 100;
+    yLabels.push(
+      <Box key={v} component="span" sx={{
+        position: "absolute",
+        left: 0,
+        top: `${pct}%`,
+        transform: "translateY(-50%)",
+        textAlign: "right",
+        fontSize: 10,
+        fontFamily: MONO,
+        color: "faint",
+        userSelect: "none",
+      }}>{v}</Box>
+    );
+  }
+
+  // Gridlines (no labels - those are in the left column now)
   const gridlines = [];
   for (let v = 0; v <= peak; v++) {
     gridlines.push(
       <line key={v} x1={L} x2={W - R} y1={y(v)} y2={y(v)}
             stroke={t.palette.divider} strokeWidth={1} />
     );
-    gridlines.push(
-      <text key={`l${v}`} x={L - 7} y={y(v) + 3.5} textAnchor="end"
-            style={axis} fill={t.palette.faint}>{v}</text>
-    );
   }
 
-  // X-axis time ticks (every 2 minutes)
-  const timeTicks = [];
+  // X-axis time ticks rendered as HTML spans below the track column.
   const tickInterval = Math.max(1, Math.floor(hist.length / 5));
+  const ticks = [];
   for (let i = 0; i < hist.length; i += tickInterval) {
-    timeTicks.push(
-      <text key={`t${i}`} x={x(i)} y={H - 4} textAnchor="middle"
-            style={axis} fill={t.palette.faint}>{clock(hist[i]!.t)}</text>
+    ticks.push(
+      <Box key={`t${i}`} component="span"
+           sx={{ position: "absolute", left: `${(i / (hist.length - 1)) * 100}%`,
+                transform: "translateX(-50%)", bottom: 0, whiteSpace: "nowrap",
+                fontSize: 11, fontFamily: MONO, color: "faint" }}>
+        {clock(hist[i]!.t)}
+      </Box>
     );
   }
+  ticks.push(
+    <Box key="now" component="span"
+         sx={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap",
+               fontSize: 11, fontFamily: MONO, color: "faint" }}>
+      now
+    </Box>
+  );
 
   return (
     <>
-      {/* Custom positioned hover box, not MUI Tooltip (which floats above viewport at y=-83) */}
-      <Box sx={{ position: "relative", width: "100%" }}>
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          preserveAspectRatio="none"
-          role="img"
-          aria-label={`Queue depth over the last 10 minutes, peaking at ${peak} jobs.`}
-          style={fill}
-          onMouseMove={(e) => {
-            const bb = e.currentTarget.getBoundingClientRect();
-            const rel = ((e.clientX - bb.left) / bb.width) * W;
-            setAt(Math.max(0, Math.min(hist.length - 1,
-              Math.round(((rel - L) / (W - L - R)) * (hist.length - 1)))));
-          }}
-          onMouseLeave={() => setAt(null)}
-        >
-          {gridlines}
-          <path d={`${line} L ${x(hist.length - 1)} ${y(0)} L ${x(0)} ${y(0)} Z`}
-                fill={t.palette.success.main} fillOpacity={0.12} stroke="none" />
-          <path d={line} fill="none" stroke={t.palette.success.main}
-                strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-          <circle cx={last[0]} cy={last[1]} r={4} fill={t.palette.success.main}
-                  stroke={t.palette.background.default} strokeWidth={2} />
-          {timeTicks}
-          <text x={x(hist.length - 1)} y={H - 4} textAnchor="end" style={axis} fill={t.palette.faint}>
-            now
-          </text>
-          {at !== null && (
-            <line x1={x(at)} x2={x(at)} y1={TOP} y2={H - B} stroke={t.palette.text.secondary}
-                  strokeWidth={1} strokeDasharray="2 3" pointerEvents="none" />
-          )}
-        </svg>
-        {/* Custom hover readout box - positioned inside the relative wrapper */}
-        {hovered && (
-          <Box
-            sx={{
-              position: "absolute",
-              top: 0,
-              left: `${((at ?? 0) / (hist.length - 1)) * 100}%`,
-              transform: "translateX(-50%)",
-              bgcolor: t.palette.background.paper,
-              border: `1px solid ${t.palette.line}`,
-              borderRadius: 1,
-              px: 1,
-              py: 0.5,
-              fontSize: 11.5,
-              fontFamily: MONO,
-              pointerEvents: "none",
-              whiteSpace: "nowrap",
-              zIndex: 10,
+      <Box sx={{ display: "grid", gridTemplateColumns: `${LABEL_COL} ${TRACK_COL}`, columnGap: COL_GAP }}>
+        {/* Y-axis labels in the left column */}
+        <Box sx={{ position: "relative" }}>
+          {yLabels}
+        </Box>
+        {/* Chart track */}
+        <Box sx={{ position: "relative" }}>
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`Queue depth over the last 10 minutes, peaking at ${peak} jobs.`}
+            style={fill}
+            onMouseMove={(e) => {
+              const bb = e.currentTarget.getBoundingClientRect();
+              const rel = ((e.clientX - bb.left) / bb.width) * W;
+              setAt(Math.max(0, Math.min(hist.length - 1,
+                Math.round(((rel - L) / (W - L - R)) * (hist.length - 1)))));
             }}
+            onMouseLeave={() => setAt(null)}
           >
-            <b>{hovered.queued}</b> queued · {clock(hovered.t)}
-            {hovered.residents?.length ? (
-              <Box component="span" sx={{ color: "text.secondary", display: "block" }}>
-                warm: {[...new Set(hovered.residents.map(fold))].sort().join(", ")}
-              </Box>
-            ) : null}
-          </Box>
-        )}
+            {gridlines}
+            <path d={`${line} L ${x(hist.length - 1)} ${y(0)} L ${x(0)} ${y(0)} Z`}
+                  fill={t.palette.success.main} fillOpacity={0.12} stroke="none" />
+            <path d={line} fill="none" stroke={t.palette.success.main}
+                  strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <circle cx={last[0]} cy={last[1]} r={4} fill={t.palette.success.main}
+                    stroke={t.palette.background.default} strokeWidth={2} />
+            {at !== null && (
+              <line x1={x(at)} x2={x(at)} y1={TOP} y2={H - B} stroke={t.palette.text.secondary}
+                    strokeWidth={1} strokeDasharray="2 3" pointerEvents="none" />
+            )}
+          </svg>
+          {/* Custom hover readout box - positioned inside the relative wrapper */}
+          {hovered && (
+            <Box
+              sx={{
+                position: "absolute",
+                top: 0,
+                left: `${((at ?? 0) / (hist.length - 1)) * 100}%`,
+                transform: "translateX(-50%)",
+                bgcolor: t.palette.background.paper,
+                border: `1px solid ${t.palette.line}`,
+                borderRadius: 1,
+                px: 1,
+                py: 0.5,
+                fontSize: 11.5,
+                fontFamily: MONO,
+                pointerEvents: "none",
+                whiteSpace: "nowrap",
+                zIndex: 10,
+              }}
+            >
+              <b>{hovered.queued}</b> queued · {clock(hovered.t)}
+              {hovered.residents?.length ? (
+                <Box component="span" sx={{ color: "text.secondary", display: "block" }}>
+                  warm: {[...new Set(hovered.residents.map(fold))].sort().join(", ")}
+                </Box>
+              ) : null}
+            </Box>
+          )}
+        </Box>
+      </Box>
+      {/* Time ticks below the chart */}
+      <Box sx={{ position: "relative", height: 16, mt: 0.25 }}>
+        {ticks}
       </Box>
       <Typography variant="caption"
                   sx={{ color: "faint", fontFamily: MONO, display: "block", textAlign: "right" }}>
@@ -202,7 +243,7 @@ export function Lanes({
   // so the box follows the segment the pointer is on and never anchors to the
   // viewport or to the page: a `position: fixed` box at (20, 20) is how the first
   // version of this appeared over the Models table, four sections away.
-  const [hover, setHover] = useState<{ type: "call" | "track"; data: Call | { model: string; time: number }; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<{ type: "call" | "track"; data: Call | { model: string; time: number; loaded: boolean; active: boolean; index: number }; x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const at = (e: { clientX: number; clientY: number }) => {
     const r = rootRef.current?.getBoundingClientRect();
@@ -285,10 +326,24 @@ export function Lanes({
       : nowWarm.has(m) ? t.palette.success.main : t.palette.text.secondary;
     const laneCalls = callsByModel[m] ?? [];
 
+    const handleSvgMove = (e: React.MouseEvent<SVGSVGElement>) => {
+      // If over a segment, let the segment's own handler deal with it
+      if ((e.target as Element).getAttribute("data-call")) return;
+      // Compute sample index from pointer position
+      const bb = e.currentTarget.getBoundingClientRect();
+      const frac = (e.clientX - bb.left) / bb.width;
+      const i = Math.max(0, Math.min(hist.length - 1, Math.round(frac * (hist.length - 1))));
+      const loaded = foldedResidents[i]!.includes(m);
+      const active = isUsing(i, m);
+      setHover({ type: "track", data: { model: m, time: hist[i]!.t, loaded, active, index: i }, ...at(e) });
+    };
+
     return (
       <Box key={m} sx={{ position: "relative" }}>
         <svg viewBox="0 0 1000 20" preserveAspectRatio="none"
-             style={{ display: "block", width: "100%", height: rowH, marginTop: gap / 2 }}>
+             style={{ display: "block", width: "100%", height: rowH, marginTop: gap / 2 }}
+             onMouseMove={handleSvgMove}
+             onMouseLeave={() => setHover(null)}>
           <rect x="0" y="4" width="1000" height="10" fill={t.palette.divider} rx={5} />
           {runs(m).map(([i0, j0], ri) => {
             const x0 = (i0 / (hist.length - 1)) * 1000;
@@ -303,6 +358,13 @@ export function Lanes({
                     fill={runColor} rx={5} opacity={anyActive ? 1 : 0.7} />
             );
           })}
+          {/* Cursor line for track hover */}
+          {hover?.type === "track" && (hover.data as { model: string; index: number }).model === m && (
+            <line x1={((hover.data as { index: number }).index / (hist.length - 1)) * 1000}
+                  x2={((hover.data as { index: number }).index / (hist.length - 1)) * 1000}
+                  y1="0" y2="20" stroke={t.palette.text.secondary}
+                  strokeWidth="1" strokeDasharray="2 3" pointerEvents="none" />
+          )}
           {/* Call segments overlaid on residency band */}
           {laneCalls.map((c, ci) => {
             const widthPx = Math.max(2, (c.endPct - c.startPct) / 100 * 1000);
@@ -313,7 +375,7 @@ export function Lanes({
                   <rect x={c.startPct * 10} y="4"
                         width={Math.max(1, (c.runPct - c.startPct) / 100 * 1000)}
                         height="10" fill={c.ok ? t.palette.success.main : t.palette.error.main}
-                        opacity={0.3} rx={3}
+                        opacity={0.3} rx={3} data-call="1"
                         onMouseEnter={(e) => setHover({ type: "call", data: c, ...at(e) })}
                         onMouseMove={(e) => setHover({ type: "call", data: c, ...at(e) })}
                         onMouseLeave={() => setHover(null)} />
@@ -321,7 +383,7 @@ export function Lanes({
                 {/* Run time as bright segment */}
                 <rect x={c.runPct * 10} y="4" width={widthPx} height="10"
                       fill={c.ok ? t.palette.success.main : t.palette.error.main}
-                      rx={3}
+                      rx={3} data-call="1"
                       onMouseEnter={(e) => setHover({ type: "call", data: c, ...at(e) })}
                       onMouseMove={(e) => setHover({ type: "call", data: c, ...at(e) })}
                       onMouseLeave={() => setHover(null)} />
@@ -391,13 +453,42 @@ export function Lanes({
         </Box>
       );
     }
+    if (hovered.type === "track") {
+      const d = hovered.data as { model: string; time: number; loaded: boolean; active: boolean; index: number };
+      return (
+        <Box
+          sx={{
+            position: "absolute",
+            left: Math.min(Math.max(hovered.x, 150), Math.max(150, (rootRef.current?.clientWidth ?? 300) - 150)),
+            top: hovered.y - 12,
+            transform: "translate(-50%, -100%)",
+            bgcolor: t.palette.background.paper,
+            border: `1px solid ${t.palette.line}`,
+            borderRadius: 1,
+            px: 1.25,
+            py: 0.75,
+            fontSize: 11.5,
+            fontFamily: MONO,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+            zIndex: 100,
+            boxShadow: `0 4px 12px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.15)"}`,
+          }}
+        >
+          <b>{d.model}</b> · {clock(d.time)}
+          <Box component="span" sx={{ display: "block" }}>
+            {d.loaded ? "loaded" : "not loaded"} · {d.active ? "in use" : "idle"}
+          </Box>
+        </Box>
+      );
+    }
     return null;
   };
 
   return (
     <Box ref={rootRef} sx={{ position: "relative" }}>
       <Box role="img" aria-label={`Resident models over time across ${models.length} models, with ${swaps} swaps.`}>
-        <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, max-content) 1fr", columnGap: 1 }}>
+        <Box sx={{ display: "grid", gridTemplateColumns: `${LABEL_COL} ${TRACK_COL}`, columnGap: COL_GAP }}>
           {/* Lane labels - L2 fix: wider min, left-aligned, ellipsis at end */}
           <Box component="div" sx={{
             fontFamily: MONO, fontSize: 11.5,
