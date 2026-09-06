@@ -362,6 +362,21 @@ export class BackendPool {
     return [...out];
   }
 
+  /**
+   * The context window for an advertised model id, or null if unknown.
+   *
+   * Known means the model has been loaded at least once, so we could ask the
+   * backend for its window. We never probe a cold model: llama-swap's /props
+   * endpoint loads it to answer, which would swap the GPU. Unknown is a
+   * distinct and honest state — the id is real, its window just hasn't been
+   * learned yet.
+   */
+  contextLength(model: string): number | null {
+    const wire = this.outboundId(model);
+    const backend = this.for(model);
+    return backend.state.contextLength(wire);
+  }
+
   /** Everything warm anywhere. Several at once is normal now: one backend per
    *  model means several models can be resident simultaneously. */
   loaded(): string[] {

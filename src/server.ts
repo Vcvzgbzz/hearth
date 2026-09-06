@@ -1095,20 +1095,28 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         // see, and a client that loses this field loses any idea of which model
         // answers now and which one costs a load first.
         const warm = new Set(pool.loaded());
-        const upstream: { data?: { id: string; status?: { value: string } }[] } = {
+        const upstream: { data?: { id: string; status?: { value: string }; context_length?: number }[] } = {
           data: pool.catalog().map((id) => {
             // A backend that cannot report warm state must not be flattened
             // into cold. "We cannot see" and "nothing is loaded" are different
             // claims and only one of them would be honest, so such a model
             // carries no status at all rather than a made-up one.
-            if (pool.for(id).cfg.kind === "none") return { id };
-            return { id, status: { value: warm.has(id) ? "loaded" : "unloaded" } };
+            // Same principle for context_length: absent when unknown, not null,
+            // because we cannot see is not the same claim as a value.
+            const entry: { id: string; status?: { value: string }; context_length?: number } = { id };
+            if (pool.for(id).cfg.kind === "none") return entry;
+            entry.status = { value: warm.has(id) ? "loaded" : "unloaded" };
+            const ctx = pool.contextLength(id);
+            if (ctx !== null) entry.context_length = ctx;
+            return entry;
           }),
         };
         // A peer only sees what it may use. This used to hand the whole backend
         // catalogue to anyone with a peer token. Unusable, since every other
         // route enforces the share list, but a full inventory of what someone
         // runs isn't theirs to have. Model names alone can be personal.
+        // The context_length field travels with the entry, so a peer can size
+        // its own client limit from the shared subset.
         if (modelsPeer !== null) {
           json(res, 200, {
             ...upstream,
@@ -1468,6 +1476,14 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         share: shared(),
         configuredShare: cfg.share,
         catalog: pool.catalog(),
+        contexts: (() => {
+          const out: Record<string, number> = {};
+          for (const id of pool.catalog()) {
+            const ctx = pool.contextLength(id);
+            if (ctx !== null) out[id] = ctx;
+          }
+          return out;
+        })(),
         overrides: overrideView(),
         net: networkView(),
         q: {

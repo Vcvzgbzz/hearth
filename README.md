@@ -485,6 +485,13 @@ The rules:
   too when it is a route of its own. (A raw id that exists only to be renamed
   stays hidden, as before.) Warm state follows the same rule, so none of the
   ids reads as cold while the seat is resident.
+- Every model hearth advertises carries its actual context window (`context_length`
+  in the `/v1/models` response), learned from the backend's live model settings
+  (`n_ctx` on llama.cpp servers, `num_ctx` or the model's `context_length` on
+  ollama). A cold llama-swap model is never probed (its `/props` endpoint loads
+  the model to answer), so an unloaded model correctly omits `context_length`
+  (not `null`) until it is loaded. Clients can size their own limits from this
+  instead of a hand-maintained config value.
 - Several ids on one seat are **one seat** to the scheduler: they share the
   warm bonus, they batch together where the model batches, and `concurrency:`
   on the seat covers every id that fronts it. Slots belong to the weights, not

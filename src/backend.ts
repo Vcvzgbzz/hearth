@@ -59,6 +59,19 @@ export class BackendState {
   private abort: AbortController | null = null;
   private inFlight: Promise<void> | null = null;
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Per-wire-id context windows, learned from the backend once a model is loaded.
+   *
+   * A model's context length does not change while the backend process lives,
+   * so the cache persists across an unload. It is dropped the moment the model
+   * is seen loaded AGAIN (setLoaded), because the operator may have relaunched
+   * the seat with a different -c in between, and a stale number here is the
+   * exact thing this field exists to prevent. Unknown is null in the cache and
+   * absent on the wire; learnContext fills it.
+   */
+  private contextCache = new Map<string, number>();
+  /** Per-wire in-flight learnContext, so concurrent callers dedupe. */
+  private contextInFlight = new Map<string, Promise<void>>();
 
   constructor(
     private readonly url: string,
@@ -141,6 +154,129 @@ export class BackendState {
     return this.streaming;
   }
 
+  /**
+   * The context window for a model we have learned about, or null if unknown.
+   *
+   * Read-only; learnContext fills the cache. A null is not a failure — it
+   * means the model has not been loaded yet, and we never probe a cold model.
+   */
+  contextLength(wire: string): number | null {
+    const n = this.contextCache.get(wire);
+    return n === undefined ? null : n;
+  }
+
+  /**
+   * The one way loadedIds changes.
+   *
+   * A wire id that was not loaded a moment ago and is now has just been (re)
+   * loaded, and whatever window we knew for it may describe a previous launch
+   * of the seat. Forget it; the caller's learnContext pass fetches it fresh.
+   * Anything still loaded keeps its number, and an unload keeps it too.
+   */
+  private setLoaded(next: string[]): void {
+    for (const wire of next) {
+      if (!this.loadedIds.includes(wire)) this.contextCache.delete(wire);
+    }
+    this.loadedIds = next;
+  }
+
+  /**
+   * Learn the context window for a loaded model, once.
+   *
+   * For llama-swap this may only be called for a wire id that is actually in
+   * loaded(): /upstream/<id>/props loads the model to answer, which would swap
+   * the GPU out from under someone else. The caller — refresh() — guarantees
+   * that by only passing loaded ids. For single and ollama there is no such
+   * cost: single always has its one model loaded, and ollama's /api/show does
+   * not load anything.
+   *
+   * Deduped per wire so a burst of /v1/models does not flood the backend.
+   * Fire-and-forget: /v1/models never blocks waiting for this, so the first
+   * models list after a load may not yet carry context_length. Never throws.
+   */
+  async learnContext(wire: string): Promise<void> {
+    if (this.contextCache.has(wire)) return;
+    const existing = this.contextInFlight.get(wire);
+    if (existing) { await existing; return; }
+    const p = this.fetchContext(wire).then(() => {
+      this.contextInFlight.delete(wire);
+    }).catch(() => {
+      this.contextInFlight.delete(wire);
+    });
+    this.contextInFlight.set(wire, p);
+    return p;
+  }
+
+  private async fetchContext(wire: string): Promise<void> {
+    try {
+      let n: number | null = null;
+      if (this.kind === "llama-swap") {
+        if (!this.loadedIds.includes(wire)) return;
+        const props = await getJson<{ default_generation_settings?: { n_ctx?: number } }>(
+          `${this.url}/upstream/${encodeURIComponent(wire)}/props`,
+          { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 },
+        );
+        n = props.default_generation_settings?.n_ctx ?? null;
+      } else if (this.kind === "single") {
+        const props = await getJson<{ default_generation_settings?: { n_ctx?: number } }>(
+          `${this.url}/props`,
+          { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 },
+        );
+        n = props.default_generation_settings?.n_ctx ?? null;
+      } else if (this.kind === "ollama") {
+        n = await this.ollamaContext(wire);
+      }
+      if (n !== null) {
+        this.contextCache.set(wire, n);
+      }
+    } catch (e) {
+      this.log.debug("backend.context_learn_failed", {
+        wire,
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  private async ollamaContext(wire: string): Promise<number | null> {
+    // /api/show does not load the model, so it is safe to ask for any id.
+    const show = await send(`${this.url}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      json: { name: wire },
+      headersTimeoutMs: 2_000,
+    });
+    const text = await show.text();
+    if (!show.ok) {
+      throw new Error(`ollama /api/show returned ${show.status}: ${text.slice(0, 200)}`);
+    }
+    let parsed: { model_info?: Record<string, unknown>; parameters?: string };
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error(`ollama /api/show did not return JSON: ${text.slice(0, 200)}`);
+    }
+    // Look for a key ending in .context_length (e.g. "qwen3.context_length").
+    let maxCtx: number | null = null;
+    if (parsed.model_info) {
+      for (const k of Object.keys(parsed.model_info)) {
+        if (k.endsWith(".context_length")) {
+          const v = parsed.model_info[k];
+          if (typeof v === "number") { maxCtx = v; break; }
+        }
+      }
+    }
+    if (!maxCtx) return null;
+    // A `num_ctx` in parameters overrides the model's maximum.
+    if (parsed.parameters) {
+      const m = /num_ctx\s+(\d+)/.exec(parsed.parameters);
+      if (m) {
+        const n = parseInt(m[1]!, 10);
+        if (n > 0 && n <= maxCtx) return n;
+      }
+    }
+    return maxCtx;
+  }
+
   /** Recent enough to act on? */
   fresh(): boolean {
     return this.lastUpdateAt > 0 && Date.now() - this.lastUpdateAt <= STALE_MS;
@@ -148,7 +284,7 @@ export class BackendState {
 
   private apply(models: ModelStatus[]): void {
     this.catalogIds = models.map((m) => m.id);
-    this.loadedIds = models.filter((m) => m.state === READY).map((m) => m.id);
+    this.setLoaded(models.filter((m) => m.state === READY).map((m) => m.id));
     this.lastUpdateAt = Date.now();
     this.lastOkAt = this.lastUpdateAt;
   }
@@ -182,9 +318,9 @@ export class BackendState {
     if (this.kind === "single") {
       // One always-resident model, so whatever it lists is by definition warm.
       // Reading the catalogue is the only question worth asking such a server.
-      this.loadedIds = [...this.catalogIds];
+      this.setLoaded([...this.catalogIds]);
     } else if (warm.status === "fulfilled") {
-      this.loadedIds = warm.value;
+      this.setLoaded(warm.value);
     } else {
       // Missing warm endpoint isn't an error, it just means we never know
       // anything is warm, so the bonus never fires and readyNow stays empty.
@@ -197,6 +333,12 @@ export class BackendState {
     // has been down for an hour reads as idle.
     if (catalog.status === "fulfilled" || warm.status === "fulfilled") {
       this.lastOkAt = this.lastUpdateAt;
+    }
+    // Learn the context window for anything that just became loaded.
+    // Fire-and-forget: /v1/models does not wait for this, so the first models
+    // list after a load may not yet carry context_length — the next one does.
+    for (const wire of this.loadedIds) {
+      void this.learnContext(wire);
     }
   }
 
@@ -308,6 +450,14 @@ export class BackendState {
           if (env.type !== "modelStatus" || typeof env.data !== "string") continue;
           // `data` is itself a JSON string, not an object. Double-encoded, yes.
           this.apply(JSON.parse(env.data) as ModelStatus[]);
+          // A model just became loaded (or the snapshot arrived). Learn the
+          // context window for anything loaded; learnContext dedupes and is
+          // safe to call repeatedly. Only loaded models for llama-swap: its
+          // /props endpoint loads the model to answer, so we never ask for a
+          // cold one (see learnContext docs).
+          for (const wire of this.loadedIds) {
+            void this.learnContext(wire);
+          }
         } catch {
           // One bad frame isn't worth dropping the connection over.
         }
