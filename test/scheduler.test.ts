@@ -316,7 +316,20 @@ function holdSlot(s: Scheduler, order: string[]) {
   await slot.started;
 
   const same = { lane: "chat", model: "m", caller: "same" } as const;
-  const sent = [s.submit(same, async () => {}), s.submit(same, async () => {})];
+  // The clock is frozen across the two submits ON PURPOSE. The collision this
+  // guards against needs both jobs to land in the same millisecond, and simply
+  // submitting them back to back does not reliably do that — it did on the run
+  // that found the bug and did not on the next one, which made this assertion
+  // fail for the one reason it must never fail: timing. Freezing makes the
+  // colliding case the case that is actually tested, every run.
+  const realNow = Date.now;
+  Date.now = () => 1_700_000_000_000;
+  let sent: Promise<void>[];
+  try {
+    sent = [s.submit(same, async () => {}), s.submit(same, async () => {})];
+  } finally {
+    Date.now = realNow;
+  }
 
   const twins = s.view().filter((j) => j.caller === "same");
   assert.equal(twins.length, 2, "both identical jobs must be visible");

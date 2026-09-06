@@ -527,9 +527,9 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
             : `${used}/${slots || "?"} in flight · ${b.queued ?? 0} queued`}
         </Box>
         {(b.proxying ?? []).length > 0 && (
-          <Tooltip title="hearth forwards these verbatim and was never asked to schedule them, so they hold no slot and the card arbiter cannot see them. Declaring the path under this backend's routes: is what changes that — and makes hearth the admission control for it.">
-            <Box sx={{ color: "success.main", mt: 0.5, cursor: "help" }}>
-              {(b.proxying ?? []).length} proxying, unqueued
+          <Tooltip title="hearth forwards these straight through and was never asked to schedule them, so they hold no slot, wait for nothing, and the card arbiter cannot see them. Declaring the path under this backend's routes: is what changes that — and makes hearth the admission control for it.">
+            <Box sx={{ color: "warning.main", mt: 0.5, cursor: "help" }}>
+              {(b.proxying ?? []).length} passing through, not scheduled
               {b.proxying![0]?.model ? ` · ${b.proxying!.map((x) => x.model ?? "?").join(", ")}` : ""}
             </Box>
           </Tooltip>
@@ -600,9 +600,9 @@ function ResourcePanel({ name, d }: { name: string; d: UiData }) {
           {r.holder ? `${r.holder} is running on it` : "free"}
         </Box>
         {unqueued.length > 0 && (
-          <Tooltip title="hearth is forwarding this work but never admitted it, so the arbiter does not hold the card and cannot make anything wait for it. The hardware is busy; the queue does not know.">
+          <Tooltip title="The hardware is busy; the queue does not know. hearth forwards this work straight through rather than scheduling it, so the arbiter does not hold the card and cannot make anything else wait for it.">
             <Box sx={{ color: "warning.main", mt: 0.5, cursor: "help" }}>
-              but {unqueued.map((b) => b.name).join(", ")} is proxying unqueued work onto it
+              but {unqueued.map((b) => b.name).join(", ")} is working on it, unscheduled
             </Box>
           </Tooltip>
         )}
@@ -669,6 +669,13 @@ function Overview({ d }: { d: UiData }) {
           peers.some((n) => !n.up))}
         {d.q.capacity.offbox ? stat("off-box", d.q.capacity.offbox, true) : null}
       </Box>
+      <Typography sx={{ fontSize: 11, color: "faint", lineHeight: 1.7, mb: 1.5 }}>
+        <Box component="span" sx={{ color: "success.main" }}>Green</Box> is work hearth
+        scheduled: it took a slot and waited its turn.{" "}
+        <Box component="span" sx={{ color: "warning.main" }}>Amber</Box> is work hearth is only
+        forwarding — image generation arrives on a path it passes straight through, so it runs
+        without a slot and the card arbiter cannot see it. Busy either way; managed only when green.
+      </Typography>
       <Typography sx={{ fontSize: 11, color: "faint", lineHeight: 1.7 }}>
         Click anything above to act on it. The self node holds the federation switches
         and any unsaved runtime changes; a peer holds its model links; a backend holds
