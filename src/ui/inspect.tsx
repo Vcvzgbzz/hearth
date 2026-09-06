@@ -438,7 +438,7 @@ function Pending({ d, ctx }: { d: UiData; ctx: Ctx }) {
 
 /* --------------------------------------------------------------- panels */
 
-function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
+export function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
   const self = d.net.nodes.find((n) => n.self);
   const cap = d.q.capacity;
   const queued = Object.values(cap.queued).reduce((a, b) => a + b, 0);
@@ -474,7 +474,7 @@ function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
   );
 }
 
-function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
+export function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
   const busy = (n.slots ?? 0) - (n.free ?? 0);
   return (
     <>
@@ -507,7 +507,7 @@ function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
   );
 }
 
-function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
+export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
   const resources = d.net.resources ?? [];
   const held = blockers(b, resources);
   const slots = b.slots ?? 0;
@@ -596,7 +596,7 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
   );
 }
 
-function ResourcePanel({ name, d }: { name: string; d: UiData }) {
+export function ResourcePanel({ name, d }: { name: string; d: UiData }) {
   const r = (d.net.resources ?? []).find((x) => x.name === name);
   const backends = (d.net.nodes.find((n) => n.self)?.backends ?? [])
     .filter((b) => (b.resources ?? []).includes(name));

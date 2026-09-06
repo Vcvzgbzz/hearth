@@ -207,6 +207,15 @@ const base = await new Promise<string>((ready) =>
   assert.match(html, /not in the config file/,
     "and the record of what is not in the file");
   assert.ok(!html.includes("secret-key"), "no credential may appear in the page");
+
+  // Two views behind one menu, the choice remembered per browser. Pinned as
+  // strings, like the operator copy above: the labels are what a person clicks,
+  // and losing the second view is the regression to catch. The dashboard draws
+  // itself from the same tables and panels as the graph, so a rename that keeps
+  // these words keeps the view — there is no second copy to drift.
+  assert.match(html, /Dashboard/, "the view menu offers the dashboard view");
+  assert.match(html, /Graph/, "and the graph view");
+  assert.ok(html.includes("hearth.view"), "the chosen view is remembered across reloads");
 }
 
 {
