@@ -43,6 +43,49 @@ function Empty({ msg }: { msg: string }) {
 }
 
 /**
+ * The x-axis labels both charts share, as HTML spans over a track column.
+ *
+ * Rules learned from a freshly restarted node, where the ten-minute window
+ * held one minute of samples: every tick read "22:06", the first one was
+ * centred on the plot's left edge and spilled into the label column, and the
+ * last one sat on top of "now". So: a label never repeats its predecessor,
+ * the first tick is anchored to the edge instead of centred on it, nothing
+ * is placed in the last tenth of the track where "now" lives, and while the
+ * window is shorter than two minutes the labels carry seconds, because a
+ * minute alone cannot tell two of them apart.
+ */
+function timeTicks(hist: Sample[]) {
+  const span = hist.length > 1 ? hist[hist.length - 1]!.t - hist[0]!.t : 0;
+  const label = (t: number) => span < 120_000 ? new Date(t).toTimeString().slice(0, 8) : clock(t);
+  const every = Math.max(1, Math.floor(hist.length / 5));
+  const ticks = [];
+  let last = "";
+  for (let i = 0; i < hist.length; i += every) {
+    const pct = hist.length > 1 ? (i / (hist.length - 1)) * 100 : 0;
+    if (pct > 90) break;
+    const text = label(hist[i]!.t);
+    if (text === last) continue;
+    last = text;
+    ticks.push(
+      <Box key={`t${i}`} component="span"
+           sx={{ position: "absolute", left: `${pct}%`,
+                transform: i === 0 ? "none" : "translateX(-50%)", bottom: 0, whiteSpace: "nowrap",
+                fontSize: 11, fontFamily: MONO, color: "faint" }}>
+        {text}
+      </Box>
+    );
+  }
+  ticks.push(
+    <Box key="now" component="span"
+         sx={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap",
+               fontSize: 11, fontFamily: MONO, color: "faint" }}>
+      now
+    </Box>
+  );
+  return ticks;
+}
+
+/**
  * Queue depth over the window.
  *
  * One series, so no legend: the heading names it. Area plus an emphasised
@@ -110,25 +153,7 @@ export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: 
   }
 
   // X-axis time ticks rendered as HTML spans below the track column.
-  const tickInterval = Math.max(1, Math.floor(hist.length / 5));
-  const ticks = [];
-  for (let i = 0; i < hist.length; i += tickInterval) {
-    ticks.push(
-      <Box key={`t${i}`} component="span"
-           sx={{ position: "absolute", left: `${(i / (hist.length - 1)) * 100}%`,
-                transform: "translateX(-50%)", bottom: 0, whiteSpace: "nowrap",
-                fontSize: 11, fontFamily: MONO, color: "faint" }}>
-        {clock(hist[i]!.t)}
-      </Box>
-    );
-  }
-  ticks.push(
-    <Box key="now" component="span"
-         sx={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap",
-               fontSize: 11, fontFamily: MONO, color: "faint" }}>
-      now
-    </Box>
-  );
+  const ticks = timeTicks(hist);
 
   return (
     <>
@@ -195,9 +220,14 @@ export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: 
           )}
         </Box>
       </Box>
-      {/* Time ticks below the chart */}
-      <Box sx={{ position: "relative", height: 16, mt: 0.25 }}>
-        {ticks}
+      {/* Time ticks below the chart. Inside the same two-column grid as the
+          plot, so 0% and 100% are the plot's edges and a tick sits under the
+          sample it names; as a full-width row it was measured 200px off. */}
+      <Box sx={{ display: "grid", gridTemplateColumns: `${LABEL_COL} ${TRACK_COL}`, columnGap: COL_GAP }}>
+        <Box />
+        <Box sx={{ position: "relative", height: 16, mt: 0.25 }}>
+          {ticks}
+        </Box>
       </Box>
       <Typography variant="caption"
                   sx={{ color: "faint", fontFamily: MONO, display: "block", textAlign: "right" }}>
@@ -396,25 +426,7 @@ export function Lanes({
   };
 
   // Time ticks as HTML spans under the track column, evenly spaced.
-  const tickInterval = Math.max(1, Math.floor(hist.length / 5));
-  const ticks = [];
-  for (let i = 0; i < hist.length; i += tickInterval) {
-    ticks.push(
-      <Box key={`t${i}`} component="span"
-           sx={{ position: "absolute", left: `${(i / (hist.length - 1)) * 100}%`,
-                transform: "translateX(-50%)", bottom: 0, whiteSpace: "nowrap",
-                fontSize: 11, fontFamily: MONO, color: "faint" }}>
-        {clock(hist[i]!.t)}
-      </Box>
-    );
-  }
-  ticks.push(
-    <Box key="now" component="span"
-         sx={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap",
-               fontSize: 11, fontFamily: MONO, color: "faint" }}>
-      now
-    </Box>
-  );
+  const ticks = timeTicks(hist);
 
   // Custom hover readout box - positioned inside the relative wrapper
   const hoverBox = (hovered: typeof hover) => {
