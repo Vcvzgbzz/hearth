@@ -26,6 +26,9 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CssBaseline from "@mui/material/CssBaseline";
+import IconButton from "@mui/material/IconButton";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -45,6 +48,7 @@ import { displayId, load, since } from "./lib.js";
 import { makeTheme, MONO } from "./theme.js";
 import type { Backend, Node, UiData } from "./types.js";
 import { waitReason } from "./why.js";
+import Dashboard from "./dashboard.js";
 
 /* ------------------------------------------------------------------ data */
 
@@ -445,7 +449,7 @@ function History({ d }: { d: UiData }) {
 
 /* ------------------------------------------------------------------ page */
 
-function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }) {
+function Console({ d, ctx, dead, menu }: { d: UiData | null; ctx: Ctx; dead: boolean; menu?: React.ReactNode }) {
   const [sel, setSel] = useState<Sel>(null);
   const [drawer, setDrawer] = useState<Drawer>(null);
   const self = d?.net.nodes.find((n) => n.self);
@@ -471,6 +475,7 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
         px: 3, py: 1.25, borderBottom: "1px solid", borderColor: "line",
         bgcolor: "background.paper", flexShrink: 0,
       }}>
+        {menu}
         <Typography component="span" sx={{ fontSize: 15, fontWeight: 700, letterSpacing: "-.01em" }}>
           hea<Box component="span" sx={{ color: "success.main" }}>r</Box>th
         </Typography>
@@ -547,19 +552,90 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
   );
 }
 
+/* ------------------------------------------------------------------ views */
+
+/**
+ * Which view is showing, remembered per browser.
+ *
+ * The graph is the default — it is what a visit is usually for. The dashboard is
+ * the same facts as a long scroll, for reading every number at once; an operator
+ * who prefers that should not re-pick it every reload, so the choice is stored.
+ * localStorage can throw (private mode, storage disabled), and a page that
+ * refuses to render because it could not remember a preference is worse than one
+ * that forgets it, so both sides are guarded and fall back to the graph.
+ */
+type View = "graph" | "dashboard";
+const VIEW_KEY = "hearth.view";
+
+function useView(): [View, (v: View) => void] {
+  const [view, setView] = useState<View>(() => {
+    try { return localStorage.getItem(VIEW_KEY) === "dashboard" ? "dashboard" : "graph"; }
+    catch { return "graph"; }
+  });
+  const choose = useCallback((v: View) => {
+    setView(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode: this session only */ }
+  }, []);
+  return [view, choose];
+}
+
+/**
+ * The view switcher.
+ *
+ * A menu button that folds both views behind one control in the header rather
+ * than spending header width on a tab each. The bars are drawn from Boxes so no
+ * icon package is pulled in — the runtime dependency stays `yaml` alone — and it
+ * is a real menu, so a third view later is one more item, not a layout change.
+ */
+function ViewMenu({ view, onView }: { view: View; onView: (v: View) => void }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const pick = (v: View) => { onView(v); setAnchor(null); };
+  return (
+    <>
+      <IconButton
+        aria-label="switch view" aria-haspopup="menu" aria-expanded={Boolean(anchor)}
+        onClick={(e) => setAnchor(e.currentTarget)}
+        sx={{ borderRadius: 1.5, p: 0.75, color: "text.secondary", "&:hover": { color: "text.primary" } }}
+      >
+        <Box aria-hidden sx={{ width: 16, display: "grid", gap: "3px" }}>
+          <Box sx={{ height: 2, borderRadius: 1, bgcolor: "currentColor" }} />
+          <Box sx={{ height: 2, borderRadius: 1, bgcolor: "currentColor" }} />
+          <Box sx={{ height: 2, borderRadius: 1, bgcolor: "currentColor" }} />
+        </Box>
+      </IconButton>
+      <Menu
+        anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+      >
+        <MenuItem selected={view === "graph"} onClick={() => pick("graph")}>Graph</MenuItem>
+        <MenuItem selected={view === "dashboard"} onClick={() => pick("dashboard")}>Dashboard</MenuItem>
+      </Menu>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ page */
+
 export default function App() {
   const { data, dead, refresh } = useData();
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
   const theme = useMemo(() => makeTheme(prefersDark ? "dark" : "light"), [prefersDark]);
+  const [view, setView] = useView();
   const ctx: Ctx = {
     canWarm: data?.canWarm ?? false,
     control: data?.control ?? "off",
     refresh,
   };
+  // One menu element, handed to whichever view is mounted so it sits inside that
+  // view's own header rather than floating over it.
+  const menu = <ViewMenu view={view} onView={setView} />;
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Console d={data} ctx={ctx} dead={dead} />
+      {view === "graph"
+        ? <Console d={data} ctx={ctx} dead={dead} menu={menu} />
+        : <Dashboard d={data} ctx={ctx} dead={dead} menu={menu} />}
     </ThemeProvider>
   );
 }

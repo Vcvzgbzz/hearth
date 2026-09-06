@@ -207,6 +207,14 @@ const base = await new Promise<string>((ready) =>
   assert.match(html, /not in the config file/,
     "and the record of what is not in the file");
   assert.ok(!html.includes("secret-key"), "no credential may appear in the page");
+
+  // The view switcher: the graph and the classic dashboard behind one menu, with
+  // the choice remembered per browser. Pinned as strings, not the (minified)
+  // component — same reason as the operator copy above: the labels are what an
+  // operator sees, and losing the second view is exactly the regression to catch.
+  assert.match(html, /Dashboard/, "the view menu offers the classic dashboard view");
+  assert.match(html, /Graph/, "and the graph view");
+  assert.ok(html.includes("hearth.view"), "the chosen view is remembered across reloads");
 }
 
 {
