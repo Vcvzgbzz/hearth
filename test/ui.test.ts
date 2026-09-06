@@ -196,7 +196,12 @@ const base = await new Promise<string>((ready) =>
   // started offering something you cannot ask for. The data being on the wire
   // is tested in server.test.ts; this checks the page still does something
   // with it, because that is the half that went missing.
-  assert.match(html, /offered here you cannot reach/,
+  //
+  // The words moved when the console became a graph: the count is on the peer
+  // node ("N unclaimed") and the sentence is in the inspector beside the link
+  // controls. Pinning the sentence rather than the count keeps this checking
+  // that the page EXPLAINS the state, which is the part that went missing.
+  assert.match(html, /you have not mapped, so nothing can route to them/,
     "the page must still render unmapped peer models, and say what it means in words");
   assert.match(html, /peers may use this model/, "the sharing toggle must survive");
   assert.match(html, /not in the config file/,
