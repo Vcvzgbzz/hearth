@@ -61,27 +61,45 @@ export async function load(): Promise<UiData> {
 const KEY_STORE = "hearth.apikey";
 
 /**
- * Bearer key for writes, asked for once and kept in localStorage.
+ * How the page asks for a key.
  *
- * Returns null if the user dismisses the prompt, and the caller must then
- * abandon the write rather than send an unauthenticated one — a request we
- * already know will 401 is not worth making.
+ * A function rather than `window.prompt` directly so the console can ask in the
+ * page — with room to say what the key is and where to find it, which a native
+ * prompt has no space for. The default is still `window.prompt`, so anything
+ * importing this outside the console (a test, a bare script) keeps working.
+ *
+ * Resolves to null when the user declines, and the caller must then abandon the
+ * write rather than send an unauthenticated one: a request we already know will
+ * 401 is not worth making.
  */
-function apiKey(mode: UiData["control"]): string | null {
-  if (mode !== "key") return "";
-  let k: string | null = null;
-  try { k = localStorage.getItem(KEY_STORE); } catch { k = null; }
-  if (k) return k;
-  const entered = window.prompt(
-    "This node requires an API key for controls.\nIt is stored in this browser only.");
-  if (!entered) return null;
-  try { localStorage.setItem(KEY_STORE, entered.trim()); } catch { /* private mode */ }
-  return entered.trim();
+export type KeyAsker = () => Promise<string | null>;
+
+let askForKey: KeyAsker = async () =>
+  window.prompt("This node requires an API key for controls.\nIt is stored in this browser only.");
+
+export function setKeyAsker(fn: KeyAsker): void {
+  askForKey = fn;
 }
 
-/** Forget a key the server just rejected, so the next attempt re-prompts
- *  instead of failing forever against a stale value. */
-function forgetKey(): void {
+export function storedKey(): string | null {
+  try { return localStorage.getItem(KEY_STORE); } catch { return null; }
+}
+
+/** Remember a key, so the question is asked once per browser and not per click. */
+export function rememberKey(key: string): void {
+  try { localStorage.setItem(KEY_STORE, key.trim()); } catch { /* private mode */ }
+}
+
+/**
+ * Forget a key the server actually REJECTED.
+ *
+ * Only ever called for a 401. A 403 used to clear it too, and that was wrong in
+ * the way that made this feature hated: 403 is the cross-origin guard refusing
+ * the request's SHAPE, and the credential it threw away was perfectly good. One
+ * of those wiped the stored key, so the next click asked again — and the one
+ * after that.
+ */
+export function forgetKey(): void {
   try { localStorage.removeItem(KEY_STORE); } catch { /* ignore */ }
 }
 
@@ -89,24 +107,43 @@ function forgetKey(): void {
  * POST a write route with whatever credential this socket needs.
  *
  * Resolves to a parsed body, or rejects with a message the caller shows on the
- * control itself. A 401 clears the stored key on the way out.
+ * control itself.
+ *
+ * Deliberately NOT a retry loop. An earlier version re-asked in place on a 401
+ * and resent, which reads well and is a small state machine wired through a
+ * promise into a dialog — and it was wrong in a way that took longer to see
+ * than it took to write. A rejected key clears and the control says so; the
+ * next click asks again. One request per click, always.
  */
 export async function postWrite(
   path: string,
   body: unknown,
   mode: UiData["control"],
 ): Promise<Record<string, unknown>> {
-  const key = apiKey(mode);
-  if (key === null) throw new Error("no key");
+  let key = "";
+  if (mode === "key") {
+    key = storedKey() ?? "";
+    if (!key) {
+      const entered = await askForKey();
+      // Abandon rather than send a request we already know will 401.
+      if (!entered) throw new Error("no key");
+      key = entered.trim();
+      rememberKey(key);
+    }
+  }
+
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (key) headers.Authorization = `Bearer ${key}`;
   const r = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
   const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
-  if (r.status === 401 || r.status === 403) {
+
+  if (r.status === 401) {
     forgetKey();
-    throw new Error("key rejected");
+    throw new Error("key rejected — click again to re-enter it");
   }
   if (!r.ok) {
+    // 403 included: the cross-origin guard, or a route this socket does not
+    // serve. The key is not the problem, so it stays put.
     const err = d.error as { message?: string } | undefined;
     throw new Error(err?.message ?? (d.note as string) ?? "failed");
   }
