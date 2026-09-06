@@ -473,20 +473,39 @@ export function Graph({ d, sel, onSelect }: {
   // and a busy one can say how busy.
   const traffic = useMemo(() => {
     const m = new Map<string, number>();
+    // Edges whose traffic hearth is NOT scheduling. Drawn amber rather than
+    // green, because "this is busy" and "I am managing this" are different
+    // claims and the whole point of drawing passthrough is that they differ.
+    const loose = new Set<string>();
     const bump = (id: string) => m.set(id, (m.get(id) ?? 0) + 1);
     for (const j of jobs) for (const e of edgesOf(j, peerNames)) bump(e);
-    // Unqueued passthrough is real work on that edge; it just has no job.
+    const managed = new Set(m.keys());
+
     for (const b of backends) {
-      for (const _ of b.proxying ?? []) bump(`self>backend:${b.name}`);
+      const n = (b.proxying ?? []).length;
+      if (!n) continue;
+      const toBackend = `self>backend:${b.name}`;
+      for (let i = 0; i < n; i++) bump(toBackend);
+      if (!managed.has(toBackend)) loose.add(toBackend);
+      // The card edge too. Leaving it dark while the card itself said "in use"
+      // was the picture contradicting itself: the work reached the backend and
+      // then apparently stopped there.
+      for (const r of b.resources ?? []) {
+        const toCard = `backend:${b.name}>resource:${r}`;
+        const arbiterHolds = resources.some((x) => x.name === r && x.holder === b.name);
+        if (!m.has(toCard)) m.set(toCard, 0);
+        if (!arbiterHolds) loose.add(toCard);
+      }
     }
+
     for (const sp of sparks) if (!m.has(sp.edge)) m.set(sp.edge, 0);
     for (const r of resources) {
       if (r.holder && !m.has(`backend:${r.holder}>resource:${r.name}`)) {
         m.set(`backend:${r.holder}>resource:${r.name}`, 0);
       }
     }
-    return m;
-  }, [jobs, sparks, resources, peerNames]);
+    return { count: m, loose };
+  }, [jobs, sparks, resources, backends, peerNames]);
 
   // Hovering one node quietens everything not attached to it. With five
   // backends over two cards the edges already cross; the picture is only worth
@@ -523,8 +542,9 @@ export function Graph({ d, sel, onSelect }: {
           <svg aria-hidden width={scene.width} height={scene.height}
                style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
             {scene.edges.map((e) => {
-              const n = traffic.get(e.id);
+              const n = traffic.count.get(e.id);
               const hot = n !== undefined;
+              const loose = traffic.loose.has(e.id);
               const off = !!near && !near.has(e.from) && !near.has(e.to);
               // Literal colours, not theme keys: MUI's `sx` maps `color` and
               // `bgcolor` onto the palette but NOT `stroke`, so `stroke:
@@ -533,7 +553,7 @@ export function Graph({ d, sel, onSelect }: {
               // all. Which is exactly how this shipped the first time.
               return (
                 <path key={e.id} d={e.d} fill="none"
-                      stroke={hot ? t.palette.success.main : t.palette.line}
+                      stroke={loose ? t.palette.warning.main : hot ? t.palette.success.main : t.palette.line}
                       strokeWidth={hot ? 1.4 : 1}
                       strokeDasharray={hot ? "3 8" : undefined}
                       opacity={off ? 0.12 : hot ? 0.85 : 0.55}
@@ -545,14 +565,15 @@ export function Graph({ d, sel, onSelect }: {
             })}
             {/* Three dots reads as "some"; a 3 reads as three. */}
             {scene.edges.map((e) => {
-              const n = traffic.get(e.id) ?? 0;
+              const n = traffic.count.get(e.id) ?? 0;
               if (n < 2) return null;
+              const loose = traffic.loose.has(e.id);
               return (
                 <g key={`n:${e.id}`} opacity={near && !near.has(e.from) && !near.has(e.to) ? 0.15 : 1}>
                   <circle cx={e.mid.x} cy={e.mid.y} r={8} fill={t.palette.background.paper}
-                          stroke={t.palette.success.main} strokeWidth={1} />
+                          stroke={loose ? t.palette.warning.main : t.palette.success.main} strokeWidth={1} />
                   <text x={e.mid.x} y={e.mid.y + 3.5} textAnchor="middle"
-                        fill={t.palette.success.main}
+                        fill={loose ? t.palette.warning.main : t.palette.success.main}
                         style={{ font: `600 9px ${MONO}` }}>{n}</text>
                 </g>
               );
@@ -586,7 +607,7 @@ export function Graph({ d, sel, onSelect }: {
                   // Hollow, so an unqueued request is not mistaken for a job the
                   // scheduler is managing. It is moving and it is real; nothing
                   // is holding a slot for it.
-                  bgcolor: "transparent", border: "1.5px solid", borderColor: "success.main",
+                  bgcolor: "transparent", border: "1.5px solid", borderColor: "warning.main",
                   offsetPath: `path("${p}")`, offsetRotate: "0deg",
                   animation: `hearth-flow 1800ms linear infinite ${i * -300}ms`,
                 }} />
@@ -666,8 +687,6 @@ export function Graph({ d, sel, onSelect }: {
             const q = queuedFor(b.name);
             const loaded = (b.loaded ?? []).map((m) => displayId(m, d.aliases, d.net.available));
             const proxied = b.proxying ?? [];
-            const proxiedModel = proxied[0]?.model
-              ? displayId(proxied[0].model, d.aliases, d.net.available) : null;
             const tone = held.length ? "work"
               : used > 0 || proxied.length ? "live" : q > 0 ? "work" : "idle";
             return (
@@ -679,7 +698,7 @@ export function Graph({ d, sel, onSelect }: {
                        title={held.length
                          ? `blocked — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
                          : proxied.length
-                           ? `${proxied.length} request(s) being proxied through, unqueued — real work, but hearth was never asked to admit it, so it holds no slot`
+                           ? `${proxied.length} request(s) are being forwarded straight through to ${b.name}. hearth is not scheduling them: they hold no slot, wait for nothing, and the card arbiter cannot see them.`
                            : `${b.name}${b.url ? ` · ${b.url}` : ""} — click for its models`}>
                 <Head tone={held.length ? "warning.main"
                             : used > 0 || proxied.length ? "success.main" : "faint"} name={b.name}
@@ -690,8 +709,10 @@ export function Graph({ d, sel, onSelect }: {
                 </Sub>
                 {q > 0 && <Sub color="warning.main">{q} waiting</Sub>}
                 {proxied.length > 0 && (
-                  <Sub color="success.main">
-                    {proxied.length} proxying{proxiedModel ? ` · ${proxiedModel}` : ""}
+                  // The model is already on the line above; repeating it here
+                  // only bought a truncated ellipsis.
+                  <Sub color="warning.main">
+                    {proxied.length} passing through
                   </Sub>
                 )}
                 <Sparks calls={(d.calls ?? []).filter((c) => c.backend === b.name)} now={now} />
@@ -719,12 +740,12 @@ export function Graph({ d, sel, onSelect }: {
                        title={r.holder
                          ? `${r.holder} is running on ${r.name}; everything else declared on it waits`
                          : unqueued.length
-                           ? `${unqueued.map((b) => b.name).join(", ")} is proxying unqueued work onto ${r.name}. hearth never admitted it, so the arbiter does not hold the card and cannot make anything wait for it.`
+                           ? `${r.name} is busy: ${unqueued.map((b) => b.name).join(", ")} is working on it. But hearth is not scheduling that work — it was forwarded straight through — so hearth cannot make anything else wait for this card while it runs.`
                            : `${r.name} is free — free and still loaded is the normal resting state`}>
                 <Head tone={r.holder ? "success.main" : unqueued.length ? "warning.main" : "faint"} name={r.name} />
                 <Sub color={r.holder ? "success.main" : unqueued.length ? "warning.main" : "faint"}>
                   {r.holder ? `${r.holder} holding`
-                    : unqueued.length ? `${unqueued[0]!.name} · unqueued`
+                    : unqueued.length ? `${unqueued[0]!.name} · in use`
                     : "free"}
                   {waiting.length ? ` · ${waiting.length} waiting` : ""}
                 </Sub>
