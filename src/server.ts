@@ -195,6 +195,10 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       queued: Object.values(agg.queued).reduce((a, b) => a + b, 0),
       // Several backends means several models warm at once, so this is a list.
       residents: pool.loaded(),
+      // What is being USED, as opposed to what is loaded: models with a job
+      // running on a local backend at this instant. Off-box jobs are a peer's
+      // activity, not ours. Finished calls are recorded as they end (logRequest).
+      active: [...new Set(pool.jobs().filter((j) => j.state === "running" && !j.offbox).map((j) => j.model))],
       perBackend: pool.all().map((b) => {
         const c = b.scheduler.capacity();
         return {
@@ -306,6 +310,15 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     error?: unknown,
   ): void {
     const started = t.startedAt || Date.now();
+    // A call that actually ran on a local backend is a use of that model,
+    // whether or not it succeeded: the weights were busy either way. Admission
+    // refusals (startedAt 0) and peer dispatches are not local uses.
+    if (t.startedAt > 0 && fields.target === "local" && typeof fields.model === "string") {
+      history.record({
+        t: Date.now(), model: fields.model, backend: String(fields.backend ?? ""),
+        ms: Date.now() - started, waitedMs: started - t.enqueuedAt, ok,
+      });
+    }
     log.info("request", {
       ...fields,
       waitedMs: started - t.enqueuedAt,
@@ -1468,6 +1481,16 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         share: shared(),
         configuredShare: cfg.share,
         catalog: pool.catalog(),
+        // Which advertised ids are one seat under another name. `models.<id>.as`
+        // rewrites the id on the way to a local backend, so an id whose `as` is
+        // itself an advertised model is a VARIANT of that model: the same weights
+        // answering to a second id, usually with different `params`. The page
+        // folds those under their parent instead of drawing sixteen rows for
+        // eleven models. An `as` that names a backend-only wire id (nomic-embed
+        // -> nomic-embed-text-v2-moe:latest) is a rename, not a variant; the page
+        // can tell the two apart because it also has the catalog, so both are
+        // sent as they are.
+        aliases: aliasView(),
         overrides: overrideView(),
         net: networkView(),
         q: {
@@ -1476,6 +1499,9 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           backends: pool.all().map((b) => ({ name: b.name, ...pool.loadedCapacity(b) })),
         },
         hist: history.all(),
+        // Every call that ran here in the same window, so the page can draw the
+        // lanes per request rather than per 5s reading, and say how long each took.
+        calls: history.calls(),
       });
       return;
     }
@@ -1597,6 +1623,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     };
   }
 
+  /** advertised id -> `as`, for every model that declares one. */
+  function aliasView(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [id, m] of Object.entries(cfg.models)) if (m.as) out[id] = m.as;
+    return out;
+  }
+  
   function networkView() {
     const cap = pool.loadedAggregate();
     // How many of our jobs each peer is running right now, so an edge can show
