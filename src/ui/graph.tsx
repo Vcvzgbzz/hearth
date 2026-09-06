@@ -294,6 +294,8 @@ function NodeBox({ p, tone, icon, selected, dim, onSelect, onHover, title, child
   tone: "live" | "work" | "fault" | "idle";
   icon: IconKind;
   selected: boolean;
+  /** A peer machine: a live peer takes the peer hue, self takes the success green. */
+  peer?: boolean;
   /** Something else is hovered and this is not connected to it. */
   dim?: boolean;
   onSelect: () => void;
@@ -301,8 +303,11 @@ function NodeBox({ p, tone, icon, selected, dim, onSelect, onHover, title, child
   title: string;
   children: React.ReactNode;
 }) {
-  const colour = tone === "live" ? "success.main" : tone === "work" ? "warning.main"
-    : tone === "fault" ? "error.main" : "faint";
+  // A healthy peer reads as the cool peer hue rather than self's green, so
+  // same-shape machines still tell apart at a glance; down and busy keep the
+  // shared state colours, which must stay consistent across the stage.
+  const colour = tone === "live" ? (peer ? "peer.main" : "success.main")
+    : tone === "work" ? "warning.main" : tone === "fault" ? "error.main" : "faint";
   // Big enough to be the thing you see first, and still inside a node narrow
   // enough that nine backends fit a laptop without the stage scrolling.
   const glyph = Math.round(Math.max(26, Math.min(36, p.w * 0.26)));
@@ -673,7 +678,7 @@ export function Graph({ d, sel, onSelect }: {
             const busy = (n.slots ?? 0) - (n.free ?? 0);
             const unmapped = (n.unmapped ?? []).length;
             return (
-              <NodeBox key={n.name} p={p} tone={!n.up ? "fault" : n.free === 0 ? "work" : "live"}
+              <NodeBox key={n.name} p={p} peer tone={!n.up ? "fault" : n.free === 0 ? "work" : "live"}
                        icon="peer"
                        selected={sel?.kind === "peer" && sel.id === n.name}
                        dim={dimmed(`peer:${n.name}`)}

@@ -22,7 +22,6 @@
 import {
   ArrowDataTransferHorizontalIcon,
   GpuIcon,
-  Link01Icon,
   PinLocation01Icon,
   Route01Icon,
   ServerStack01Icon,
@@ -34,8 +33,22 @@ export type IconKind = "self" | "peer" | "swap" | "single" | "path" | "card";
 const GLYPH = {
   /** This node — the machine the page is served from. */
   self: ServerStack01Icon,
-  /** Another machine, and the link to it. */
-  peer: Link01Icon,
+  /**
+   * A peer: the SAME mark as self, deliberately.
+   *
+   * A peer is a machine running this same software, which is exactly what the
+   * self node is — drawing it as a chain link made the relationship the subject
+   * and the thing itself an afterthought, and put two unlike shapes on the one
+   * row where the shapes should match. What actually differs is whose it is and
+   * whether it answers, and the row already says both: `self` is tagged as such,
+   * and the mark takes its colour from the node's state — a healthy peer in
+   * the cool peer hue, a down peer in fault red — so the shape matches while
+   * the colour keeps the machines apart.
+   *
+   * Kept as its own kind rather than aliased at the call site, so making them
+   * differ again is one line here.
+   */
+  peer: ServerStack01Icon,
   /** A backend that swaps: one model in, the last one out. */
   swap: ArrowDataTransferHorizontalIcon,
   /** One model, pinned there, never swapped out. */
