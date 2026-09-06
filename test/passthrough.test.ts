@@ -43,6 +43,11 @@ const backend = createServer((req, res) => {
     res.end(JSON.stringify({ running: [{ model: "m1", state: "ready" }] }));
     return;
   }
+  if (req.url === "/classify") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ rating: "safe" }));
+    return;
+  }
   if (req.url === "/upstream/m1/generate") {
     // Answers only when the test says so, so the request is genuinely in flight
     // while /ui/data is read rather than racing it.
@@ -65,6 +70,7 @@ const node = createNode(
     backends: [{
       name: "img", url: backendUrl, kind: "llama-swap",
       concurrency: 4, serves: ["m1", "m2"], resources: ["gpu0"],
+      routes: [{ path: "/classify", model: "classifier", lane: "chat" }],
     }],
   }),
   silentLogger,
@@ -84,6 +90,7 @@ interface Data {
     resources?: { name: string; holder: string | null }[];
   };
   q: { jobs: unknown[] };
+  calls?: { t: number; model: string; backend: string; ms: number; waitedMs: number; ok: boolean }[];
 }
 const read = async (): Promise<Data> =>
   (await (await fetch(`${base}/ui/data`)).json()) as Data;
@@ -131,6 +138,30 @@ await node.pool.first().state.ensureFresh();
     await new Promise((r) => setTimeout(r, 10));
   }
   assert.deepEqual(img(await read()).proxying, [], "and it clears when the request ends");
+}
+
+// --- a DECLARED route is queued AND recorded -------------------------------
+// It always went through the scheduler; it just never reached the history ring,
+// so it drew no spark and no bar. Sidecar calls finish in well under the 3s
+// poll, which makes the history the only place they can ever appear.
+{
+  const d0 = await read();
+  const before = (d0.calls ?? []).filter((c) => c.backend === "img").length;
+
+  const r = await fetch(`${base}/classify`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: "x" }),
+  });
+  assert.equal(r.status, 200, "the declared route must be served");
+
+  const d1 = await read();
+  const mine = (d1.calls ?? []).filter((c) => c.backend === "img");
+  assert.equal(mine.length, before + 1, "a queued route must be recorded as a local use");
+  assert.equal(mine.at(-1)!.model, "classifier", "under the model the route names");
+  assert.equal(mine.at(-1)!.ok, true);
+
+  // Still not a passthrough: it took a slot rather than being waved through.
+  assert.deepEqual(img(d1).proxying, [], "a routed request is not counted as passed through");
 }
 
 await node.close();

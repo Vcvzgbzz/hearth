@@ -1409,10 +1409,29 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // report.
       if (routed?.rule.queue) {
         const { lane, model } = routed.rule;
-        await target.scheduler.submit(
-          { lane, model, caller: who, signal: ctrl.signal },
-          proxy,
-        );
+        // Recorded like any other local use, because that is what it is.
+        //
+        // A declared route already went through the scheduler — it waited its
+        // turn and held a slot — but it left no trace in the history ring, so it
+        // drew no spark and no bar and never reached "last 10 minutes". Video
+        // renders have been queueing invisibly this whole time for that reason,
+        // and a sidecar call is worse: they finish in under a second, so the
+        // running-job particle is gone before the next 3s poll and the history
+        // was the only place they could ever have shown up.
+        const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
+        try {
+          await target.scheduler.submit(
+            { lane, model, caller: who, signal: ctrl.signal },
+            async () => {
+              t.startedAt = Date.now();
+              await proxy();
+            },
+          );
+        } catch (e) {
+          logRequest(t, { model, lane, caller: who, backend: target.name, target: "local", path }, false, e);
+          throw e;
+        }
+        logRequest(t, { model, lane, caller: who, backend: target.name, target: "local", path }, true);
       } else if (routed) {
         // A declared `queue: false` path — a progress endpoint polled WHILE the
         // work it asks about holds the slot. Counting those would draw traffic
