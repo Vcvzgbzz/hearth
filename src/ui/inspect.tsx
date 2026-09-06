@@ -526,6 +526,14 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
             ? `blocked — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
             : `${used}/${slots || "?"} in flight · ${b.queued ?? 0} queued`}
         </Box>
+        {(b.proxying ?? []).length > 0 && (
+          <Tooltip title="hearth forwards these verbatim and was never asked to schedule them, so they hold no slot and the card arbiter cannot see them. Declaring the path under this backend's routes: is what changes that — and makes hearth the admission control for it.">
+            <Box sx={{ color: "success.main", mt: 0.5, cursor: "help" }}>
+              {(b.proxying ?? []).length} proxying, unqueued
+              {b.proxying![0]?.model ? ` · ${b.proxying!.map((x) => x.model ?? "?").join(", ")}` : ""}
+            </Box>
+          </Tooltip>
+        )}
         {b.answering === false && (
           <Box sx={{ color: "error.main", mt: 0.5 }}>nothing has come back from it in a minute</Box>
         )}
@@ -580,6 +588,7 @@ function ResourcePanel({ name, d }: { name: string; d: UiData }) {
   const r = (d.net.resources ?? []).find((x) => x.name === name);
   const backends = (d.net.nodes.find((n) => n.self)?.backends ?? [])
     .filter((b) => (b.resources ?? []).includes(name));
+  const unqueued = backends.filter((b) => (b.proxying ?? []).length > 0);
   const evictions = (d.net.evictions ?? []).filter((e) => e.resources.includes(name)).slice(-6).reverse();
   if (!r) return <Head>{name}</Head>;
 
@@ -590,6 +599,13 @@ function ResourcePanel({ name, d }: { name: string; d: UiData }) {
         <Box sx={{ color: r.holder ? "success.main" : "faint" }}>
           {r.holder ? `${r.holder} is running on it` : "free"}
         </Box>
+        {unqueued.length > 0 && (
+          <Tooltip title="hearth is forwarding this work but never admitted it, so the arbiter does not hold the card and cannot make anything wait for it. The hardware is busy; the queue does not know.">
+            <Box sx={{ color: "warning.main", mt: 0.5, cursor: "help" }}>
+              but {unqueued.map((b) => b.name).join(", ")} is proxying unqueued work onto it
+            </Box>
+          </Tooltip>
+        )}
       </Field>
       <Field label={`competing · ${backends.length}`}>
         {backends.map((b) => {

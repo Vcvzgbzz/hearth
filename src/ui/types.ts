@@ -39,6 +39,17 @@ export interface Backend {
   resources?: string[];
   /** Non-OpenAI endpoints it fronts. A route backend has these and no `serves`. */
   routes?: Route[];
+  /**
+   * Requests being proxied through us right now WITHOUT being queued.
+   *
+   * Image generation arrives on `/upstream/<model>/generate`, which hearth
+   * forwards verbatim and deliberately does not schedule. That is a decision
+   * about admission, and it used to be an accidental decision about visibility
+   * too: the backend drew idle and its card drew free while the GPU was flat
+   * out. These are real in-flight requests with no job behind them, so they
+   * light an edge but never claim a slot, a queue position or a card.
+   */
+  proxying?: { id: string; model: string | null }[];
 }
 
 /**
