@@ -1413,8 +1413,21 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           { lane, model, caller: who, signal: ctrl.signal },
           proxy,
         );
-      } else {
+      } else if (routed) {
+        // A declared `queue: false` path — a progress endpoint polled WHILE the
+        // work it asks about holds the slot. Counting those would draw traffic
+        // for the polling, not the working.
         await proxy();
+      } else {
+        const mark = { id: `p${++proxySeq}`, backend: target.name, model: named ?? null };
+        proxying.add(mark);
+        try {
+          await proxy();
+        } finally {
+          // finally, not after the await: an aborted or failed proxy must not
+          // leave a phantom request on the page forever.
+          proxying.delete(mark);
+        }
       }
     } catch (e) {
       // Same reasoning as the warm route: a full lane is the caller's cue to
@@ -1546,6 +1559,25 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
    * address, so this adds a socket, not an authority. Unauthenticated, this
    * port still serves exactly the page.
    */
+  /**
+   * Requests we are proxying right now, unqueued.
+   *
+   * The passthrough below is deliberately not scheduled, which is a statement
+   * about ADMISSION and was silently also a statement about visibility: an
+   * image render arrives on /upstream/<model>/generate, never becomes a job,
+   * and so the console drew an idle backend and a free card while the GPU was
+   * flat out. The queue was right and the picture was wrong.
+   *
+   * Counting is not queueing. Nothing here decides whether a request runs, in
+   * what order, or waits for anything — the bytes are already in our hands on
+   * their way through, and this notes that they are. The arbiter still does not
+   * know about this work, and the card is still reported as unheld, because
+   * that remains the truth: we were never asked to admit it and cannot make it
+   * wait for anything.
+   */
+  let proxySeq = 0;
+  const proxying = new Set<{ id: string; backend: string; model: string | null }>();
+
   const uiWritable = cfg.uiListen?.control === "key";
   const UI_PATHS = new Set(["/ui", "/ui/", "/ui/data", "/"]);
   const uiServer = cfg.uiListen
@@ -1689,9 +1721,23 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             slots: c.slots,
             free: c.free,
             queued: Object.values(c.queued).reduce((a, x) => a + x, 0),
-            loaded: b.cfg.serves.length && b.state.loaded().length
-              ? [...b.cfg.serves]
+            // Only what is ACTUALLY resident, mapped back into advertised ids.
+            //
+            // This used to return the whole `serves` list the moment ANYTHING
+            // was loaded, which made a seven-model image backend report all
+            // seven as warm while llama-swap held exactly one. The console then
+            // drew six cold models as warm — and "will this cost me a load" is
+            // the entire question that indicator exists to answer. The reason
+            // for the shortcut was that state.loaded() speaks WIRE ids; the fix
+            // is to translate them rather than to give up on them.
+            loaded: b.cfg.serves.length
+              ? [...b.cfg.serves].filter((m) => b.state.isWarm(pool.outboundId(m)))
               : b.state.loaded(),
+            // Unqueued work we are proxying for this backend right now. Real
+            // traffic, no admission — see `proxying` above.
+            proxying: [...proxying]
+              .filter((x) => x.backend === b.name)
+              .map((x) => ({ id: x.id, model: x.model })),
             serves: b.cfg.serves.length ? [...b.cfg.serves] : b.state.catalog(),
             // The hardware this backend consumes. Empty for a backend that
             // competes for nothing, which is every backend in a config that

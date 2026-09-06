@@ -475,6 +475,10 @@ export function Graph({ d, sel, onSelect }: {
     const m = new Map<string, number>();
     const bump = (id: string) => m.set(id, (m.get(id) ?? 0) + 1);
     for (const j of jobs) for (const e of edgesOf(j, peerNames)) bump(e);
+    // Unqueued passthrough is real work on that edge; it just has no job.
+    for (const b of backends) {
+      for (const _ of b.proxying ?? []) bump(`self>backend:${b.name}`);
+    }
     for (const sp of sparks) if (!m.has(sp.edge)) m.set(sp.edge, 0);
     for (const r of resources) {
       if (r.holder && !m.has(`backend:${r.holder}>resource:${r.name}`)) {
@@ -573,6 +577,21 @@ export function Graph({ d, sel, onSelect }: {
                 }} />
               );
             })}
+            {backends.flatMap((b) => (b.proxying ?? []).map((x, i) => {
+              const p = path(`self>backend:${b.name}`);
+              if (!p) return null;
+              return (
+                <Box key={x.id} sx={{
+                  position: "absolute", width: 7, height: 7, borderRadius: "50%",
+                  // Hollow, so an unqueued request is not mistaken for a job the
+                  // scheduler is managing. It is moving and it is real; nothing
+                  // is holding a slot for it.
+                  bgcolor: "transparent", border: "1.5px solid", borderColor: "success.main",
+                  offsetPath: `path("${p}")`, offsetRotate: "0deg",
+                  animation: `hearth-flow 1800ms linear infinite ${i * -300}ms`,
+                }} />
+              );
+            }))}
             {sparks.map((s) => {
               const p = path(s.edge);
               if (!p) return null;
@@ -646,7 +665,11 @@ export function Graph({ d, sel, onSelect }: {
             const held = blockers(b, resources);
             const q = queuedFor(b.name);
             const loaded = (b.loaded ?? []).map((m) => displayId(m, d.aliases, d.net.available));
-            const tone = held.length ? "work" : used > 0 ? "live" : q > 0 ? "work" : "idle";
+            const proxied = b.proxying ?? [];
+            const proxiedModel = proxied[0]?.model
+              ? displayId(proxied[0].model, d.aliases, d.net.available) : null;
+            const tone = held.length ? "work"
+              : used > 0 || proxied.length ? "live" : q > 0 ? "work" : "idle";
             return (
               <NodeBox key={b.name} p={p} tone={tone}
                        selected={sel?.kind === "backend" && sel.id === b.name}
@@ -655,14 +678,22 @@ export function Graph({ d, sel, onSelect }: {
                        onSelect={() => onSelect({ kind: "backend", id: b.name })}
                        title={held.length
                          ? `blocked — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
-                         : `${b.name}${b.url ? ` · ${b.url}` : ""} — click for its models`}>
-                <Head tone={held.length ? "warning.main" : used > 0 ? "success.main" : "faint"} name={b.name}
+                         : proxied.length
+                           ? `${proxied.length} request(s) being proxied through, unqueued — real work, but hearth was never asked to admit it, so it holds no slot`
+                           : `${b.name}${b.url ? ` · ${b.url}` : ""} — click for its models`}>
+                <Head tone={held.length ? "warning.main"
+                            : used > 0 || proxied.length ? "success.main" : "faint"} name={b.name}
                       right={<Pips used={Math.max(0, used)} slots={slots} />} />
                 <Sub color={held.length ? "warning.main" : loaded.length ? "success.main" : "faint"}>
                   {held.length ? "blocked" : loaded.length ? loaded.join(", ")
                     : b.knowsWarm === false ? "warmth unknown" : "nothing loaded"}
                 </Sub>
                 {q > 0 && <Sub color="warning.main">{q} waiting</Sub>}
+                {proxied.length > 0 && (
+                  <Sub color="success.main">
+                    {proxied.length} proxying{proxiedModel ? ` · ${proxiedModel}` : ""}
+                  </Sub>
+                )}
                 <Sparks calls={(d.calls ?? []).filter((c) => c.backend === b.name)} now={now} />
               </NodeBox>
             );
@@ -674,27 +705,36 @@ export function Graph({ d, sel, onSelect }: {
             if (!p) return null;
             const waiting = backends.filter((b) => (b.resources ?? []).includes(r.name)
               && b.name !== r.holder && (b.queued ?? 0) > 0);
+            // Work on this card that the arbiter knows nothing about. Drawing it
+            // as "free" was true of the arbiter and false of the hardware; the
+            // fix is to say both things rather than to fake a holder.
+            const unqueued = backends.filter((b) => (b.resources ?? []).includes(r.name)
+              && (b.proxying ?? []).length > 0);
             return (
-              <NodeBox key={r.name} p={p} tone={r.holder ? "live" : "idle"}
+              <NodeBox key={r.name} p={p} tone={r.holder ? "live" : unqueued.length ? "work" : "idle"}
                        selected={sel?.kind === "resource" && sel.id === r.name}
                        dim={dimmed(`resource:${r.name}`)}
                        onHover={(on) => setHover(on ? `resource:${r.name}` : null)}
                        onSelect={() => onSelect({ kind: "resource", id: r.name })}
                        title={r.holder
                          ? `${r.holder} is running on ${r.name}; everything else declared on it waits`
-                         : `${r.name} is free — free and still loaded is the normal resting state`}>
-                <Head tone={r.holder ? "success.main" : "faint"} name={r.name} />
-                <Sub color={r.holder ? "success.main" : "faint"}>
-                  {r.holder ? `${r.holder} holding` : "free"}
+                         : unqueued.length
+                           ? `${unqueued.map((b) => b.name).join(", ")} is proxying unqueued work onto ${r.name}. hearth never admitted it, so the arbiter does not hold the card and cannot make anything wait for it.`
+                           : `${r.name} is free — free and still loaded is the normal resting state`}>
+                <Head tone={r.holder ? "success.main" : unqueued.length ? "warning.main" : "faint"} name={r.name} />
+                <Sub color={r.holder ? "success.main" : unqueued.length ? "warning.main" : "faint"}>
+                  {r.holder ? `${r.holder} holding`
+                    : unqueued.length ? `${unqueued[0]!.name} · unqueued`
+                    : "free"}
                   {waiting.length ? ` · ${waiting.length} waiting` : ""}
                 </Sub>
                 {/* A card is either held or not; there is no partial. The bar is
                     a presence, not a percentage. */}
                 <Box sx={{
                   height: 3, borderRadius: 2, mt: 0.25,
-                  bgcolor: r.holder ? "success.main" : "divider",
-                  opacity: r.holder ? 1 : 0.7,
-                  animation: r.holder ? "hearth-breathe 2.4s ease-in-out infinite" : undefined,
+                  bgcolor: r.holder ? "success.main" : unqueued.length ? "warning.main" : "divider",
+                  opacity: r.holder || unqueued.length ? 1 : 0.7,
+                  animation: r.holder || unqueued.length ? "hearth-breathe 2.4s ease-in-out infinite" : undefined,
                   transition: "background-color 240ms",
                 }} />
               </NodeBox>
