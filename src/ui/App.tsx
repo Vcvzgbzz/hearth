@@ -26,11 +26,16 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CssBaseline from "@mui/material/CssBaseline";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
+import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -41,7 +46,7 @@ import { Dot, mono, Row, Spacer, Tag } from "./bits.js";
 import { CallsTable, Depth, HistTable, Lanes } from "./charts.js";
 import { Graph, type Sel } from "./graph.js";
 import { Inspector, LoadAction, ShareToggle, type Ctx } from "./inspect.js";
-import { displayId, load, since } from "./lib.js";
+import { displayId, load, setKeyAsker, since } from "./lib.js";
 import { makeTheme, MONO } from "./theme.js";
 import type { Backend, Node, UiData } from "./types.js";
 import { waitReason } from "./why.js";
@@ -443,6 +448,74 @@ function History({ d }: { d: UiData }) {
   );
 }
 
+/* -------------------------------------------------------------- the key */
+
+/**
+ * Asking for the API key, in the page.
+ *
+ * This was `window.prompt`, which has room for a sentence and no room for the
+ * two things an operator actually needs: what this key IS, and where to get it.
+ * So the first write on a keyed node opened a bare box asking for a secret, with
+ * a rejection indistinguishable from a click that did nothing.
+ *
+ * Mounted once by the shell and handed to lib.ts, which resolves the promise it
+ * hands back — so `postWrite` can wait for a person without the write path
+ * knowing anything about React.
+ */
+function KeyDialog() {
+  const [resolve, setResolve] = useState<((k: string | null) => void) | null>(null);
+  const [value, setValue] = useState("");
+
+  useEffect(() => {
+    setKeyAsker(() => new Promise<string | null>((r) => {
+      setValue("");
+      // Stored through a setter function, or React would call the resolver
+      // instead of storing it — useState treats a function argument as an
+      // updater, and a promise that resolves itself on mount is a fine way to
+      // spend an afternoon.
+      setResolve(() => r);
+    }));
+  }, []);
+
+  const done = (k: string | null) => {
+    resolve?.(k);
+    setResolve(null);
+  };
+
+  return (
+    <Dialog open={resolve !== null} onClose={() => done(null)} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: 14, fontWeight: 600 }}>
+        This node needs a key for controls
+      </DialogTitle>
+      <DialogContent>
+        <Typography sx={{ fontSize: 11.5, color: "text.secondary", mb: 1.5, lineHeight: 1.7 }}>
+          Reading is open on this socket; changing something is not. The key is stored
+          in this browser only and never leaves it. If the node refuses it you will be
+          told on the control, and asked again next time.
+        </Typography>
+        <TextField
+          autoFocus fullWidth type="password" value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) done(value.trim()); }}
+          slotProps={{ htmlInput: { "aria-label": "API key", spellCheck: false } }}
+        />
+        <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint", mt: 1.5 }}>
+          {/* Points at the CONFIG, not at anyone's box. An earlier version of
+              this line printed the exact ssh command that fetches the key on the
+              node it was written for — a host alias and an env path, baked into
+              a public repo and wrong for every other operator. Whoever is
+              looking at this dialog knows where their own config lives. */}
+          any key from this node&apos;s apiKeys list
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => done(null)}>cancel</Button>
+        <Button onClick={() => done(value.trim() || null)} disabled={!value.trim()}>use key</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 /* ------------------------------------------------------------------ page */
 
 function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }) {
@@ -559,6 +632,7 @@ export default function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      <KeyDialog />
       <Console d={data} ctx={ctx} dead={dead} />
     </ThemeProvider>
   );
