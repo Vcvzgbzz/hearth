@@ -102,6 +102,17 @@ export interface Net {
 }
 
 export interface Job {
+  /**
+   * Unique per job, and the only safe key for one.
+   *
+   * The obvious composite — model + caller + since — is NOT unique: two
+   * concurrent requests for the same model from the same caller, submitted in
+   * the same millisecond, collide. React then renders ONE of them and silently
+   * drops the rest, so the graph drew a single particle for a pair of jobs and
+   * the queue table was short a row, while the count beside them (taken from
+   * the array, not the rendered list) correctly said two.
+   */
+  id: string;
   lane: string;
   model: string;
   caller: string;

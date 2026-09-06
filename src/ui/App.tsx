@@ -162,7 +162,7 @@ function QueueTable({ d }: { d: UiData }) {
             const b = backends.find((x) => x.name === j.backend);
             const wait = j.state === "queued" ? waitReason(j, b, resources) : null;
             return (
-              <TableRow key={`${j.model}:${j.caller}:${j.since}`}>
+              <TableRow key={j.id}>
                 <TableCell sx={{ ...mono, color: j.lane === "chat" ? "success.main" : "text.secondary" }}>{j.lane}</TableCell>
                 <TableCell sx={{ ...mono, whiteSpace: "nowrap" }}>{displayId(j.model, d.aliases, d.net.available)}</TableCell>
                 <TableCell sx={{ ...mono, color: "text.secondary" }}>

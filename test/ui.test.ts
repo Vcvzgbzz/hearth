@@ -69,7 +69,7 @@ import { blockers, waitReason } from "../src/ui/why.js";
 {
   const gpu0 = { name: "gpu0", holder: "video", backends: ["swap", "video"] };
   const free = { name: "gpu1", holder: null, backends: ["other"] };
-  const job = { lane: "chat", model: "coder", caller: "x", state: "queued" as const,
+  const job = { id: "j1", lane: "chat", model: "coder", caller: "x", state: "queued" as const,
                 position: 3, since: 0 };
 
   const swap = { name: "swap", resources: ["gpu0"], slots: 4, free: 0, evicts: true,
