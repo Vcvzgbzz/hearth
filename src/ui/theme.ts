@@ -35,16 +35,43 @@ declare module "@mui/material/styles" {
   }
 }
 
+/**
+ * Design system palette.
+ *
+ * Both schemes share the same semantic roles:
+ *   success (live/resident/ready)   = phosphor green
+ *   warning (working/hot/busy)      = signal amber
+ *   error   (fault/down/not answering) = fault red
+ *
+ * Dark: charcoal surfaces, warm ink, subtle contrast between surfaces.
+ * Light: warm paper, ink from the dark palette, hairline dividers.
+ */
 const swatches = {
   dark: {
-    bg: "#201f2c", raise: "#4B4A67", line: "#5b597a", hair: "#302f42",
-    ink: "#DDD1C7", dim: "#a7abae", faint: "#6f7573",
-    live: "#8DB580", work: "#f59e0b", fault: "#f87171",
+    bg: "#1a1924",         // page background
+    raise: "#252432",      // elevated card
+    raise2: "#2c2b3a",     // slightly higher
+    line: "#3a3948",       // heavier rule under headings
+    hair: "#2f2e3c",       // hairline between rows
+    ink: "#DDD1C7",        // primary text
+    dim: "#a7abae",        // secondary text
+    faint: "#6f7573",      // tertiary / labels
+    live: "#8DB580",       // success
+    work: "#f59e0b",       // warning
+    fault: "#f87171",      // error
   },
   light: {
-    bg: "#DDD1C7", raise: "#f2ece5", line: "#cfc6ba", hair: "#eae2d8",
-    ink: "#4B4A67", dim: "#7E8987", faint: "#a8a6b0",
-    live: "#8DB580", work: "#b45309", fault: "#dc2626",
+    bg: "#DDD1C7",
+    raise: "#f2ece5",
+    raise2: "#faf5ef",
+    line: "#cfc6ba",
+    hair: "#eae2d8",
+    ink: "#4B4A67",
+    dim: "#7E8987",
+    faint: "#a8a6b0",
+    live: "#8DB580",
+    work: "#b45309",
+    fault: "#dc2626",
   },
 } as const;
 
@@ -64,28 +91,31 @@ export function makeTheme(mode: "light" | "dark"): Theme {
     },
     typography: {
       fontFamily: SANS,
-      fontSize: 14,
+      fontSize: 13.5,
       // Section headings are a quiet label above a rule, not a floating caps chip.
-      h2: { fontSize: 13, fontWeight: 600, margin: 0 },
-      body2: { fontSize: 12.5 },
-      caption: { fontSize: 11.5 },
+      h2: { fontSize: 12.5, fontWeight: 600, margin: 0, letterSpacing: ".01em" },
+      body2: { fontSize: 12 },
+      caption: { fontSize: 11 },
     },
-    shape: { borderRadius: 2 },
+    shape: { borderRadius: 3 },
+    spacing: 4,
     components: {
       // MUI's table is built for a roomy data grid. This one is a dense readout,
       // and its rows were 53px tall before these.
       MuiTableCell: {
         styleOverrides: {
-          root: { padding: "7px 12px 7px 0", borderBottom: `1px solid ${c.hair}`, verticalAlign: "baseline" },
-          head: { fontWeight: 500, fontSize: 11.5, color: c.dim, padding: "0 12px 6px 0", borderBottom: `1px solid ${c.line}` },
+          root: { padding: "6px 10px 6px 0", borderBottom: `1px solid ${c.hair}`, verticalAlign: "baseline" },
+          head: { fontWeight: 500, fontSize: 10.5, color: c.dim, padding: "0 10px 5px 0",
+                  borderBottom: `1px solid ${c.line}`, textTransform: "uppercase", letterSpacing: ".03em" },
         },
       },
       MuiButton: {
         defaultProps: { size: "small", variant: "outlined", color: "inherit" },
         styleOverrides: {
           root: {
-            fontFamily: MONO, fontSize: 11.5, textTransform: "none", minWidth: 0,
-            padding: "1px 7px", lineHeight: 1.5, color: c.dim, borderColor: c.line,
+            fontFamily: MONO, fontSize: 11, textTransform: "none", minWidth: 0,
+            padding: "2px 7px", lineHeight: 1.5, color: c.dim, borderColor: c.line,
+            borderRadius: 3,
             "&:hover": { color: c.live, borderColor: c.live, background: "none" },
             "&.Mui-disabled": { color: c.faint, borderColor: c.line },
           },
@@ -93,14 +123,14 @@ export function makeTheme(mode: "light" | "dark"): Theme {
       },
       MuiTextField: { defaultProps: { size: "small", variant: "outlined" } },
       MuiInputBase: {
-        styleOverrides: { input: { fontFamily: MONO, fontSize: 11.5, padding: "1px 5px" } },
+        styleOverrides: { input: { fontFamily: MONO, fontSize: 11, padding: "2px 5px" } },
       },
       MuiTooltip: {
         defaultProps: { enterDelay: 200, placement: "top" },
         styleOverrides: {
           tooltip: {
             background: c.raise, color: c.ink, border: `1px solid ${c.line}`,
-            fontFamily: MONO, fontSize: 12, fontWeight: 400,
+            fontFamily: MONO, fontSize: 11.5, fontWeight: 400,
             boxShadow: "0 6px 20px rgba(0,0,0,.35)", maxWidth: 420,
           },
         },
@@ -118,7 +148,7 @@ export function makeTheme(mode: "light" | "dark"): Theme {
           content: { margin: 0, "&.Mui-expanded": { margin: 0 } },
         },
       },
-      MuiAccordionDetails: { styleOverrides: { root: { padding: "6px 0 4px" } } },
+      MuiAccordionDetails: { styleOverrides: { root: { padding: "4px 0 4px" } } },
       MuiSwitch: { defaultProps: { size: "small", color: "success" } },
     },
   });

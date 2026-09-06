@@ -59,7 +59,7 @@ export const UI_HTML = `<title>Hearth Console</title>
      dark theme is a flash you notice every reload. Both swatches come from
      src/ui/theme.ts and must be kept in step with it. */
   html { background: #DDD1C7; color-scheme: light dark; }
-  @media (prefers-color-scheme: dark) { html { background: #201f2c; } }
+  @media (prefers-color-scheme: dark) { html { background: #1a1924; } }
   body { margin: 0; }
 </style>
 <div id="root"></div>
