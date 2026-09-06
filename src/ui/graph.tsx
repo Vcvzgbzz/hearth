@@ -51,7 +51,7 @@ export const selEq = (a: Sel, b: Sel): boolean =>
 
 const GAP = 18;
 const PAD = 10;
-const H = { self: 76, peer: 76, backend: 66, resource: 58 } as const;
+const H = { self: 76, peer: 76, backend: 80, resource: 58 } as const;
 /** Below this the columns stop being readable and the stage scrolls instead. */
 const MIN_STAGE = 640;
 /** The tightest the three rows go before the edges are too short to read. */
@@ -82,6 +82,8 @@ interface Edge {
   /** Sibling links leave sideways; parent links leave downwards. */
   dir: "across" | "down";
   d: string;
+  /** Where a count sits, and the only point on the path we need in JS. */
+  mid: { x: number; y: number };
 }
 
 interface Scene {
@@ -91,18 +93,41 @@ interface Scene {
   height: number;
 }
 
-/** A cubic with its control points pushed out along the direction of travel. */
-function curve(a: Placed, b: Placed, dir: "across" | "down"): string {
+/** B(0.5) of a cubic, which is where a label on it belongs. */
+const midOf = (p0: number, p1: number, p2: number, p3: number): number =>
+  (p0 + 3 * p1 + 3 * p2 + p3) / 8;
+
+/**
+ * A cubic with its control points pushed out along the direction of travel.
+ *
+ * `lift` bows the curve off the straight line between two nodes, which is what
+ * lets one pair carry two edges: out and back are different facts about a peer
+ * — whether you are leaning on them or they on you — and drawn on one line they
+ * are indistinguishable.
+ */
+function curve(a: Placed, b: Placed, dir: "across" | "down", lift = 0): {
+  d: string; mid: { x: number; y: number };
+} {
   if (dir === "across") {
-    const x1 = a.x + a.w, y1 = a.y + a.h / 2;
-    const x2 = b.x, y2 = b.y + b.h / 2;
-    const k = Math.max(28, (x2 - x1) * 0.42);
-    return `M ${x1} ${y1} C ${x1 + k} ${y1} ${x2 - k} ${y2} ${x2} ${y2}`;
+    // Right-to-left when the target is left of the source, so the return leg
+    // starts at the peer and a particle on it travels the way the work does.
+    const back = b.x < a.x;
+    const x1 = back ? a.x : a.x + a.w, y1 = a.y + a.h / 2 + lift * 0.5;
+    const x2 = back ? b.x + b.w : b.x, y2 = b.y + b.h / 2 + lift * 0.5;
+    const k = Math.max(28, Math.abs(x2 - x1) * 0.42) * (back ? -1 : 1);
+    const c1y = y1 + lift, c2y = y2 + lift;
+    return {
+      d: `M ${x1} ${y1} C ${x1 + k} ${c1y} ${x2 - k} ${c2y} ${x2} ${y2}`,
+      mid: { x: midOf(x1, x1 + k, x2 - k, x2), y: midOf(y1, c1y, c2y, y2) },
+    };
   }
   const x1 = a.x + a.w / 2, y1 = a.y + a.h;
   const x2 = b.x + b.w / 2, y2 = b.y;
   const k = Math.max(20, (y2 - y1) * 0.55);
-  return `M ${x1} ${y1} C ${x1} ${y1 + k} ${x2} ${y2 - k} ${x2} ${y2}`;
+  return {
+    d: `M ${x1} ${y1} C ${x1} ${y1 + k} ${x2} ${y2 - k} ${x2} ${y2}`,
+    mid: { x: midOf(x1, x1, x2, x2), y: midOf(y1, y1 + k, y2 - k, y2) },
+  };
 }
 
 /**
@@ -168,11 +193,18 @@ function layout(width: number, height: number, self: Node | undefined, peers: No
   }
 
   const edges: Edge[] = [];
-  const push = (from: string, to: string, dir: "across" | "down") => {
+  const push = (from: string, to: string, dir: "across" | "down", lift = 0) => {
     const a = nodes.get(from), b = nodes.get(to);
-    if (a && b) edges.push({ id: `${from}>${to}`, from, to, dir, d: curve(a, b, dir) });
+    if (!a || !b) return;
+    const { d, mid } = curve(a, b, dir, lift);
+    edges.push({ id: `${from}>${to}`, from, to, dir, d, mid });
   };
-  for (const p of peers) push("self", `peer:${p.name}`, "across");
+  // Two arcs per peer, bowed opposite ways: what we send them, and what they
+  // send us. They are separate facts and one line cannot hold both.
+  for (const p of peers) {
+    push("self", `peer:${p.name}`, "across", -14);
+    push(`peer:${p.name}`, "self", "across", 14);
+  }
   for (const b of backends) push("self", `backend:${b.name}`, "down");
   for (const r of resources) for (const b of r.backends) push(`backend:${b}`, `resource:${r.name}`, "down");
 
@@ -182,10 +214,26 @@ function layout(width: number, height: number, self: Node | undefined, peers: No
 
 /* --------------------------------------------------------------- traffic */
 
-/** Which edge a job travels on, or null if we cannot place it. */
-function edgeOf(j: Job): string | null {
+/**
+ * Which edge a job travels on, or null if we cannot place it.
+ *
+ * A job we accepted FROM a peer takes the return leg — and then also runs on one
+ * of our backends, so it legitimately appears on two edges. That is what is
+ * happening: it arrived from over there, and it is running down here.
+ */
+function edgeOf(j: Job, peerNames: Set<string>): string | null {
   if (j.offbox) return j.peer ? `self>peer:${j.peer}` : null;
+  if (peerNames.has(j.caller)) return `peer:${j.caller}>self`;
   return j.backend ? `self>backend:${j.backend}` : null;
+}
+
+/** Every edge a job puts traffic on: the peer leg it arrived by, and the backend. */
+function edgesOf(j: Job, peerNames: Set<string>): string[] {
+  const out: string[] = [];
+  const first = edgeOf(j, peerNames);
+  if (first) out.push(first);
+  if (!j.offbox && peerNames.has(j.caller) && j.backend) out.push(`self>backend:${j.backend}`);
+  return out;
 }
 
 const laneColor = (lane: string): string =>
@@ -240,11 +288,14 @@ function useSparks(calls: Call[] | undefined): Spark[] {
 /* ----------------------------------------------------------------- nodes */
 
 /** The shell every node shares: the click target, the selected ring, the tone. */
-function NodeBox({ p, tone, selected, onSelect, title, children }: {
+function NodeBox({ p, tone, selected, dim, onSelect, onHover, title, children }: {
   p: Placed;
   tone: "live" | "work" | "fault" | "idle";
   selected: boolean;
+  /** Something else is hovered and this is not connected to it. */
+  dim?: boolean;
   onSelect: () => void;
+  onHover: (on: boolean) => void;
   title: string;
   children: React.ReactNode;
 }) {
@@ -258,8 +309,13 @@ function NodeBox({ p, tone, selected, onSelect, title, children }: {
         aria-pressed={selected}
         onClick={onSelect}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } }}
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
+        onFocus={() => onHover(true)}
+        onBlur={() => onHover(false)}
         sx={{
           position: "absolute", left: p.x, top: p.y, width: p.w, height: p.h,
+          opacity: dim ? 0.35 : 1,
           boxSizing: "border-box", px: 1.5, py: 1, cursor: "pointer",
           display: "flex", flexDirection: "column", justifyContent: "center", gap: 0.5,
           borderRadius: 2.5, border: "1px solid", borderColor: selected ? "success.main" : edge,
@@ -267,7 +323,7 @@ function NodeBox({ p, tone, selected, onSelect, title, children }: {
           // The selected ring is a shadow rather than a thicker border so the
           // box does not change size and shift its own text on click.
           boxShadow: selected ? "0 0 0 2px rgba(141,181,128,.35)" : "0 1px 2px rgba(0,0,0,.18)",
-          transition: "border-color 180ms, box-shadow 180ms, transform 180ms",
+          transition: "border-color 180ms, box-shadow 180ms, transform 180ms, opacity 180ms",
           "&:hover": { transform: "translateY(-1px)", borderColor: selected ? "success.main" : "text.secondary" },
           "&:focus-visible": { outline: "2px solid", outlineColor: "success.main", outlineOffset: 2 },
         }}
@@ -300,6 +356,47 @@ const Sub = ({ children, color = "faint" }: { children: React.ReactNode; color?:
     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
   }}>{children}</Typography>
 );
+
+/**
+ * The last ten minutes of finished requests on one backend, as bars.
+ *
+ * The graph is honest about live traffic and therefore still most of the time —
+ * at a homelab duty cycle a visit usually lands between requests, and a page
+ * that is correct and blank is a page you stop opening. `calls` is the record
+ * of what has actually been used, so the node can say "busy all morning" while
+ * nothing is in flight this second.
+ */
+function Sparks({ calls, now }: { calls: Call[]; now: number }) {
+  const BUCKETS = 20;
+  const WINDOW = 10 * 60_000;
+  const bars = new Array<number>(BUCKETS).fill(0);
+  for (const c of calls) {
+    const age = now - c.t;
+    if (age < 0 || age > WINDOW) continue;
+    const i = BUCKETS - 1 - Math.min(BUCKETS - 1, Math.floor(age / (WINDOW / BUCKETS)));
+    bars[i] = (bars[i] ?? 0) + 1;
+  }
+  const peak = Math.max(...bars);
+  if (!peak) {
+    return <Box aria-hidden sx={{ height: 12, borderBottom: "1px solid", borderColor: "divider", opacity: 0.5 }} />;
+  }
+  return (
+    <Box aria-label={`${calls.length} requests in the last ten minutes`}
+         sx={{ display: "flex", alignItems: "flex-end", gap: "1px", height: 12 }}>
+      {bars.map((v, i) => (
+        <Box key={i} sx={{
+          flex: 1, minWidth: 0,
+          // A bucket with nothing in it still draws a floor, so the row reads as
+          // a timeline rather than a gap in the layout.
+          height: v ? `${Math.max(18, (v / peak) * 100)}%` : "1px",
+          bgcolor: v ? "success.main" : "divider",
+          opacity: v ? 0.55 + 0.45 * (v / peak) : 1,
+          borderRadius: "1px",
+        }} />
+      ))}
+    </Box>
+  );
+}
 
 /** Slots as pips, or a fraction once pips stop being countable. */
 function Pips({ used, slots }: { used: number; slots: number }) {
@@ -361,19 +458,45 @@ export function Graph({ d, sel, onSelect }: {
      resources.map((r) => `${r.name}:${r.backends.join("+")}`).join()],
   );
 
+  const [hover, setHover] = useState<string | null>(null);
   const jobs = d.q.jobs.filter((j) => j.state === "running");
   const sparks = useSparks(d.calls);
+  const peerNames = useMemo(() => new Set(peers.map((p) => p.name)), [peers.map((p) => p.name).join()]);
+  // One clock for every sparkline, so twenty of them do not each hold a timer.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, []);
 
-  // Which edges are carrying anything, so a still edge stays still.
-  const busyEdges = useMemo(() => {
-    const s = new Set<string>();
-    for (const j of jobs) { const e = edgeOf(j); if (e) s.add(e); }
-    for (const sp of sparks) s.add(sp.edge);
+  // Which edges are carrying anything and how much, so a still edge stays still
+  // and a busy one can say how busy.
+  const traffic = useMemo(() => {
+    const m = new Map<string, number>();
+    const bump = (id: string) => m.set(id, (m.get(id) ?? 0) + 1);
+    for (const j of jobs) for (const e of edgesOf(j, peerNames)) bump(e);
+    for (const sp of sparks) if (!m.has(sp.edge)) m.set(sp.edge, 0);
     for (const r of resources) {
-      if (r.holder) s.add(`backend:${r.holder}>resource:${r.name}`);
+      if (r.holder && !m.has(`backend:${r.holder}>resource:${r.name}`)) {
+        m.set(`backend:${r.holder}>resource:${r.name}`, 0);
+      }
+    }
+    return m;
+  }, [jobs, sparks, resources, peerNames]);
+
+  // Hovering one node quietens everything not attached to it. With five
+  // backends over two cards the edges already cross; the picture is only worth
+  // having if you can pull one thread out of it.
+  const near = useMemo(() => {
+    if (!hover) return null;
+    const s = new Set<string>([hover]);
+    for (const e of scene.edges) {
+      if (e.from === hover) s.add(e.to);
+      if (e.to === hover) s.add(e.from);
     }
     return s;
-  }, [jobs, sparks, resources]);
+  }, [hover, scene]);
+  const dimmed = (id: string) => !!near && !near.has(id);
 
   const path = (id: string) => scene.edges.find((e) => e.id === id)?.d;
   const queuedFor = (backend: string) =>
@@ -396,7 +519,9 @@ export function Graph({ d, sel, onSelect }: {
           <svg aria-hidden width={scene.width} height={scene.height}
                style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
             {scene.edges.map((e) => {
-              const hot = busyEdges.has(e.id);
+              const n = traffic.get(e.id);
+              const hot = n !== undefined;
+              const off = !!near && !near.has(e.from) && !near.has(e.to);
               // Literal colours, not theme keys: MUI's `sx` maps `color` and
               // `bgcolor` onto the palette but NOT `stroke`, so `stroke:
               // "success.main"` emits that string as CSS, the browser drops the
@@ -407,11 +532,25 @@ export function Graph({ d, sel, onSelect }: {
                       stroke={hot ? t.palette.success.main : t.palette.line}
                       strokeWidth={hot ? 1.4 : 1}
                       strokeDasharray={hot ? "3 8" : undefined}
-                      opacity={hot ? 0.85 : 0.55}
+                      opacity={off ? 0.12 : hot ? 0.85 : 0.55}
                       style={{
                         animation: hot ? "hearth-dash 900ms linear infinite" : undefined,
                         transition: "stroke 240ms, opacity 240ms",
                       }} />
+              );
+            })}
+            {/* Three dots reads as "some"; a 3 reads as three. */}
+            {scene.edges.map((e) => {
+              const n = traffic.get(e.id) ?? 0;
+              if (n < 2) return null;
+              return (
+                <g key={`n:${e.id}`} opacity={near && !near.has(e.from) && !near.has(e.to) ? 0.15 : 1}>
+                  <circle cx={e.mid.x} cy={e.mid.y} r={8} fill={t.palette.background.paper}
+                          stroke={t.palette.success.main} strokeWidth={1} />
+                  <text x={e.mid.x} y={e.mid.y + 3.5} textAnchor="middle"
+                        fill={t.palette.success.main}
+                        style={{ font: `600 9px ${MONO}` }}>{n}</text>
+                </g>
               );
             })}
           </svg>
@@ -420,7 +559,7 @@ export function Graph({ d, sel, onSelect }: {
               re-render every edge under it. */}
           <Box aria-hidden sx={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
             {jobs.map((j, i) => {
-              const p = path(edgeOf(j) ?? "");
+              const p = path(edgeOf(j, peerNames) ?? "");
               if (!p) return null;
               return (
                 <Box key={`${j.model}:${j.caller}:${j.since}`} sx={{
@@ -455,6 +594,7 @@ export function Graph({ d, sel, onSelect }: {
             const queued = Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0);
             return (
               <NodeBox p={p} tone={queued ? "work" : "live"} selected={sel?.kind === "self"}
+                       dim={dimmed("self")} onHover={(on) => setHover(on ? "self" : null)}
                        onSelect={() => onSelect({ kind: "self" })}
                        title="this node — click for federation switches and unsaved runtime changes">
                 <Head tone={queued ? "warning.main" : "success.main"} name={self?.name ?? "this node"}
@@ -479,6 +619,8 @@ export function Graph({ d, sel, onSelect }: {
             return (
               <NodeBox key={n.name} p={p} tone={!n.up ? "fault" : n.free === 0 ? "work" : "live"}
                        selected={sel?.kind === "peer" && sel.id === n.name}
+                       dim={dimmed(`peer:${n.name}`)}
+                       onHover={(on) => setHover(on ? `peer:${n.name}` : null)}
                        onSelect={() => onSelect({ kind: "peer", id: n.name })}
                        title={n.up
                          ? `${n.name} is answering — click to link or unlink its models`
@@ -508,6 +650,8 @@ export function Graph({ d, sel, onSelect }: {
             return (
               <NodeBox key={b.name} p={p} tone={tone}
                        selected={sel?.kind === "backend" && sel.id === b.name}
+                       dim={dimmed(`backend:${b.name}`)}
+                       onHover={(on) => setHover(on ? `backend:${b.name}` : null)}
                        onSelect={() => onSelect({ kind: "backend", id: b.name })}
                        title={held.length
                          ? `blocked — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
@@ -519,6 +663,7 @@ export function Graph({ d, sel, onSelect }: {
                     : b.knowsWarm === false ? "warmth unknown" : "nothing loaded"}
                 </Sub>
                 {q > 0 && <Sub color="warning.main">{q} waiting</Sub>}
+                <Sparks calls={(d.calls ?? []).filter((c) => c.backend === b.name)} now={now} />
               </NodeBox>
             );
           })}
@@ -532,6 +677,8 @@ export function Graph({ d, sel, onSelect }: {
             return (
               <NodeBox key={r.name} p={p} tone={r.holder ? "live" : "idle"}
                        selected={sel?.kind === "resource" && sel.id === r.name}
+                       dim={dimmed(`resource:${r.name}`)}
+                       onHover={(on) => setHover(on ? `resource:${r.name}` : null)}
                        onSelect={() => onSelect({ kind: "resource", id: r.name })}
                        title={r.holder
                          ? `${r.holder} is running on ${r.name}; everything else declared on it waits`
