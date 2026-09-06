@@ -562,7 +562,7 @@ export function Graph({ d, sel, onSelect }: {
               const p = path(edgeOf(j, peerNames) ?? "");
               if (!p) return null;
               return (
-                <Box key={`${j.model}:${j.caller}:${j.since}`} sx={{
+                <Box key={j.id} sx={{
                   position: "absolute", width: 7, height: 7, borderRadius: "50%",
                   bgcolor: laneColor(j.lane),
                   boxShadow: "0 0 6px currentColor", color: laneColor(j.lane),

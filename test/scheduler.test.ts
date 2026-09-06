@@ -303,4 +303,33 @@ function holdSlot(s: Scheduler, order: string[]) {
   await Promise.all(sent);
 }
 
+// --- identical jobs stay distinguishable -----------------------------------
+// The console keys particles and queue rows by job id. It used to key them by
+// model+caller+since, which is NOT unique: two concurrent requests for one
+// model from one caller in the same millisecond collide, and React renders one
+// and drops the other — the graph drew a single dot for a pair of jobs while
+// the count beside it correctly said two. So the view must hand out ids that
+// differ even when everything a caller can observe about two jobs is equal.
+{
+  const s = new Scheduler({ lanes });
+  const slot = holdSlot(s, []);
+  await slot.started;
+
+  const same = { lane: "chat", model: "m", caller: "same" } as const;
+  const sent = [s.submit(same, async () => {}), s.submit(same, async () => {})];
+
+  const twins = s.view().filter((j) => j.caller === "same");
+  assert.equal(twins.length, 2, "both identical jobs must be visible");
+  assert.notEqual(twins[0]!.id, twins[1]!.id,
+    "identical jobs need distinct ids, or the console renders one of them");
+  assert.equal(
+    `${twins[0]!.model}:${twins[0]!.caller}:${twins[0]!.since}`,
+    `${twins[1]!.model}:${twins[1]!.caller}:${twins[1]!.since}`,
+    "and the old composite key really does collide — that is the whole point",
+  );
+
+  slot.release();
+  await Promise.all(sent);
+}
+
 console.log("scheduler.test.ts ok");
