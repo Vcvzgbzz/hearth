@@ -28,10 +28,13 @@ declare module "@mui/material/styles" {
     faint: string;
     /** The heavier rule, under section headings and table heads. */
     line: string;
+    /** A healthy peer machine — the one hue that is not a state. */
+    peer: { main: string };
   }
   interface PaletteOptions {
     faint: string;
     line: string;
+    peer?: { main: string };
   }
 }
 

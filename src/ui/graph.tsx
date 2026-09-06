@@ -289,7 +289,7 @@ function useSparks(calls: Call[] | undefined): Spark[] {
 /* ----------------------------------------------------------------- nodes */
 
 /** The shell every node shares: the click target, the selected ring, the tone. */
-function NodeBox({ p, tone, icon, selected, dim, onSelect, onHover, title, children }: {
+function NodeBox({ p, tone, icon, selected, peer, dim, onSelect, onHover, title, children }: {
   p: Placed;
   tone: "live" | "work" | "fault" | "idle";
   icon: IconKind;
