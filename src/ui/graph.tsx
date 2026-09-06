@@ -682,12 +682,22 @@ export function Graph({ d, sel, onSelect }: {
             const p = scene.nodes.get(`backend:${b.name}`);
             if (!p) return null;
             const slots = b.slots ?? 0;
-            const used = slots - (b.free ?? 0);
+            const q = b.queued ?? queuedFor(b.name);
+            // What is RUNNING here, not what admission would refuse.
+            //
+            // `free` goes to 0 the moment another backend takes the card, which
+            // is correct for "may I start something" and wrong for a meter: an
+            // idle video sidecar drew a full slot because the image backend was
+            // busy, claiming work that did not exist.
+            const used = jobs.filter((j) => !j.offbox && j.backend === b.name).length;
             const held = blockers(b, resources);
-            const q = queuedFor(b.name);
+            // Blocked means WAITING, not merely unlucky. A backend with nothing
+            // to do is idle no matter who holds the card it would have wanted,
+            // and painting it amber is how a colour stops meaning anything.
+            const stalled = held.length > 0 && q > 0;
             const loaded = (b.loaded ?? []).map((m) => displayId(m, d.aliases, d.net.available));
             const proxied = b.proxying ?? [];
-            const tone = held.length ? "work"
+            const tone = stalled ? "work"
               : used > 0 || proxied.length ? "live" : q > 0 ? "work" : "idle";
             return (
               <NodeBox key={b.name} p={p} tone={tone}
@@ -695,16 +705,20 @@ export function Graph({ d, sel, onSelect }: {
                        dim={dimmed(`backend:${b.name}`)}
                        onHover={(on) => setHover(on ? `backend:${b.name}` : null)}
                        onSelect={() => onSelect({ kind: "backend", id: b.name })}
-                       title={held.length
-                         ? `blocked — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
+                       title={stalled
+                         ? `${q} waiting on hardware someone else holds — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
+                         : held.length
+                           ? `idle. ${held.map((r) => `${r.holder} holds ${r.name}`).join(", ")}, so it could not start anyway — but it has nothing to start.`
                          : proxied.length
                            ? `${proxied.length} request(s) are being forwarded straight through to ${b.name}. hearth is not scheduling them: they hold no slot, wait for nothing, and the card arbiter cannot see them.`
                            : `${b.name}${b.url ? ` · ${b.url}` : ""} — click for its models`}>
-                <Head tone={held.length ? "warning.main"
+                <Head tone={stalled ? "warning.main"
                             : used > 0 || proxied.length ? "success.main" : "faint"} name={b.name}
                       right={<Pips used={Math.max(0, used)} slots={slots} />} />
-                <Sub color={held.length ? "warning.main" : loaded.length ? "success.main" : "faint"}>
-                  {held.length ? "blocked" : loaded.length ? loaded.join(", ")
+                <Sub color={stalled ? "warning.main" : loaded.length ? "success.main" : "faint"}>
+                  {stalled ? `blocked · ${held.map((r) => r.name).join(", ")}`
+                    : loaded.length ? loaded.join(", ")
+                    : held.length ? `idle · ${held.map((r) => r.name).join(", ")} busy`
                     : b.knowsWarm === false ? "warmth unknown" : "nothing loaded"}
                 </Sub>
                 {q > 0 && <Sub color="warning.main">{q} waiting</Sub>}
