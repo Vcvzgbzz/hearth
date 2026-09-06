@@ -511,7 +511,11 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
   const resources = d.net.resources ?? [];
   const held = blockers(b, resources);
   const slots = b.slots ?? 0;
-  const used = slots - (b.free ?? 0);
+  const q = b.queued ?? 0;
+  // Running here, not "would admission refuse" — `free` drops to 0 when another
+  // backend takes the card, which is a different question.
+  const used = d.q.jobs.filter((j) => !j.offbox && j.backend === b.name && j.state === "running").length;
+  const stalled = held.length > 0 && q > 0;
   const loaded = new Set(b.loaded ?? []);
   const serves = b.serves ?? [];
   // A backend reports its own wire ids; the panel speaks the advertised ones.
@@ -521,11 +525,19 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
     <>
       <Head>{b.name}</Head>
       <Field label="state">
-        <Box sx={{ color: held.length ? "warning.main" : used > 0 ? "success.main" : "faint" }}>
-          {held.length
-            ? `blocked — ${held.map((r) => `${r.holder} has ${r.name}`).join(", ")}`
-            : `${used}/${slots || "?"} in flight · ${b.queued ?? 0} queued`}
+        <Box sx={{ color: stalled ? "warning.main" : used > 0 ? "success.main" : "faint" }}>
+          {`${used}/${slots || "?"} in flight · ${q} queued`}
         </Box>
+        {held.length > 0 && (
+          <Tooltip title={stalled
+            ? "admission checks hardware before this backend's own ceiling, so this is what it is actually waiting on"
+            : "it could not start right now — but it has nothing to start, so this costs nothing"}>
+            <Box sx={{ color: stalled ? "warning.main" : "faint", mt: 0.5, cursor: "help" }}>
+              {stalled ? "blocked — " : "idle — "}
+              {held.map((r) => `${r.holder} holds ${r.name}`).join(", ")}
+            </Box>
+          </Tooltip>
+        )}
         {(b.proxying ?? []).length > 0 && (
           <Tooltip title="hearth forwards these straight through and was never asked to schedule them, so they hold no slot, wait for nothing, and the card arbiter cannot see them. Declaring the path under this backend's routes: is what changes that — and makes hearth the admission control for it.">
             <Box sx={{ color: "warning.main", mt: 0.5, cursor: "help" }}>
