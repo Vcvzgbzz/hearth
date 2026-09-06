@@ -50,6 +50,8 @@
   "devDependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@hugeicons/core-free-icons": "^4.3.0",
+    "@hugeicons/react": "^1.1.10",
     "@mui/material": "^9.3.1",
     "@types/node": "^22.20.1",
     "@types/react": "^19.2.18",
