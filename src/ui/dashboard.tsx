@@ -19,7 +19,9 @@ import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 
 import { Dot, Row, Section, Spacer, StatTile, Tag } from "./bits.js";
-import { BackendPanel, PeerPanel, ResourcePanel, SelfPanel, type Ctx } from "./inspect.js";
+import {
+  BackendPanel, PanelHeadFor, PeerPanel, ResourcePanel, SelfPanel, type Ctx,
+} from "./inspect.js";
 import { History, ModelsTable, QueueTable } from "./tables.js";
 import { MONO } from "./theme.js";
 import type { UiData } from "./types.js";
@@ -112,11 +114,21 @@ export default function Dashboard({ d, ctx, dead, menu }: {
             {resources.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 280px))",
                          gap: 1.5, mb: backends.length ? 1.5 : 0 }}>
-                {resources.map((r) => <Card key={`r:${r.name}`}><ResourcePanel name={r.name} d={d} /></Card>)}
+                {resources.map((r) => (
+                  <Card key={`r:${r.name}`}>
+                    <PanelHeadFor d={d} sel={{ kind: "resource", id: r.name }} />
+                    <ResourcePanel name={r.name} d={d} />
+                  </Card>
+                ))}
               </Box>
             )}
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-              {backends.map((b) => <Card key={`b:${b.name}`}><BackendPanel b={b} d={d} ctx={ctx} /></Card>)}
+              {backends.map((b) => (
+                <Card key={`b:${b.name}`}>
+                  <PanelHeadFor d={d} sel={{ kind: "backend", id: b.name }} />
+                  <BackendPanel b={b} d={d} ctx={ctx} />
+                </Card>
+              ))}
             </Box>
           </Section>
 
@@ -130,8 +142,16 @@ export default function Dashboard({ d, ctx, dead, menu }: {
 
           <Section title="Peers" card>
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-              <Card><SelfPanel d={d} ctx={ctx} /></Card>
-              {peers.map((n) => <Card key={n.name}><PeerPanel n={n} d={d} ctx={ctx} /></Card>)}
+              <Card>
+                <PanelHeadFor d={d} sel={{ kind: "self" }} />
+                <SelfPanel d={d} ctx={ctx} />
+              </Card>
+              {peers.map((n) => (
+                <Card key={n.name}>
+                  <PanelHeadFor d={d} sel={{ kind: "peer", id: n.name }} />
+                  <PeerPanel n={n} d={d} ctx={ctx} />
+                </Card>
+              ))}
             </Box>
           </Section>
 
