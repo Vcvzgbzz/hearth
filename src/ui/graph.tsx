@@ -30,7 +30,7 @@ import Typography from "@mui/material/Typography";
 import { useTheme } from "@mui/material/styles";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { backendIcon, TypeIcon, type IconKind } from "./icons.js";
+import { backendIcon, resourceIcon, TypeIcon, type IconKind } from "./icons.js";
 import { MONO } from "./theme.js";
 import { displayId } from "./lib.js";
 import { blockers } from "./why.js";
@@ -768,24 +768,38 @@ export function Graph({ d, sel, onSelect }: {
             // fix is to say both things rather than to fake a holder.
             const unqueued = backends.filter((b) => (b.resources ?? []).includes(r.name)
               && (b.proxying ?? []).length > 0);
+            // For shared hardware there is no holder to report, so what is worth
+            // saying is how many of the things on it are actually working.
+            const inUse = backends.filter((b) => (b.resources ?? []).includes(r.name)
+              && jobs.some((j) => !j.offbox && j.backend === b.name));
             return (
-              <NodeBox key={r.name} p={p} tone={r.holder ? "live" : unqueued.length ? "work" : "idle"}
-                       icon="card"
+              <NodeBox key={r.name} p={p}
+                       // Shared hardware is never "held", so it never goes green
+                       // for a holder. Busy is still busy: work on it still reads
+                       // as work.
+                       tone={r.holder ? "live" : unqueued.length ? "work"
+                         : r.shared && inUse.length ? "live" : "idle"}
+                       icon={resourceIcon(r.kind)}
                        selected={sel?.kind === "resource" && sel.id === r.name}
                        dim={dimmed(`resource:${r.name}`)}
                        onHover={(on) => setHover(on ? `resource:${r.name}` : null)}
                        onSelect={() => onSelect({ kind: "resource", id: r.name })}
-                       title={r.holder
+                       title={r.shared
+                         ? `${r.name} is shared: everything declared on it runs at once, so hearth does not arbitrate it and nothing waits for it. ${backends.filter((b) => (b.resources ?? []).includes(r.name)).length} backend(s) use it.`
+                         : r.holder
                          ? `${r.holder} is running on ${r.name}; everything else declared on it waits`
                          : unqueued.length
                            ? `${r.name} is busy: ${unqueued.map((b) => b.name).join(", ")} is working on it. But hearth is not scheduling that work — it was forwarded straight through — so hearth cannot make anything else wait for this card while it runs.`
                            : `${r.name} is free — free and still loaded is the normal resting state`}>
                 <Head tone={r.holder ? "success.main" : unqueued.length ? "warning.main" : "faint"} name={r.name} />
-                <Sub color={r.holder ? "success.main" : unqueued.length ? "warning.main" : "faint"}>
-                  {r.holder ? `${r.holder} holding`
+                <Sub color={r.holder || (r.shared && inUse.length) ? "success.main"
+                  : unqueued.length ? "warning.main" : "faint"}>
+                  {r.shared
+                    ? (inUse.length ? `${inUse.length} of ${backends.filter((b) => (b.resources ?? []).includes(r.name)).length} working` : "shared · idle")
+                    : r.holder ? `${r.holder} holding`
                     : unqueued.length ? `${unqueued[0]!.name} · in use`
                     : "free"}
-                  {waiting.length ? ` · ${waiting.length} waiting` : ""}
+                  {!r.shared && waiting.length ? ` · ${waiting.length} waiting` : ""}
                 </Sub>
                 {/* A card is either held or not; there is no partial. The bar is
                     a presence, not a percentage. */}
@@ -793,7 +807,11 @@ export function Graph({ d, sel, onSelect }: {
                   height: 3, borderRadius: 2, mt: 0.25,
                   bgcolor: r.holder ? "success.main" : unqueued.length ? "warning.main" : "divider",
                   opacity: r.holder || unqueued.length ? 1 : 0.7,
-                  animation: r.holder || unqueued.length ? "hearth-breathe 2.4s ease-in-out infinite" : undefined,
+                  // Only for hardware something is HOLDING. A shared resource is
+                  // never held, and a bar that pulses on one would be claiming
+                  // the exclusivity this whole change exists to deny.
+                  animation: (r.holder || unqueued.length) && !r.shared
+                    ? "hearth-breathe 2.4s ease-in-out infinite" : undefined,
                   transition: "background-color 240ms",
                 }} />
               </NodeBox>

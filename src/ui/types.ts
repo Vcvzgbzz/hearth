@@ -61,6 +61,16 @@ export interface Backend {
  */
 export interface Resource {
   name: string;
+  /** What to draw it as. Never reaches admission. */
+  kind?: "gpu" | "cpu" | "other";
+  /**
+   * Several backends may use it at once, so it is not arbitrated at all.
+   *
+   * `holder` is therefore always null for one of these — correctly: nobody is
+   * holding it, several things are using it. Drawing that as "free" would be
+   * the same lie the console used to tell about forwarded work.
+   */
+  shared?: boolean;
   holder: string | null;
   backends: string[];
 }

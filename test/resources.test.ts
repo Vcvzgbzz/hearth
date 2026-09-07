@@ -25,6 +25,7 @@ import type { AddressInfo } from "node:net";
 
 import { parseConfig } from "../src/config.js";
 import { silentLogger } from "../src/log.js";
+import { BackendPool } from "../src/pool.js";
 import { ResourceArbiter } from "../src/resources.js";
 import { Scheduler } from "../src/scheduler.js";
 import { createNode } from "../src/server.js";
@@ -337,3 +338,79 @@ function pool(concurrency = 1) {
 }
 
 console.log("resources.test.ts ok");
+
+// --- declared resources: shared hardware is not arbitrated -----------------
+// The hazard this removes: `resources:` has always meant "must not share", so
+// the only safe way to describe a CPU that six sidecars sit on was to say
+// nothing — which is why the console could not draw what they run on. Saying it
+// under the old rules would have SERIALIZED them and, worse, unloaded each
+// other's models on every dispatch, since taking a resource evicts everyone
+// else holding it.
+{
+  const cfg = parseConfig({
+    name: "shared",
+    resources: { gpu0: { kind: "gpu" }, cpu: { kind: "cpu", shared: true } },
+    backends: [
+      { name: "guard", url: "http://127.0.0.1:1", serves: ["guard"], resources: ["cpu"] },
+      { name: "judge", url: "http://127.0.0.1:2", serves: ["judge"], resources: ["cpu"] },
+      { name: "swapA", url: "http://127.0.0.1:3", serves: ["a"], resources: ["gpu0"] },
+      { name: "swapB", url: "http://127.0.0.1:4", serves: ["b"], resources: ["gpu0"] },
+    ],
+  });
+  assert.equal(cfg.resources.cpu!.shared, true);
+  assert.equal(cfg.resources.gpu0!.shared, false, "shared is opt-in");
+
+  const p = new BackendPool(cfg, silentLogger);
+  const byName = (n: string) => p.resources().find((r) => r.name === n)!;
+
+  // Still DISPLAYED — the whole point. The console must be able to draw what a
+  // sidecar runs on.
+  assert.deepEqual(byName("cpu").backends.sort(), ["guard", "judge"]);
+  assert.equal(byName("cpu").kind, "cpu");
+  assert.equal(byName("cpu").shared, true);
+
+  // ...and never arbitrated. Hold the CPU with one backend; the other still
+  // starts. This goes through the pool's own schedulers, so it is testing the
+  // filtering pool.ts does rather than a list assembled by the test.
+  const held = gate();
+  let judgeRan = false;
+  void p.get("guard")!.scheduler.submit(
+    { lane: "chat", model: "guard", caller: "t" }, () => held.wait());
+  await tick();
+  void p.get("judge")!.scheduler.submit(
+    { lane: "chat", model: "judge", caller: "t" }, async () => { judgeRan = true; });
+  await tick();
+  assert.equal(judgeRan, true, "a shared resource must not serialize the backends on it");
+  assert.equal(byName("cpu").holder, null, "and nobody ever holds it");
+  held.open();
+
+  // The control: gpu0 was NOT declared shared, so it still excludes.
+  const gpuHeld = gate();
+  let bRan = false;
+  void p.get("swapA")!.scheduler.submit(
+    { lane: "chat", model: "a", caller: "t" }, () => gpuHeld.wait());
+  await tick();
+  void p.get("swapB")!.scheduler.submit(
+    { lane: "chat", model: "b", caller: "t" }, async () => { bRan = true; });
+  await tick();
+  assert.equal(bRan, false, "exclusive hardware still excludes — that is the default");
+  gpuHeld.open();
+  await tick();
+
+  // An undeclared name keeps meaning what it always did.
+  const bare = new BackendPool(parseConfig({
+    name: "bare",
+    backends: [{ name: "a", url: "http://127.0.0.1:1", serves: ["m"], resources: ["gpuX"] }],
+  }), silentLogger);
+  assert.equal(bare.resources()[0]!.kind, "gpu", "undeclared is a gpu");
+  assert.equal(bare.resources()[0]!.shared, false, "and exclusive");
+}
+
+// kind is validated at startup, not discovered as a wrong icon weeks later.
+assert.throws(
+  () => parseConfig({
+    name: "n", resources: { x: { kind: "quantum" } },
+    backends: [{ name: "a", url: "http://127.0.0.1:1", serves: ["m"] }],
+  }),
+  /kind must be gpu, cpu or other/,
+);

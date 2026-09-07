@@ -318,6 +318,48 @@ finished a minute ago still has weights resident, and on a card sized for one
 model that is the same as occupied. Eviction is expensive, so it is logged
 (`pool.evict`) and only happens on the idle-to-busy edge.
 
+#### Hardware that is not a card
+
+Everything above assumes overlapping means taking turns, which is true of a GPU
+and false of a CPU. Six small sidecars share one CPU perfectly happily, and
+serializing them would be wrong — badly wrong, given the paragraph above:
+taking a resource *unloads* every other backend holding it, so describing a
+shared CPU under those rules would thrash the models least able to afford it.
+
+So there was no safe way to say "these run on the CPU", and the only option was
+to say nothing — which left the console unable to draw what half a deployment
+runs on.
+
+Declare the resource and it can:
+
+```yaml
+resources:
+  gpu0: { kind: gpu }
+  gpu1: { kind: gpu }
+  cpu:  { kind: cpu, shared: true }
+
+backends:
+  - { name: swap,  url: "...", resources: [gpu0] }
+  - { name: guard, url: "...", resources: [cpu] }
+  - { name: judge, url: "...", resources: [cpu] }
+```
+
+`shared: true` means several backends may use it at once, and hearth does not
+arbitrate it at all — a shared resource is kept away from the arbiter rather
+than the arbiter being taught a second mode, so nothing waits for it and nothing
+is evicted off it. `guard` and `judge` now say what they run on, and the status
+page draws them on it.
+
+`kind` is `gpu`, `cpu` or `other` and is display only — it picks the mark on the
+status page and never reaches admission. `other` is there because this mechanism
+is just a named mutex with a picture, and it will fit things neither word
+describes.
+
+The whole block is optional and additive: a name a backend uses but nobody
+declares is an exclusive `gpu`, which is what every config written before this
+meant by it. A `kind` that is not one of the three is refused at startup rather
+than discovered later as the wrong icon.
+
 Omit `resources` and nothing changes, which is every config that predates it.
 
 ### Backends that don't speak the OpenAI API

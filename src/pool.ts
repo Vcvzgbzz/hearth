@@ -80,6 +80,21 @@ export class BackendPool {
    * saying why or what it cost. A ring of twenty, same as everything else here,
    * dies with the process.
    */
+  /**
+   * The subset of a backend's resources that are actually arbitrated.
+   *
+   * Shared hardware is filtered out HERE, before the scheduler or the arbiter
+   * ever see it, rather than by teaching them a second mode. `resources.ts` is
+   * mutual exclusion and stays that way; a shared resource is simply not a thing
+   * it is asked about.
+   *
+   * Display is the one place that must NOT use this: the console draws what a
+   * backend runs on, which includes the hardware nobody is fighting over.
+   */
+  private arbitrated(names: readonly string[]): string[] {
+    return names.filter((n) => !this.cfg.resources[n]?.shared);
+  }
+
   private readonly evicted: { t: number; backend: string; for: string; resources: string[] }[] = [];
 
   constructor(
@@ -116,14 +131,14 @@ export class BackendPool {
           // to a backend that batches; without this the scheduler sees a
           // foreign job and refuses to run them together.
           wire: (m) => this.outboundId(m),
-          resources: b.resources,
+          resources: this.arbitrated(b.resources),
           arbiter: this.arbiter,
           // Winning the arbitration only means nobody else is RUNNING on this
           // hardware. Anything that ran recently still has weights resident on
           // it, which on a card sized for one model is the same as it being
           // occupied — so ask the overlapping backends to let go before we
           // load.
-          evict: b.resources.length > 0 ? () => this.evictFor(b) : undefined,
+          evict: this.arbitrated(b.resources).length > 0 ? () => this.evictFor(b) : undefined,
         }),
       };
       this.slots.push(slot);
@@ -199,13 +214,16 @@ export class BackendPool {
    * no-ops.
    */
   private async evictFor(b: BackendConfig): Promise<void> {
+    // Shared hardware never causes an eviction: that is the whole hazard this
+    // exists to remove. Six sidecars on one CPU must not unload each other.
+    const mine = this.arbitrated(b.resources);
     const overlap = this.slots.filter(
-      (s) => s.name !== b.name && s.cfg.resources.some((r) => b.resources.includes(r)),
+      (s) => s.name !== b.name && this.arbitrated(s.cfg.resources).some((r) => mine.includes(r)),
     );
     for (const s of overlap) {
       if (!s.state.resident()) continue;
-      this.log.info("pool.evict", { backend: s.name, for: b.name, resources: b.resources });
-      this.evicted.push({ t: Date.now(), backend: s.name, for: b.name, resources: [...b.resources] });
+      this.log.info("pool.evict", { backend: s.name, for: b.name, resources: mine });
+      this.evicted.push({ t: Date.now(), backend: s.name, for: b.name, resources: [...mine] });
       while (this.evicted.length > 20) this.evicted.shift();
       await s.state.unload();
     }
@@ -227,16 +245,28 @@ export class BackendPool {
    * last job finishes, so a card with nothing running is genuinely free even
    * though the model that just ran is still sitting in its memory.
    */
-  resources(): { name: string; holder: string | null; backends: string[] }[] {
+  resources(): { name: string; kind: "gpu" | "cpu" | "other"; shared: boolean; holder: string | null; backends: string[] }[] {
     const held = new Map(this.arbiter.snapshot());
     const names = [...new Set(this.slots.flatMap((s) => s.cfg.resources))].sort();
-    return names.map((name) => ({
-      name,
-      // Owner identity is the Scheduler instance, which is what acquire() was
-      // handed. Mapping it back to a name here keeps that private to the pool.
-      holder: this.slots.find((s) => held.get(name) === s.scheduler)?.name ?? null,
-      backends: this.slots.filter((s) => s.cfg.resources.includes(name)).map((s) => s.name),
-    }));
+    return names.map((name) => {
+      // An undeclared name is an exclusive gpu: that is what every config
+      // written before declarations existed meant by it, and what the arbiter
+      // has always done with it.
+      const decl = this.cfg.resources[name] ?? { kind: "gpu" as const, shared: false };
+      return {
+        name,
+        kind: decl.kind,
+        shared: decl.shared,
+        // Owner identity is the Scheduler instance, which is what acquire() was
+        // handed. Mapping it back to a name here keeps that private to the pool.
+        // A shared resource is never acquired, so this is always null for one —
+        // correctly: nobody is holding it, several things are using it.
+        holder: decl.shared
+          ? null
+          : this.slots.find((s) => held.get(name) === s.scheduler)?.name ?? null,
+        backends: this.slots.filter((s) => s.cfg.resources.includes(name)).map((s) => s.name),
+      };
+    });
   }
 
   all(): BackendSlot[] {
