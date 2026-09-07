@@ -20,6 +20,7 @@
 import type { BackendConfig, HearthConfig, RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import type { Logger } from "./log.js";
+import type { ModelStats } from "./stats.js";
 import { ResourceArbiter } from "./resources.js";
 import { Scheduler } from "./scheduler.js";
 
@@ -450,9 +451,13 @@ export class BackendPool {
    * learned yet.
    */
   contextLength(model: string): number | null {
-    const wire = this.outboundId(model);
-    const backend = this.for(model);
-    return backend.state.contextLength(wire);
+    return this.statsFor(model)?.context ?? null;
+  }
+
+  /** Everything known about an advertised model id. Null until it has been
+   *  loaded once — same reason as contextLength, and the same honest gap. */
+  statsFor(model: string): ModelStats | null {
+    return this.for(model).state.statsFor(this.outboundId(model));
   }
 
   /** Everything warm anywhere. Several at once is normal now: one backend per

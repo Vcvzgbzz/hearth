@@ -728,6 +728,60 @@ Policies:
 | `spillover` | local until `spilloverAt` jobs are queued, then a peer. |
 | `fastest`   | compare queue pressure. Ties stay home. |
 
+### Knowing what a borrowed model can take
+
+A model on your own box is one you chose and can go and look up. A model someone
+lends you is a name and nothing else, and the first thing you find out the hard
+way is its context window — usually as a 400 from a stranger's llama.cpp,
+halfway through an agent loop, after the prompt has already crossed the network.
+
+So peers exchange a few facts about each shared model, alongside the capacity
+numbers and on the same poll:
+
+| stat | from | what it changes |
+|---|---|---|
+| `context` | the window the process was launched with (`-c`) | an oversized request never goes there |
+| `vision` | whether it accepts images | an image request never goes there |
+| `tools` | whether its chat template can express tool calls | a request carrying `tools` never goes there |
+| `thinking` | whether its chat template takes a `reasoning_effort` | nothing — see below |
+| `quant` | e.g. `Q5_K - Medium` | nothing — it is the only quality signal you get about hardware you do not own |
+
+All five come from one `/props` call that already happens the first time a model
+is loaded, so this costs no extra traffic. They appear on `/ui` under **takes**,
+and the window has been on `/v1/models` as `context_length` all along.
+
+Two rules make it safe to act on:
+
+**A request is measured before it is routed.** Prompt, tool schemas and reserved
+output (`max_tokens` comes out of the same window), with images charged flat
+rather than by the size of their base64. A peer whose model cannot take *this*
+request is not a candidate for it, so the work comes home to a backend with a
+bigger window instead of crossing the network to be refused. If nothing can take
+it, you get a `400` naming both numbers before anything is queued or evicted —
+and a borrower who asks anyway gets the same `400` from the lender, rather than a
+swap and a wasted load.
+
+`thinking` is reported and never enforced, and the difference is the point. A
+`reasoning_effort` a template cannot express is dropped by the backend and the
+request still answers — refusing it would break work that would have succeeded
+in order to protect nobody. The cost is a shallower answer than you asked for,
+which is a thing to *see* before you send the request, not a thing to fail
+afterwards. Note that this says the lever exists, never where it is set:
+llama.cpp does not report its launch-time reasoning budget, so neither do we.
+
+**Silence is never a limit.** Every one of these is optional in both directions.
+A model that has never been loaded, a backend that does not answer `/props`, a
+peer speaking protocol 1 — all report nothing, and nothing refuses nothing. The
+backend remains the authority on its own limits; this only moves the clear
+refusals to the near side of the network, where the message can name numbers and
+the request can still be sent somewhere else.
+
+The estimate is `chars / 3.5`, not a real tokenizer: tokenizing properly means
+shipping a vocab per model or asking the backend, which loads it. It reads about
+a tenth low on dense text, which is the safe direction — this code only ever
+refuses, so reading low errs toward letting a borderline request through to the
+thing that can actually count.
+
 ## Running it on a server
 
 One gotcha, and it will bite you the first time. `npm ci --omit=dev` **fails**

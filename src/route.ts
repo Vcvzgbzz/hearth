@@ -11,6 +11,7 @@
  */
 import type { HearthConfig } from "./config.js";
 import type { PeerRegistry } from "./peers.js";
+import { unfit, type Need } from "./stats.js";
 
 export interface LocalLoad {
   /** Jobs waiting on the local backend, all lanes. */
@@ -65,22 +66,48 @@ export function decide(
   cfg: HearthConfig,
   peers: PeerRegistry,
   local: LocalLoad,
+  /**
+   * What the request needs, when the caller knows. Optional so every caller
+   * that does not deal in chat payloads keeps working unchanged.
+   *
+   * A peer that cannot take THIS request is not a candidate for it. That is the
+   * whole point of carrying model stats over the protocol: an oversized prompt
+   * comes home to a backend with a bigger window instead of crossing the
+   * network to be refused. Only a peer that positively reported a limit is
+   * dropped — silence is not a limit.
+   */
+  need?: Need,
 ): Decision {
   const route = cfg.models[model];
   if (!route || route.policy === "local") {
     return { target: "local", reason: route ? "policy is local" : "no route configured" };
   }
 
-  const candidates = peers.candidates(model, route.peers);
+  let candidates = peers.candidates(model, route.peers);
+  /** The first fit refusal, kept for the reason string: "no peer available" is
+   *  what you get when they are all down, and it would be a confusing thing to
+   *  read about peers that are up and simply too small. */
+  let refused: string | null = null;
+  if (need) {
+    const kept: string[] = [];
+    for (const name of candidates) {
+      // Safe: candidates() only returns peers that map the model.
+      const why = unfit(peers.statsFor(name, peers.theirModelId(name, model)!), need);
+      if (why === null) kept.push(name);
+      else refused ??= `${name} ${why}`;
+    }
+    candidates = kept;
+  }
   if (candidates.length === 0) {
     // A down peer is the normal case here, but if fallbackLocal is off, honour
     // it. This used to only change the reason string, so the one knob meaning
     // "never run this here" worked when a peer errored and did nothing when a
     // peer was simply down. People set it because the local box would OOM.
+    const why = refused ?? "no peer available";
     if (!route.fallbackLocal) {
-      return { target: "unavailable", reason: "no peer available and fallbackLocal is off" };
+      return { target: "unavailable", reason: `${why} and fallbackLocal is off` };
     }
-    return { target: "local", reason: "no peer available" };
+    return { target: "local", reason: why };
   }
 
   const toPeer = (name: string, reason: string): Decision => ({

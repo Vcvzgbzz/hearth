@@ -42,7 +42,7 @@
     "typecheck": "tsc -p tsconfig.test.json && tsc -p tsconfig.ui.json",
     "pretest": "npm run build:ui",
     "dev": "tsx src/cli.ts serve",
-    "test": "tsx test/scheduler.test.ts && tsx test/upstream.test.ts && tsx test/config.test.ts && tsx test/route.test.ts && tsx test/peers.test.ts && tsx test/server.test.ts && tsx test/backpressure.test.ts && tsx test/ui.test.ts && tsx test/backends.test.ts && tsx test/batch.test.ts && tsx test/alias.test.ts && tsx test/warm.test.ts && tsx test/control.test.ts && tsx test/sharing.test.ts && tsx test/state.test.ts && tsx test/residency.test.ts && tsx test/saveconfig.test.ts && tsx test/security.test.ts && tsx test/params.test.ts && tsx test/resources.test.ts && tsx test/routes.test.ts && tsx test/context.test.ts && tsx test/passthrough.test.ts"
+    "test": "tsx test/scheduler.test.ts && tsx test/upstream.test.ts && tsx test/config.test.ts && tsx test/route.test.ts && tsx test/peers.test.ts && tsx test/server.test.ts && tsx test/backpressure.test.ts && tsx test/ui.test.ts && tsx test/backends.test.ts && tsx test/batch.test.ts && tsx test/alias.test.ts && tsx test/warm.test.ts && tsx test/control.test.ts && tsx test/sharing.test.ts && tsx test/state.test.ts && tsx test/residency.test.ts && tsx test/saveconfig.test.ts && tsx test/security.test.ts && tsx test/params.test.ts && tsx test/resources.test.ts && tsx test/routes.test.ts && tsx test/context.test.ts && tsx test/stats.test.ts && tsx test/passthrough.test.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0"

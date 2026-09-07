@@ -19,6 +19,21 @@ export interface Route {
   queue: boolean;
 }
 
+/**
+ * What a model can take, learned from the backend running it.
+ *
+ * Every field optional and absent-when-unknown, which the page must render as
+ * "not asked yet" rather than "no limit" — a model that has never been loaded
+ * reports nothing at all, and drawing that as unlimited is the one wrong answer.
+ */
+export interface ModelStats {
+  context?: number;
+  vision?: boolean;
+  tools?: boolean;
+  thinking?: boolean;
+  quant?: string;
+}
+
 export interface Backend {
   name: string;
   url?: string;
@@ -96,6 +111,9 @@ export interface Node {
   configured?: string[];
   /** Their ids we have not claimed. */
   unmapped?: string[];
+  /** Per model, in OUR ids. Per node because two nodes can serve the same id
+   *  with different windows, and a merged map would have to pick one. */
+  stats?: Record<string, ModelStats>;
   /** our id -> theirs. Effective, so a runtime link shows up. */
   map?: Record<string, string>;
   free: number | null;

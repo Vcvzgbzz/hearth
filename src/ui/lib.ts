@@ -16,6 +16,12 @@ export const since = (ms: number): string => {
 };
 
 /** Wall clock, HH:MM. */
+/** A context window, the way people say them: 131072 -> "128k". Exact below
+ *  1024, because a 512-token embedding window rounded to "1k" would be wrong in
+ *  the direction that matters. */
+export const ctxLabel = (n: number): string =>
+  n >= 1024 ? `${Math.round(n / 1024)}k` : String(n);
+
 export const clock = (t: number): string => new Date(t).toTimeString().slice(0, 5);
 
 /**

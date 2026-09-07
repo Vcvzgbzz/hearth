@@ -25,6 +25,7 @@ import { BackendPool } from "./pool.js";
 import { decide } from "./route.js";
 import { History } from "./history.js";
 import { QueueFullError } from "./scheduler.js";
+import { needsOf, unfit, type ModelStats } from "./stats.js";
 import { UI_HTML } from "./ui.js";
 import { send, type UpstreamResponse } from "./upstream.js";
 
@@ -389,12 +390,16 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // queue behind itself when a peer could have started it.
     const cap = local.scheduler.capacityFor(model);
     const queuedTotal = Object.values(cap.queued).reduce((a, b) => a + b, 0);
+    // What this request asks for, so routing can skip a peer whose model is too
+    // small for it rather than sending the prompt across the network to be
+    // refused there.
+    const need = needsOf(payload);
     const decision = decide(model, cfg, peers, {
       queued: queuedTotal,
       free: cap.free,
       slots: cap.slots,
       loaded: local.state.loaded(),
-    });
+    }, need);
 
     const runLocal = async (): Promise<void> => {
       await local.state.ensureFresh();
@@ -417,13 +422,31 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       apiError(
         res,
         503,
-        `${model} runs only on a peer, and no peer is available (${decision.reason})`,
+        // "none can take it" rather than "none is available": since routing
+        // started reading model stats, a peer can be up, mapped and simply too
+        // small for this request, and the reason in the brackets says so.
+        `${model} runs only on a peer, and none can take it (${decision.reason})`,
         "server_error",
       );
       return;
     }
 
     if (decision.target === "local") {
+      // Too big (or too rich) for the model that would run it here. Refused
+      // now, with both numbers, rather than after a queue wait and a swap — and
+      // only on something the backend actually told us, so a model we have
+      // never loaded is never refused on a guess. The backend stays the
+      // authority on its own limits: this catches the clear cases early and
+      // does not replace its check. The peer-failed fallback below does not
+      // repeat it, so a request that fitted the peer but not the local model
+      // still reaches the backend and is refused there — one rare path with
+      // an uglier error, not a wrong answer.
+      const tooMuch = unfit(pool.statsFor(model), need);
+      if (tooMuch !== null) {
+        logRequest(t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
+        apiError(res, 400, `${model} ${tooMuch}`, "invalid_request_error");
+        return;
+      }
       try {
         await local.scheduler.submit(
           { lane, model, caller, ...(cfg.scheduler.maxPerCaller > 0 ? { maxPerCaller: cfg.scheduler.maxPerCaller } : {}), signal },
@@ -624,7 +647,15 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // unchanged so a protocol-1 borrower keeps scoring us the old way instead
       // of seeing an unrecognisable answer and marking us down.
       const models: Record<string, unknown> = {};
-      for (const m of shared()) models[m] = pool.capacityFor(m);
+      for (const m of shared()) {
+        // Capacity says whether they can start now; stats say whether their
+        // request can run at all. Both are per model, both are things a
+        // borrower has no other way of finding out, and they ride the same
+        // poll. Absent when we have never loaded it — silence is not a claim
+        // that there is no limit, see unfit().
+        const stats = pool.statsFor(m);
+        models[m] = { ...pool.capacityFor(m), ...(stats ? { stats } : {}) };
+      }
       json(res, 200, {
         ...agg,
         resident: agg.resident !== null && shared().includes(agg.resident) ? agg.resident : null,
@@ -1183,6 +1214,18 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         apiError(res, 403, `${cfg.name} does not share "${model}"`, "permission_error");
         return;
       }
+      if (fromPeer !== null) {
+        // A borrower who ignored our advertised stats, or whose estimate came
+        // in low, gets the same answer the local path gives — before the work
+        // is queued and before it evicts anything. 4xx on purpose: their
+        // request is wrong, and PeerStatusError.isRefusal means they hand that
+        // verdict to their caller instead of retrying it at us.
+        const why = unfit(pool.statsFor(model), needsOf(payload));
+        if (why !== null) {
+          apiError(res, 400, `${model} ${why}`, "invalid_request_error");
+          return;
+        }
+      }
 
       // Peers don't choose our lane, see cfg.peerLane. Local callers can, with
       // a non-standard `lane` field, which we strip before forwarding so it
@@ -1706,6 +1749,16 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       if (j.offbox && j.peer) sendingTo.set(j.peer, (sendingTo.get(j.peer) ?? 0) + 1);
     }
 
+    // What each model can take, per node rather than merged into one map. Two
+    // nodes can serve the same id with different windows — a 262k local coder
+    // and a peer running the same weights at 32k — and a union would have to
+    // pick one of those numbers and get it wrong for somebody.
+    const selfStats: Record<string, ModelStats> = {};
+    for (const m of pool.catalog()) {
+      const st = pool.statsFor(m);
+      if (st) selfStats[m] = st;
+    }
+
     const nodes: Record<string, unknown>[] = [
       {
         name: cfg.name,
@@ -1713,6 +1766,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         up: true,
         serves: pool.catalog(),
         loaded: pool.loaded(),
+        stats: selfStats,
         free: cap.free,
         slots: cap.slots,
         queued: Object.values(cap.queued).reduce((a, b) => a + b, 0),
@@ -1795,6 +1849,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       const mappedServes = theirServes.map((m) => toMine.get(m)).filter((m): m is string => !!m);
       const unmapped = theirServes.filter((m) => !toMine.has(m));
 
+      const peerStats: Record<string, ModelStats> = {};
+      for (const [mine, theirId] of Object.entries(theirs.models)) {
+        const st = peers.statsFor(p.name, theirId);
+        if (st) peerStats[mine] = st;
+      }
+
       if (p.up) {
         for (const m of mappedLoaded) readyNow.add(m);
         for (const m of mappedServes) available.add(m);
@@ -1823,6 +1883,10 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         // what the file said: a runtime link has to show up here or the row you
         // just added would be missing from the table you added it in.
         map: { ...theirs.models },
+        // Keyed by OUR id, like everything else about a peer on this payload,
+        // so the page never has to know their vocabulary. Empty for a peer
+        // speaking protocol 1 or one that has not loaded the model yet.
+        stats: peerStats,
         free: p.capacity?.free ?? null,
         slots: p.capacity?.slots ?? null,
         queued: p.capacity

@@ -24,7 +24,7 @@ import { Dot, mono, Row, Spacer, Tag } from "./bits.js";
 import { CallsTable, Depth, HistTable, Lanes } from "./charts.js";
 import { type Sel } from "./graph.js";
 import { LoadAction, ShareToggle, type Ctx } from "./inspect.js";
-import { displayId, since } from "./lib.js";
+import { ctxLabel, displayId, since } from "./lib.js";
 import { MONO } from "./theme.js";
 import type { Backend, Node, UiData } from "./types.js";
 import { waitReason } from "./why.js";
@@ -237,6 +237,47 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
     );
   };
 
+  /**
+   * What this model can take: window first, then the two capabilities that
+   * change whether a request runs at all.
+   *
+   * Reads the node's own numbers rather than a merged map, self first: a local
+   * request runs on the local backend, so when both we and a peer serve an id,
+   * the number that describes what YOU will get is ours. The tooltip names
+   * whose reading it is, because on a borrowed model it is not ours.
+   */
+  const Takes = ({ r }: { r: ModelRow }) => {
+    const src = [...r.on.filter((n) => n.self), ...r.on.filter((n) => !n.self)]
+      .find((n) => n.stats?.[r.model]);
+    const st = src?.stats?.[r.model];
+    if (!st || !src) {
+      return (
+        <Tooltip title="nothing reported yet — a model has to be loaded once before its backend will say what it holds">
+          <Box component="span" sx={{ color: "faint" }}>—</Box>
+        </Tooltip>
+      );
+    }
+    const notes = [
+      `reported by ${src.name}`,
+      st.quant ? `quantized ${st.quant}` : null,
+      st.vision === false ? "text only, no images" : null,
+      st.tools === false ? "no tool calls" : null,
+      st.thinking === false ? "no thinking level" : null,
+    ].filter(Boolean).join(" · ");
+    return (
+      <Tooltip title={notes}>
+        <Row spacing={0.75} align="baseline" component="span" sx={{ display: "inline-flex" }}>
+          <Typography component="span" sx={{ ...mono, fontSize: 11 }}>
+            {st.context === undefined ? "—" : ctxLabel(st.context)}
+          </Typography>
+          {st.vision === true && <Tag>vision</Tag>}
+          {st.tools === true && <Tag>tools</Tag>}
+          {st.thinking === true && <Tag>thinking</Tag>}
+        </Row>
+      </Tooltip>
+    );
+  };
+
   const State = ({ r }: { r: ModelRow }) => (
     <Tooltip title={
       r.route ? "a path, not a model id — this backend does not report what it holds, so neither can we"
@@ -259,12 +300,13 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
         <TableHead>
           <TableRow>
             <TableCell>Model</TableCell><TableCell>Where</TableCell><TableCell>State</TableCell>
+            <TableCell>Takes</TableCell>
             <TableCell>Shared</TableCell><TableCell align="right">Load</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
           {!rows.length && (
-            <TableRow><TableCell colSpan={5} sx={{ color: "faint", py: 2 }}>no models reachable</TableCell></TableRow>
+            <TableRow><TableCell colSpan={6} sx={{ color: "faint", py: 2 }}>no models reachable</TableCell></TableRow>
           )}
           {rows.map((r) => {
             const variants = groups.get(r.model);
@@ -285,6 +327,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
                   </TableCell>
                   <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={r} /></TableCell>
                   <TableCell><State r={r} /></TableCell>
+                  <TableCell><Takes r={r} /></TableCell>
                   <TableCell><ShareToggle model={r.model} d={d} ctx={ctx} /></TableCell>
                   <TableCell align="right">
                     {/* No load button for a route model: /v1/warm takes a model id
@@ -303,6 +346,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
                                        borderLeft: "2px solid", borderColor: "divider" }}>{v}</TableCell>
                       <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={vr} /></TableCell>
                       <TableCell><State r={vr} /></TableCell>
+                      <TableCell><Takes r={vr} /></TableCell>
                       <TableCell><ShareToggle model={v} d={d} ctx={ctx} /></TableCell>
                       <TableCell align="right">
                         {!vr.warm && !vr.unknown && ctx.canWarm && (

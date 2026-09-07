@@ -17,6 +17,7 @@
  */
 import type { WarmSource } from "./config.js";
 import type { Logger } from "./log.js";
+import { known, statsFromProps, type ModelStats } from "./stats.js";
 import { getJson, send } from "./upstream.js";
 
 /** llama-swap only counts a model as loaded once it's ready to serve. */
@@ -60,16 +61,29 @@ export class BackendState {
   private inFlight: Promise<void> | null = null;
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * Per-wire-id context windows, learned from the backend once a model is loaded.
+   * Per-wire-id model stats, learned from the backend once a model is loaded.
    *
-   * A model's context length does not change while the backend process lives,
-   * so the cache persists across an unload. It is dropped the moment the model
-   * is seen loaded AGAIN (setLoaded), because the operator may have relaunched
-   * the seat with a different -c in between, and a stale number here is the
-   * exact thing this field exists to prevent. Unknown is null in the cache and
-   * absent on the wire; learnContext fills it.
+   * None of it changes while the backend process lives, so the cache persists
+   * across an unload. It is dropped the moment the model is seen loaded AGAIN
+   * (setLoaded), because the operator may have relaunched the seat with a
+   * different -c in between, and a stale window here is the exact thing this
+   * cache exists to prevent. Unknown is an absent entry, not an empty object:
+   * learnContext retries a model it has learned nothing about.
    */
-  private contextCache = new Map<string, number>();
+  private statsCache = new Map<string, ModelStats>();
+  /**
+   * The cache key for a wire id.
+   *
+   * A `single` backend is one llama-server pinned to one file: its /props
+   * describes whatever it loaded, whatever id the caller asks under. Those ids
+   * rarely match — a bare llama-server reports the gguf PATH as its model id
+   * while `serves` advertises `guard` — so keying by wire id filed the stats
+   * under a name nothing would ever look up, and every sidecar reported an
+   * unknown window forever. One backend, one answer, one key.
+   */
+  private key(wire: string): string {
+    return this.kind === "single" ? "" : wire;
+  }
   /** Per-wire in-flight learnContext, so concurrent callers dedupe. */
   private contextInFlight = new Map<string, Promise<void>>();
 
@@ -161,8 +175,13 @@ export class BackendState {
    * means the model has not been loaded yet, and we never probe a cold model.
    */
   contextLength(wire: string): number | null {
-    const n = this.contextCache.get(wire);
-    return n === undefined ? null : n;
+    return this.statsFor(wire)?.context ?? null;
+  }
+
+  /** Everything we have learned about a loaded model, or null if nothing.
+   *  Same contract as contextLength: absent means unasked, not unlimited. */
+  statsFor(wire: string): ModelStats | null {
+    return this.statsCache.get(this.key(wire)) ?? null;
   }
 
   /**
@@ -175,7 +194,7 @@ export class BackendState {
    */
   private setLoaded(next: string[]): void {
     for (const wire of next) {
-      if (!this.loadedIds.includes(wire)) this.contextCache.delete(wire);
+      if (!this.loadedIds.includes(wire)) this.statsCache.delete(this.key(wire));
     }
     this.loadedIds = next;
   }
@@ -195,10 +214,10 @@ export class BackendState {
    * models list after a load may not yet carry context_length. Never throws.
    */
   async learnContext(wire: string): Promise<void> {
-    if (this.contextCache.has(wire)) return;
+    if (this.statsCache.has(this.key(wire))) return;
     const existing = this.contextInFlight.get(wire);
     if (existing) { await existing; return; }
-    const p = this.fetchContext(wire).then(() => {
+    const p = this.fetchStats(wire).then(() => {
       this.contextInFlight.delete(wire);
     }).catch(() => {
       this.contextInFlight.delete(wire);
@@ -207,27 +226,29 @@ export class BackendState {
     return p;
   }
 
-  private async fetchContext(wire: string): Promise<void> {
+  private async fetchStats(wire: string): Promise<void> {
     try {
-      let n: number | null = null;
+      let stats: ModelStats = {};
       if (this.kind === "llama-swap") {
         if (!this.loadedIds.includes(wire)) return;
-        const props = await getJson<{ default_generation_settings?: { n_ctx?: number } }>(
+        stats = statsFromProps(await getJson<unknown>(
           `${this.url}/upstream/${encodeURIComponent(wire)}/props`,
           { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 },
-        );
-        n = props.default_generation_settings?.n_ctx ?? null;
+        ));
       } else if (this.kind === "single") {
-        const props = await getJson<{ default_generation_settings?: { n_ctx?: number } }>(
+        stats = statsFromProps(await getJson<unknown>(
           `${this.url}/props`,
           { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 },
-        );
-        n = props.default_generation_settings?.n_ctx ?? null;
+        ));
       } else if (this.kind === "ollama") {
-        n = await this.ollamaContext(wire);
+        const n = await this.ollamaContext(wire);
+        if (n !== null) stats = { context: n };
       }
-      if (n !== null) {
-        this.contextCache.set(wire, n);
+      // Only when something came back. An empty object cached here would mean
+      // "asked and got nothing", which is indistinguishable from "asked and got
+      // an answer with no fields" — and would stop us ever asking again.
+      if (known(stats)) {
+        this.statsCache.set(this.key(wire), stats);
       }
     } catch (e) {
       this.log.debug("backend.context_learn_failed", {
