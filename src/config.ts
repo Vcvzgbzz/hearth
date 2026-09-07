@@ -13,6 +13,8 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
+import { known, type ModelStats } from "./stats.js";
+
 export type RoutePolicy = "local" | "peer" | "spillover" | "fastest";
 
 export interface PeerConfig {
@@ -251,6 +253,14 @@ export interface ModelRoute {
    * model without it, which is nearly all of them.
    */
   params: Record<string, unknown> | null;
+  /**
+   * What this model can take, when nothing can be asked.
+   *
+   * Only for what cannot be learned: a cold model, or a backend that does not
+   * speak /props. Whatever the running process reports beats this, field by
+   * field. See declaredStats().
+   */
+  stats: ModelStats | null;
   /**
    * How many jobs for THIS model may run at once locally, or null to use the
    * backend's own `concurrency`.
@@ -530,6 +540,52 @@ function count(v: unknown, where: string, fallback: number, min = 1): number {
  * shape under the client, and `lane` is hearth's own routing field, stripped
  * before forwarding. An empty object is the same as not saying it.
  */
+/**
+ * What the operator says a model can take, for the cases nothing can measure.
+ *
+ * Stats are normally LEARNED from the running process, which is authoritative
+ * and needs no config at all. Two cases that cannot reach: a model that has
+ * never been loaded (asking llama-swap for its props loads it, which is the
+ * eviction and the 60-second load this check exists to avoid), and a backend
+ * that is not OpenAI-shaped and can never answer at all. Both would otherwise
+ * be unknown forever, and unknown refuses nothing — so the first oversized
+ * request evicts somebody's resident model, waits out a cold load, and fails.
+ *
+ * Declaring is how you close that. It is a PREDICTION of how the process will
+ * be launched, so the moment the real thing loads, its own answer wins.
+ *
+ * Loud on a bad value, unlike the same fields arriving from a peer, which are
+ * quietly dropped. A peer is a stranger whose mistakes are not ours to fix; a
+ * config is something the operator can correct, and a silently ignored `visio:
+ * true` is the kind of typo that is discovered months later by its absence.
+ */
+function declaredStats(raw: unknown, id: string): ModelStats | null {
+  if (raw === undefined || raw === null) return null;
+  const where = `models.${id}.stats`;
+  const rec = asRecord(raw, where);
+  const out: ModelStats = {};
+  for (const [k, v] of Object.entries(rec)) {
+    if (k === "context") {
+      if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
+        throw new ConfigError(`${where}.context is "${String(v)}" -- expected a positive whole number of tokens`);
+      }
+      out.context = v;
+    } else if (k === "vision" || k === "tools" || k === "thinking") {
+      if (typeof v !== "boolean") {
+        throw new ConfigError(`${where}.${k} is "${String(v)}" -- expected true or false`);
+      }
+      out[k] = v;
+    } else if (k === "quant") {
+      out.quant = str(v, `${where}.quant`);
+    } else {
+      throw new ConfigError(
+        `${where}.${k} is not a model stat -- expected context, vision, tools, thinking or quant`,
+      );
+    }
+  }
+  return known(out) ? out : null;
+}
+
 function modelParams(raw: unknown, id: string): Record<string, unknown> | null {
   if (raw === undefined || raw === null) return null;
   const where = `models.${id}.params`;
@@ -928,6 +984,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       fallbackLocal: bool(entry.fallbackLocal, `models.${id}.fallbackLocal`, true),
       concurrency: modelConcurrency(entry, id),
       params,
+      stats: declaredStats(entry.stats, id),
     };
   }
 

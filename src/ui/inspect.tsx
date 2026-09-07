@@ -25,7 +25,7 @@ import { useState } from "react";
 import { CopyButton, Pre, Row, Why } from "./bits.js";
 import { Graph, type Sel } from "./graph.js";
 import { backendIcon, resourceIcon, TypeIcon, type IconKind } from "./icons.js";
-import { clock, displayId, postWrite, since } from "./lib.js";
+import { clock, ctxLabel, displayId, postWrite, since } from "./lib.js";
 import { MONO } from "./theme.js";
 import { blockers } from "./why.js";
 import { yamlScalar as yq } from "../yamlq.js";
@@ -412,7 +412,13 @@ export function ModelLine({ model, d, ctx, warm, where, peer }: {
           textOverflow: "ellipsis", whiteSpace: "nowrap",
           color: warm ? "text.primary" : "text.secondary",
         }}>{model}</Typography>
-        {where && <Typography component="div" sx={{ fontFamily: MONO, fontSize: 10, color: "faint" }}>{where}</Typography>}
+        {/* Truncates like the name above it. A subtitle that wraps pushes into
+            the warm/load column beside it, and the row it collides with is
+            whichever model happens to have the most to say about itself. */}
+        {where && <Typography component="div" sx={{
+          fontFamily: MONO, fontSize: 10, color: "faint",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>{where}</Typography>}
       </Box>
       {/* One row shape, always. The load button used to vanish on a warm model,
           so the only warm row in a list of seven was also the only one whose
@@ -647,6 +653,7 @@ export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx })
   const loaded = new Set(b.loaded ?? []);
   const serves = b.serves ?? [];
   const advertised = (wire: string) => displayId(wire, d.aliases, d.net.available);
+  const self = d.net.nodes.find((n) => n.self);
 
   return (
     <>
@@ -716,8 +723,24 @@ export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx })
         <Section label="models" count={serves.length}>
           {serves.map((wire) => {
             const m = advertised(wire);
+            // What it can take, under the name. Absent until the model has been
+            // loaded once — the backend has not been asked yet, and a blank
+            // subtitle is the honest way to say so.
+            const st = self?.stats?.[m];
+            const takes = st && [
+              st.context !== undefined ? ctxLabel(st.context) : null,
+              st.vision === true ? "vision" : null,
+              st.tools === true ? "tools" : null,
+              st.thinking === true ? "thinking" : null,
+              // The panel has room for the word, and a cold model's whole
+              // subtitle can be a declaration nothing has confirmed.
+              st.from === "declared" ? "declared" : null,
+              // Not the quantization: it is the one stat here that changes
+              // nothing about what you can send, and this line has to share a
+              // row with the load button. It is in the models table's tooltip.
+            ].filter(Boolean).join(" · ");
             return (
-              <ModelLine key={wire} model={m} d={d} ctx={ctx}
+              <ModelLine key={wire} model={m} d={d} ctx={ctx} where={takes || undefined}
                          warm={loaded.has(wire) || loaded.has(m)} peer={null} />
             );
           })}

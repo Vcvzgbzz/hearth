@@ -18,6 +18,7 @@
 import type { HearthConfig, PeerConfig } from "./config.js";
 import { Controls } from "./controls.js";
 import type { Logger } from "./log.js";
+import { cleanStats, type ModelStats } from "./stats.js";
 import { UpstreamError, getJson } from "./upstream.js";
 
 /** What a peer says about itself: Scheduler.capacity(), plus what it has loaded
@@ -83,7 +84,13 @@ export interface PeerCapacity {
    * and routing falls back to it. Both are sent, so an old borrower keeps
    * working against a new host.
    */
-  models?: Record<string, { slots: number; free: number; queued: number; warm: boolean }>;
+  models?: Record<string, {
+    slots: number; free: number; queued: number; warm: boolean;
+    /** What that model can take. Absent from a peer that has never loaded it,
+     *  or one that predates this field — both mean "no claim", never "no
+     *  limit". See unfit(). */
+    stats?: ModelStats;
+  }>;
 }
 
 /** What routing needs to score one model. Per-model where the peer offers it,
@@ -206,6 +213,19 @@ export class PeerRegistry {
     };
   }
 
+  /**
+   * What a peer says one of their models can take, or null if they have not
+   * said.
+   *
+   * Only the per-model reading answers this: the node-level fallback describes
+   * a whole box and there is no such thing as a box's context window. A
+   * protocol-1 peer therefore reports nothing here, which is correct — we know
+   * nothing about their limits and must not invent any.
+   */
+  statsFor(peer: string, theirModel: string): ModelStats | null {
+    return this.status.get(peer)?.capacity?.models?.[theirModel]?.stats ?? null;
+  }
+
   /** Their id for one of our models, if they've agreed to serve it. */
   theirModelId(peer: string, model: string): string | undefined {
     return this.byName.get(peer)?.models[model];
@@ -264,6 +284,13 @@ export class PeerRegistry {
       cap.loaded = strings(cap.loaded);
       if (typeof cap.models !== "object" || cap.models === null || Array.isArray(cap.models)) {
         cap.models = undefined;
+      } else {
+        // Same reasoning as the coercion above, one level down. A `context`
+        // arriving as a string would be compared against a number and silently
+        // decide where somebody's prompt runs.
+        for (const entry of Object.values(cap.models)) {
+          if (entry && typeof entry === "object") entry.stats = cleanStats(entry.stats);
+        }
       }
 
       const was = s.up;

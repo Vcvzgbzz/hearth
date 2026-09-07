@@ -155,6 +155,7 @@ const DEFAULT_ROUTE: ModelRoute = {
   fallbackLocal: true,
   concurrency: null,
   params: null,
+  stats: null,
 };
 
 export class Overrides {
@@ -542,8 +543,9 @@ export class Overrides {
    * Stop a route sending work away, keeping anything local about it.
    *
    * The difference matters more than it looks. A route is not only a policy: it
-   * can carry `backend`, `as` and `concurrency`, which are facts about YOUR machine
-   * and have nothing to do with the peer you just unlinked. Deleting the whole
+   * can carry `backend`, `as`, `concurrency` and declared `stats`, which are
+   * facts about YOUR machine and have nothing to do with the peer you just
+   * unlinked. Deleting the whole
    * entry — which is what this used to do — silently threw away a vLLM batch
    * size or a backend pin, and then the config writer deleted the key from the
    * file along with whatever comments were on it. Irreversible, on an action
@@ -556,7 +558,8 @@ export class Overrides {
     const r = this.cfg.models[id];
     if (!r) return;
     const onlyAPolicy =
-      r.backend === null && r.as === null && r.concurrency === null && r.spilloverAt === 1 && r.params === null;
+      r.backend === null && r.as === null && r.concurrency === null && r.spilloverAt === 1
+      && r.params === null && r.stats === null;
     if (onlyAPolicy) delete this.cfg.models[id];
     else this.cfg.models[id] = { ...r, policy: "local", peers: [] };
   }

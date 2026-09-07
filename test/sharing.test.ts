@@ -73,7 +73,7 @@ import { createNode } from "../src/server.js";
 
   // An existing route that names its peers is an operator being specific.
   // Widening it to everyone would send work to boxes they left out.
-  cfg.models.pinned = { backend: null, as: null, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null, params: null };
+  cfg.models.pinned = { backend: null, as: null, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null, params: null, stats: null };
   ov.link("friend", "pinned", "pinned", "peer", true);
   assert.deepEqual(cfg.models.pinned!.peers, ["friend"], "an existing peer list is kept");
 
@@ -134,6 +134,21 @@ import { createNode } from "../src/server.js";
     assert.equal(rich.models["vllm-model"]!.policy, "local", "it stops going away");
     assert.equal(rich.models["vllm-model"]!.concurrency, 32, "and keeps what was never about the peer");
     assert.equal(rich.models["vllm-model"]!.backend, "gpu");
+  }
+
+  // Declared stats are the same kind of fact: yours, about your machine, and
+  // the only thing that can check a model nobody has loaded. An unlink that
+  // deleted the entry would take the window with it.
+  {
+    const declared = parseConfig({
+      name: "me",
+      backend: { url: "http://127.0.0.1:1", serves: ["small"], kind: "none" },
+      peers: [{ name: "a", url: "http://127.0.0.1:2", token: "t", models: { small: "theirs" } }],
+      models: { small: { policy: "peer", stats: { context: 4096 } } },
+    });
+    new Overrides(declared).unlink("a", "small");
+    assert.equal(declared.models.small!.policy, "local");
+    assert.equal(declared.models.small!.stats?.context, 4096, "the declared window survives an unlink");
   }
 
   // Unlink drops a route we invented, and leaves one the file declared. The
