@@ -24,6 +24,7 @@ import { useState } from "react";
 
 import { CopyButton, Pre, Row, Why } from "./bits.js";
 import { Graph, type Sel } from "./graph.js";
+import { backendIcon, TypeIcon, type IconKind } from "./icons.js";
 import { clock, displayId, postWrite, since } from "./lib.js";
 import { MONO } from "./theme.js";
 import { blockers } from "./why.js";
@@ -41,19 +42,118 @@ export interface Ctx {
 /* -------------------------------------------------------------- fittings */
 
 /** A label above a value, the unit this panel is built from. */
-export function Field({ label, children, hint }: {
+/**
+ * The rail's two vertical lines.
+ *
+ * Everything hangs off these: a label, a section heading and a list row all
+ * start at the margin, and a value, the panel title and a model name all start
+ * at the gutter. Before this there were five different left edges — the header
+ * floated right of the labels, model names had an indent of their own, and the
+ * value column lined up with nothing above or below it. Each piece looked fine
+ * and the panel felt wrong, which is what a missing grid feels like.
+ *
+ * 64 because it clears the widest label ("in flight") and the 26px mark with
+ * room to breathe, without opening the canyon the old 74-plus-a-gap left
+ * between a short label and its value.
+ */
+const GUTTER = 64;
+
+export function Fact({ label, children, hint }: {
   label: string; children: React.ReactNode; hint?: string;
 }) {
   const body = (
-    <Box sx={{ mb: 1.75 }}>
+    <Box sx={{ display: "flex", alignItems: "baseline", py: 0.55 }}>
       <Typography component="div" sx={{
-        fontSize: 9.5, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase",
-        color: "faint", mb: 0.5,
+        fontSize: 10.5, color: "faint", flex: `0 0 ${GUTTER}px`,
+        ...(hint ? { cursor: "help" } : {}),
       }}>{label}</Typography>
-      <Box sx={{ fontFamily: MONO, fontSize: 12 }}>{children}</Box>
+      <Box sx={{ fontFamily: MONO, fontSize: 11.5, minWidth: 0, flex: 1 }}>{children}</Box>
     </Box>
   );
   return hint ? <Tooltip title={hint}><Box>{body}</Box></Tooltip> : body;
+}
+
+/**
+ * A block of its own, for things that are a LIST rather than a value.
+ *
+ * Kept apart from Fact deliberately. Everything used to be one shape — an
+ * uppercase label with a value stacked under it — so a URL nobody reads had the
+ * same weight as what the backend is doing right now, and seven of them in a
+ * column read as a form dump rather than a panel.
+ */
+export function Section({ label, count, note, children }: {
+  label: string;
+  /** A number, not a sentence — it sits on the heading's own baseline. */
+  count?: React.ReactNode;
+  /** The sentence, on its own line where it cannot fight the heading. */
+  note?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Box sx={{
+        display: "flex", alignItems: "baseline", gap: 1, pb: 0.4,
+        borderBottom: "1px solid", borderColor: "divider",
+      }}>
+        <Typography sx={{
+          fontSize: 9.5, fontWeight: 600, letterSpacing: ".07em",
+          textTransform: "uppercase", color: "text.secondary",
+        }}>{label}</Typography>
+        {count !== undefined && (
+          <Typography sx={{ fontFamily: MONO, fontSize: 10, color: "faint" }}>{count}</Typography>
+        )}
+      </Box>
+      {note && (
+        <Typography sx={{ fontSize: 10, color: "faint", mt: 0.5 }}>{note}</Typography>
+      )}
+      <Box sx={{ mt: 0.5 }}>{children}</Box>
+    </Box>
+  );
+}
+
+/**
+ * The panel's header: the same mark the graph draws, at the same colour.
+ *
+ * Clicking a node used to open a panel with nothing tying it to the node —
+ * no mark, no colour, just a small caps heading — so the rail never told you at
+ * a glance what kind of thing you were looking at, right after the graph had
+ * gone to some trouble to say exactly that.
+ */
+export function PanelHead({ icon, tone, name, status, onBack }: {
+  icon: IconKind;
+  tone: "live" | "work" | "fault" | "idle";
+  name: string;
+  status: React.ReactNode;
+  onBack?: () => void;
+}) {
+  const colour = tone === "live" ? "success.main" : tone === "work" ? "warning.main"
+    : tone === "fault" ? "error.main" : "faint";
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      {onBack && (
+        <Box
+          role="button" tabIndex={0} onClick={onBack}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onBack(); } }}
+          sx={{
+            display: "inline-block", mb: 1.25, cursor: "pointer", fontSize: 10.5,
+            color: "faint", "&:hover": { color: "text.secondary" },
+          }}
+        >← everything</Box>
+      )}
+      <Box sx={{ display: "flex", alignItems: "center" }}>
+        <Box sx={{ color: colour, display: "flex", flex: `0 0 ${GUTTER}px` }}>
+          <TypeIcon kind={icon} size={28} />
+        </Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography component="h2" sx={{
+            fontFamily: MONO, fontSize: 13.5, fontWeight: 600, m: 0,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>{name}</Typography>
+          <Typography sx={{ fontSize: 11, color: colour, mt: 0.2 }}>{status}</Typography>
+        </Box>
+      </Box>
+    </Box>
+  );
 }
 
 /** A heading inside the panel. */
@@ -71,13 +171,24 @@ const Head = ({ children }: { children: React.ReactNode }) => (
  * sentence and a button is a word, and putting one where the other was turns a
  * control into a paragraph and moves everything under it.
  */
-export function Action({ label, title, path = "/control", body, ctx, tone = "normal", after, full }: {
+export function Action({ label, title, path = "/control", body, ctx, tone = "normal", look = "command", on, after, full }: {
   label: string;
   title: string;
   path?: string;
   body: () => unknown;
   ctx: Ctx;
   tone?: "normal" | "primary";
+  /**
+   * What kind of thing this is, which was the clunkiest part of the panel.
+   *
+   * `lent/held` is a TOGGLE with a state you can read at rest; `load` is a
+   * fire-once command. They were the same bordered button at the same size, so
+   * a list of seven models was fourteen identical controls and nothing about
+   * their shape said which one changes a setting and which one does a thing.
+   */
+  look?: "command" | "pill" | "quiet";
+  /** For `pill`: whether the state it shows is on. */
+  on?: boolean;
   /** Overrides the default refresh-on-success — used where the reply is worth reading. */
   after?: (d: Record<string, unknown>) => void;
   full?: boolean;
@@ -107,11 +218,22 @@ export function Action({ label, title, path = "/control", body, ctx, tone = "nor
         <Box component="span">
           <Button onClick={click} disabled={busy} fullWidth={full}
                   sx={[
-                    { transition: "color 160ms, border-color 160ms" },
+                    { transition: "color 160ms, border-color 160ms, background-color 160ms" },
+                    look === "pill" && {
+                      borderRadius: 10, px: 1.1, minWidth: 52,
+                      color: on ? "success.main" : "faint",
+                      borderColor: on ? "success.main" : "line",
+                      bgcolor: on ? "rgba(141,181,128,.12)" : "transparent",
+                      "&:hover": { borderColor: on ? "success.main" : "text.secondary" },
+                    },
+                    look === "quiet" && {
+                      border: "none", px: 0.5, color: "faint",
+                      "&:hover": { border: "none", color: "success.main", background: "none" },
+                    },
                     tone === "primary" && { color: "success.main", borderColor: "success.main" },
                     !!fail && { color: "error.main", borderColor: "error.main" },
                   ]}>
-            {busy ? "working…" : label}
+            {busy ? "…" : label}
           </Button>
         </Box>
       </Tooltip>
@@ -218,6 +340,7 @@ export function ShareToggle({ model, d, ctx }: { model: string; d: UiData; ctx: 
     <Row spacing={0.5} align="center" component="span" sx={{ display: "inline-flex" }}>
       {ctx.canWarm ? (
         <Action
+          look="pill" on={intent}
           label={intent ? "lent" : "held"}
           title={`${why} — click to ${intent ? "hold" : "lend"}`}
           ctx={ctx}
@@ -255,7 +378,7 @@ export function LoadAction({ model, peer, ctx }: { model: string; peer: string |
     return <Typography component="span" sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint" }}>{said}</Typography>;
   }
   return (
-    <Action label="load" ctx={ctx} path="/v1/warm" body={() => ({ model })}
+    <Action look="quiet" label="load" ctx={ctx} path="/v1/warm" body={() => ({ model })}
             title={peer ? `ask ${peer} to load ${model} — they may decline if busy`
                         : `load ${model} here now, evicting whatever is resident`}
             after={(r) => {
@@ -269,15 +392,20 @@ export function LoadAction({ model, peer, ctx }: { model: string; peer: string |
 export function ModelLine({ model, d, ctx, warm, where, peer }: {
   model: string; d: UiData; ctx: Ctx; warm: boolean; where?: string; peer?: string | null;
 }) {
+  const lendable = d.catalog.includes(model);
   return (
-    <Row spacing={1} align="center" sx={{
-      py: 0.75, borderBottom: "1px solid", borderColor: "divider",
+    <Box sx={{
+      display: "flex", alignItems: "center", py: 0.65,
+      borderBottom: "1px solid", borderColor: "divider",
       "&:last-of-type": { borderBottom: "none" },
     }}>
-      <Box aria-hidden sx={{
-        width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-        bgcolor: warm ? "success.main" : "divider",
-      }} />
+      {/* An empty gutter, so the name starts on the same line as every value
+          and the panel title.
+          There was a warmth dot in here. It said the same thing as the right
+          column — which already reads "warm" or offers "load" — and once the
+          grid put it 64px from the name it described, it had lost the one thing
+          that made it legible. */}
+      <Box aria-hidden sx={{ flex: `0 0 ${GUTTER}px` }} />
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography component="div" sx={{
           fontFamily: MONO, fontSize: 11.5, overflow: "hidden",
@@ -286,9 +414,14 @@ export function ModelLine({ model, d, ctx, warm, where, peer }: {
         }}>{model}</Typography>
         {where && <Typography component="div" sx={{ fontFamily: MONO, fontSize: 10, color: "faint" }}>{where}</Typography>}
       </Box>
-      <ShareToggle model={model} d={d} ctx={ctx} />
-      {!warm && ctx.canWarm && <LoadAction model={model} peer={peer ?? null} ctx={ctx} />}
-    </Row>
+      {/* One row shape, always. The load button used to vanish on a warm model,
+          so the only warm row in a list of seven was also the only one whose
+          buttons did not line up. Warm models say so instead. */}
+      <Typography sx={{ fontSize: 10, color: "faint", flexShrink: 0 }}>
+        {warm ? "warm" : ctx.canWarm ? <LoadAction model={model} peer={peer ?? null} ctx={ctx} /> : "cold"}
+      </Typography>
+      {lendable && <ShareToggle model={model} d={d} ctx={ctx} />}
+    </Box>
   );
 }
 
@@ -319,8 +452,7 @@ function MapEditor({ n, ctx }: { n: Node; ctx: Ctx }) {
 
   return (
     <>
-      <Field label={`linked · ${pairs.length}`}
-             hint="requests for the id on the left are sent to this peer as the id on the right">
+      <Section label="linked" count={pairs.length}>
         {!pairs.length && <Box sx={{ color: "faint" }}>nothing linked — nothing can leave this box for {n.name}</Box>}
         {pairs.map(([mine, theirs]) => (
           <Row key={mine} spacing={1} align="center" sx={{ py: 0.5 }}>
@@ -333,11 +465,11 @@ function MapEditor({ n, ctx }: { n: Node; ctx: Ctx }) {
             )}
           </Row>
         ))}
-      </Field>
+      </Section>
 
       {unmapped.length > 0 && (
-        <Field label={`offered · ${unmapped.length} unclaimed`}
-               hint="models this peer is lending that you have not mapped, so nothing can route to them">
+        <Section label="offered" count={unmapped.length}
+                 note="this peer lends these and you have not mapped, so nothing can route to them">
           {unmapped.map((theirs) => (
             <Row key={theirs} spacing={1} align="center" sx={{ py: 0.5 }}>
               {ctx.canWarm ? (
@@ -372,7 +504,7 @@ function MapEditor({ n, ctx }: { n: Node; ctx: Ctx }) {
               <CopyButton text={mapSnippet(n)} />
             </>
           )}
-        </Field>
+        </Section>
       )}
     </>
   );
@@ -439,17 +571,17 @@ function Pending({ d, ctx }: { d: UiData; ctx: Ctx }) {
 /* --------------------------------------------------------------- panels */
 
 export function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
-  const self = d.net.nodes.find((n) => n.self);
   const cap = d.q.capacity;
   const queued = Object.values(cap.queued).reduce((a, b) => a + b, 0);
+  const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
   return (
     <>
-      <Head>{self?.name ?? "this node"}</Head>
-      <Field label="in flight">
-        {d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length} running · {queued} queued
+      <Fact label="in flight">{running} running · {queued} queued
         {cap.offbox ? <Box component="span" sx={{ color: "warning.main" }}> · {cap.offbox} off-box</Box> : null}
-      </Field>
-      <Field label="federation">
+      </Fact>
+      <Fact label="lending">{d.share.length} of {d.catalog.length} models</Fact>
+
+      <Section label="federation">
         <Toggle label="lending" on={d.controls.lending !== false} ctx={ctx}
                 hint="peers may use the models you lend"
                 offHint="peers see a healthy node offering nothing"
@@ -461,14 +593,15 @@ export function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
         <Typography sx={{ fontSize: 10.5, color: "faint", mt: 0.5 }}>
           Takes effect immediately, and resets to the config on restart.
         </Typography>
-      </Field>
-      <Field label={`lending · ${d.share.length} of ${d.catalog.length}`}>
-        {!d.catalog.length && <Box sx={{ color: "faint" }}>nothing to lend</Box>}
+      </Section>
+
+      <Section label="models" count={`${d.share.length} lent`}>
+        {!d.catalog.length && <Typography sx={{ fontSize: 11, color: "faint" }}>nothing to lend</Typography>}
         {d.catalog.map((m) => (
           <ModelLine key={m} model={m} d={d} ctx={ctx}
                      warm={d.net.readyNow.includes(m)} peer={null} />
         ))}
-      </Field>
+      </Section>
       <Pending d={d} ctx={ctx} />
     </>
   );
@@ -476,32 +609,28 @@ export function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
 
 export function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
   const busy = (n.slots ?? 0) - (n.free ?? 0);
+  const loaded = n.loaded ?? [];
   return (
     <>
-      <Head>{n.name}</Head>
-      <Field label="state">
-        <Box sx={{ color: n.up ? "success.main" : "error.main" }}>
-          {n.up ? `up · ${busy}/${n.slots ?? "?"} busy · ${n.queued ?? 0} queued` : "not answering"}
-        </Box>
-        {n.lastError && (
-          <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "error.main", mt: 0.5, overflowWrap: "anywhere" }}>
-            {n.lastError}
-          </Typography>
-        )}
-        {n.sending ? <Box sx={{ color: "warning.main", mt: 0.5 }}>{n.sending} of ours running there</Box> : null}
-      </Field>
+      <Fact label="capacity">{n.up ? `${busy}/${n.slots ?? "?"} busy · ${n.queued ?? 0} queued` : "not answering"}</Fact>
+      {n.sending ? <Fact label="ours there">{n.sending} running</Fact> : null}
+      {n.lastError && (
+        <Fact label="last error">
+          <Box sx={{ color: "error.main", overflowWrap: "anywhere" }}>{n.lastError}</Box>
+        </Fact>
+      )}
       {d.controls.borrowing === false && (
-        <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "warning.main", mb: 1.75 }}>
+        <Typography sx={{ fontSize: 10.5, color: "warning.main", mt: 1 }}>
           Borrowing is paused, so nothing routes here regardless of what is linked.
         </Typography>
       )}
       <MapEditor n={n} ctx={ctx} />
-      {(n.loaded ?? []).length > 0 && (
-        <Field label="loaded there" hint="warm on the peer — a request for one of these pays no load">
-          {(n.loaded ?? []).map((m) => (
-            <Box key={m} sx={{ color: "success.main", py: 0.25 }}>{m}</Box>
+      {loaded.length > 0 && (
+        <Section label="warm there" count={loaded.length}>
+          {loaded.map((m) => (
+            <Typography key={m} sx={{ fontFamily: MONO, fontSize: 11.5, color: "success.main", py: 0.3, pl: `${GUTTER}px` }}>{m}</Typography>
           ))}
-        </Field>
+        </Section>
       )}
     </>
   );
@@ -512,54 +641,34 @@ export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx })
   const held = blockers(b, resources);
   const slots = b.slots ?? 0;
   const q = b.queued ?? 0;
-  // Running here, not "would admission refuse" — `free` drops to 0 when another
-  // backend takes the card, which is a different question.
   const used = d.q.jobs.filter((j) => !j.offbox && j.backend === b.name && j.state === "running").length;
   const stalled = held.length > 0 && q > 0;
+  const proxied = b.proxying ?? [];
   const loaded = new Set(b.loaded ?? []);
   const serves = b.serves ?? [];
-  // A backend reports its own wire ids; the panel speaks the advertised ones.
   const advertised = (wire: string) => displayId(wire, d.aliases, d.net.available);
 
   return (
     <>
-      <Head>{b.name}</Head>
-      <Field label="state">
-        <Box sx={{ color: stalled ? "warning.main" : used > 0 ? "success.main" : "faint" }}>
-          {`${used}/${slots || "?"} in flight · ${q} queued`}
-        </Box>
-        {held.length > 0 && (
-          <Tooltip title={stalled
-            ? "admission checks hardware before this backend's own ceiling, so this is what it is actually waiting on"
-            : "it could not start right now — but it has nothing to start, so this costs nothing"}>
-            <Box sx={{ color: stalled ? "warning.main" : "faint", mt: 0.5, cursor: "help" }}>
-              {stalled ? "blocked — " : "idle — "}
-              {held.map((r) => `${r.holder} holds ${r.name}`).join(", ")}
-            </Box>
-          </Tooltip>
-        )}
-        {(b.proxying ?? []).length > 0 && (
-          <Tooltip title="hearth forwards these straight through and was never asked to schedule them, so they hold no slot, wait for nothing, and the card arbiter cannot see them. Declaring the path under this backend's routes: is what changes that — and makes hearth the admission control for it.">
-            <Box sx={{ color: "warning.main", mt: 0.5, cursor: "help" }}>
-              {(b.proxying ?? []).length} passing through, not scheduled
-              {b.proxying![0]?.model ? ` · ${b.proxying!.map((x) => x.model ?? "?").join(", ")}` : ""}
-            </Box>
-          </Tooltip>
-        )}
-        {b.answering === false && (
-          <Box sx={{ color: "error.main", mt: 0.5 }}>nothing has come back from it in a minute</Box>
-        )}
-      </Field>
-      <Field label="kind" hint={b.evicts
+      <Fact label="in flight">{used}/{slots || "?"} · {q} queued</Fact>
+      {proxied.length > 0 && (
+        <Fact label="forwarded"
+              hint="hearth passes these straight through and was never asked to schedule them, so they hold no slot and the card arbiter cannot see them">
+          <Box sx={{ color: "warning.main" }}>{proxied.length} not scheduled</Box>
+        </Fact>
+      )}
+      <Fact label="kind" hint={b.evicts
         ? "llama-swap — loads one model at a time and unloads the last, so every change of model costs a load"
         : b.kind === "none"
           ? "not an OpenAI server: hearth forwards declared paths to it and never looks inside the body"
-          : "keeps its models resident, so nothing here thrashes"}>
+          : "keeps one model resident, so nothing here thrashes"}>
         {b.kind ?? "openai"}{b.evicts ? " · evicts" : ""}
-        {b.url && <Box sx={{ color: "faint", overflowWrap: "anywhere" }}>{b.url}</Box>}
-      </Field>
+      </Fact>
+      {b.url && (
+        <Fact label="address"><Box sx={{ color: "faint", overflowWrap: "anywhere" }}>{b.url}</Box></Fact>
+      )}
       {(b.resources ?? []).length > 0 && (
-        <Field label="hardware" hint="it waits for any other backend using these">
+        <Fact label="hardware" hint="it waits for any other backend using these">
           {(b.resources ?? []).map((r) => {
             const res = resources.find((x) => x.name === r);
             return (
@@ -568,21 +677,43 @@ export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx })
               </Box>
             );
           })}
-        </Field>
+        </Fact>
       )}
+      {held.length > 0 && (
+        <Fact label={stalled ? "blocked" : "waiting on"}
+              hint={stalled
+                ? "admission checks hardware before this backend's own ceiling, so this is what it is actually waiting on"
+                : "it could not start right now — but it has nothing to start, so this costs nothing"}>
+          <Box sx={{ color: stalled ? "warning.main" : "faint" }}>
+            {held.map((r) => `${r.holder} holds ${r.name}`).join(", ")}
+          </Box>
+        </Fact>
+      )}
+      {b.answering === false && (
+        <Fact label="reachable"><Box sx={{ color: "error.main" }}>nothing back in a minute</Box></Fact>
+      )}
+
       {(b.routes ?? []).length > 0 && (
-        <Field label="paths" hint="reached by POST to this path, not by model id — the body is forwarded untouched">
+        <Section label="paths" count={(b.routes ?? []).length}
+                 note="reached by POST to this path, not by model id">
           {(b.routes ?? []).map((rt) => (
-            <Box key={rt.path} sx={{ py: 0.25 }}>
-              {rt.path} <Box component="span" sx={{ color: "faint" }}>
-                {rt.queue ? `→ ${rt.model} · ${rt.lane}` : "→ not queued"}
+            <Box key={rt.path} sx={{ py: 0.35, pl: `${GUTTER}px`, fontFamily: MONO, fontSize: 11 }}>
+              <Box component="span">{rt.path}</Box>
+              <Box component="span" sx={{ color: "faint" }}>
+                {!rt.queue ? " · not queued"
+                  // A {model} route carries no id of its own: it comes from the
+                  // request. Printing the empty string left a dangling arrow
+                  // that read as something failing to load.
+                  : rt.path.includes("{model}") ? ` · queued as the model in the path · ${rt.lane}`
+                  : ` · ${rt.model} · ${rt.lane}`}
               </Box>
             </Box>
           ))}
-        </Field>
+        </Section>
       )}
+
       {serves.length > 0 && (
-        <Field label={`models · ${serves.length}`}>
+        <Section label="models" count={serves.length}>
           {serves.map((wire) => {
             const m = advertised(wire);
             return (
@@ -590,7 +721,7 @@ export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx })
                          warm={loaded.has(wire) || loaded.has(m)} peer={null} />
             );
           })}
-        </Field>
+        </Section>
       )}
     </>
   );
@@ -602,48 +733,55 @@ export function ResourcePanel({ name, d }: { name: string; d: UiData }) {
     .filter((b) => (b.resources ?? []).includes(name));
   const unqueued = backends.filter((b) => (b.proxying ?? []).length > 0);
   const evictions = (d.net.evictions ?? []).filter((e) => e.resources.includes(name)).slice(-6).reverse();
-  if (!r) return <Head>{name}</Head>;
+  if (!r) return null;
 
   return (
     <>
-      <Head>{name}</Head>
-      <Field label="holder" hint="who is RUNNING on it, not whose weights are resident — the arbiter frees a card the moment the last job on it finishes, so free-and-still-loaded is the normal resting state">
+      <Fact label="holder" hint="who is RUNNING on it, not whose weights are resident — the arbiter frees a card the moment the last job on it finishes, so free-and-still-loaded is the normal resting state">
         <Box sx={{ color: r.holder ? "success.main" : "faint" }}>
-          {r.holder ? `${r.holder} is running on it` : "free"}
+          {r.holder ? r.holder : "free"}
         </Box>
-        {unqueued.length > 0 && (
-          <Tooltip title="The hardware is busy; the queue does not know. hearth forwards this work straight through rather than scheduling it, so the arbiter does not hold the card and cannot make anything else wait for it.">
-            <Box sx={{ color: "warning.main", mt: 0.5, cursor: "help" }}>
-              but {unqueued.map((b) => b.name).join(", ")} is working on it, unscheduled
-            </Box>
-          </Tooltip>
-        )}
-      </Field>
-      <Field label={`competing · ${backends.length}`}>
+      </Fact>
+      {unqueued.length > 0 && (
+        <Fact label="also busy" hint="hearth forwards this work rather than scheduling it, so the arbiter does not hold the card and cannot make anything else wait for it">
+          <Box sx={{ color: "warning.main" }}>
+            {unqueued.map((b) => b.name).join(", ")} · unscheduled
+          </Box>
+        </Fact>
+      )}
+
+      <Section label="competing" count={backends.length}>
         {backends.map((b) => {
           const q = b.queued ?? 0;
           const mine = r.holder === b.name;
           return (
-            <Row key={b.name} spacing={1} align="baseline" sx={{ py: 0.4 }}>
-              <Box sx={{ flex: 1, color: mine ? "success.main" : q > 0 ? "warning.main" : "text.secondary" }}>
-                {b.name}
-              </Box>
-              <Box sx={{ color: "faint", fontSize: 10.5 }}>
+            <Box key={b.name} sx={{
+              display: "flex", alignItems: "baseline", py: 0.4, pl: `${GUTTER}px`,
+              borderBottom: "1px solid", borderColor: "divider",
+              "&:last-of-type": { borderBottom: "none" },
+            }}>
+              <Typography sx={{
+                fontFamily: MONO, fontSize: 11.5, flex: 1,
+                color: mine ? "success.main" : q > 0 ? "warning.main" : "text.secondary",
+              }}>{b.name}</Typography>
+              <Typography sx={{ fontSize: 10, color: "faint" }}>
                 {mine ? "holding" : q > 0 ? `${q} waiting` : "idle"}
-              </Box>
-            </Row>
+              </Typography>
+            </Box>
           );
         })}
-      </Field>
+      </Section>
+
       {evictions.length > 0 && (
-        <Field label="recent handoffs" hint="a backend cleared off this card so another could use it">
+        <Section label="handoffs" count={evictions.length}
+                 note="a backend cleared off this card so another could use it">
           {evictions.map((e) => (
-            <Box key={`${e.t}:${e.backend}`} sx={{ py: 0.25, color: "text.secondary" }}>
+            <Box key={`${e.t}:${e.backend}`} sx={{ py: 0.3, pl: `${GUTTER}px`, fontFamily: MONO, fontSize: 11, color: "text.secondary" }}>
               <Box component="span" sx={{ color: "faint" }}>{clock(e.t)} </Box>
               {e.backend} → {e.for}
             </Box>
           ))}
-        </Field>
+        </Section>
       )}
     </>
   );
@@ -700,34 +838,90 @@ function Overview({ d }: { d: UiData }) {
 
 /* ------------------------------------------------------------- the panel */
 
+/**
+ * The header for whatever is selected, in the graph's own terms.
+ *
+ * A component rather than a closure inside the rail, because the dashboard
+ * draws the same panels as cards and needs the same heading on each. Deriving
+ * the mark, the colour and the status line twice is exactly the drift this
+ * whole arrangement exists to avoid — the rail and a card must not disagree
+ * about whether a backend is blocked.
+ */
+export function PanelHeadFor({ d, sel, onBack }: {
+  d: UiData; sel: Sel; onBack?: () => void;
+}) {
+  const self = d.net.nodes.find((n) => n.self);
+  const peer = sel?.kind === "peer" ? d.net.nodes.find((n) => n.name === sel.id) : undefined;
+  const backend = sel?.kind === "backend"
+    ? (self?.backends ?? []).find((b) => b.name === sel.id) : undefined;
+  const card = sel?.kind === "resource"
+    ? (d.net.resources ?? []).find((r) => r.name === sel.id) : undefined;
+
+  if (sel?.kind === "self" && self) {
+    const queued = Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0);
+    const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
+    return <PanelHead icon="self" tone={queued ? "work" : "live"} name={self.name}
+                      status={running || queued ? `${running} running · ${queued} queued` : "idle"}
+                      onBack={onBack} />;
+  }
+  if (peer) {
+    return <PanelHead icon="peer" tone={!peer.up ? "fault" : peer.free === 0 ? "work" : "live"}
+                      name={peer.name} status={peer.up ? "answering" : "not answering"}
+                      onBack={onBack} />;
+  }
+  if (backend) {
+    const held = blockers(backend, d.net.resources ?? []);
+    const q = backend.queued ?? 0;
+    const used = d.q.jobs.filter((j) => !j.offbox && j.backend === backend.name && j.state === "running").length;
+    const proxied = (backend.proxying ?? []).length;
+    const stalled = held.length > 0 && q > 0;
+    return <PanelHead icon={backendIcon(backend.kind, (backend.routes ?? []).length > 0)}
+                      tone={stalled ? "work" : used || proxied ? "live" : "idle"}
+                      name={backend.name}
+                      status={stalled ? "blocked" : used ? `${used} running`
+                        : proxied ? `${proxied} forwarded` : "idle"}
+                      onBack={onBack} />;
+  }
+  if (card) {
+    const backends = (self?.backends ?? []).filter((b) => (b.resources ?? []).includes(card.name));
+    const loose = backends.some((b) => (b.proxying ?? []).length > 0);
+    return <PanelHead icon="card" tone={card.holder ? "live" : loose ? "work" : "idle"}
+                      name={card.name}
+                      status={card.holder ? `${card.holder} holding` : loose ? "in use, unscheduled" : "free"}
+                      onBack={onBack} />;
+  }
+  return null;
+}
+
 export function Inspector({ d, sel, ctx, onSelect }: {
   d: UiData; sel: Sel; ctx: Ctx; onSelect: (s: Sel) => void;
 }) {
+  const self = d.net.nodes.find((n) => n.self);
   const peer = sel?.kind === "peer" ? d.net.nodes.find((n) => n.name === sel.id) : undefined;
   const backend = sel?.kind === "backend"
-    ? (d.net.nodes.find((n) => n.self)?.backends ?? []).find((b) => b.name === sel.id)
+    ? (self?.backends ?? []).find((b) => b.name === sel.id)
+    : undefined;
+  const card = sel?.kind === "resource"
+    ? (d.net.resources ?? []).find((r) => r.name === sel.id)
     : undefined;
 
-  // A selection can go away underneath you: a peer is removed from the config,
-  // a backend renamed. Falling back to the overview beats an empty rail that
+  // A selection can go away underneath you — a peer removed from the config, a
+  // backend renamed. Falling back to the overview beats an empty rail that
   // looks broken.
   const body = sel?.kind === "self" ? <SelfPanel d={d} ctx={ctx} />
     : peer ? <PeerPanel n={peer} d={d} ctx={ctx} />
     : backend ? <BackendPanel b={backend} d={d} ctx={ctx} />
-    : sel?.kind === "resource" ? <ResourcePanel name={sel.id} d={d} />
+    : card ? <ResourcePanel name={card.name} d={d} />
     : <Overview d={d} />;
 
   return (
     <Box sx={{
       borderLeft: { md: "1px solid" }, borderTop: { xs: "1px solid", md: "none" },
-      borderColor: { xs: "line", md: "line" },
+      borderColor: "line",
       bgcolor: "background.paper",
-      p: 2, overflowY: "auto",
-      minWidth: 0,
+      p: 2, overflowY: "auto", minWidth: 0,
     }}>
-      {sel && (
-        <Button onClick={() => onSelect(null)} sx={{ mb: 1.5 }}>← overview</Button>
-      )}
+      <PanelHeadFor d={d} sel={sel} onBack={() => onSelect(null)} />
       {body}
       {!ctx.canWarm && (
         <Typography sx={{ mt: 2.5, fontSize: 10.5, color: "faint", lineHeight: 1.6 }}>
