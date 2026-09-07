@@ -94,6 +94,27 @@ interface Scene {
   height: number;
 }
 
+/**
+ * The mark's size for a node of this width. Shared, not duplicated.
+ *
+ * The layout needs it because edges must stop where the node LOOKS like it
+ * starts, and NodeBox needs it to draw the thing. Two copies of this drifting
+ * apart is edges that end near a node instead of at it.
+ */
+export const glyphFor = (w: number): number =>
+  Math.round(Math.max(26, Math.min(36, w * 0.26)));
+
+/**
+ * How far inside its own box a node's visible content begins.
+ *
+ * The box is the click target and it is taller than what it draws: the mark and
+ * the text are centred in it, and since the border and fill are gone at rest
+ * there is nothing at the boundary to see. An edge drawn to the boundary
+ * therefore stops in empty space a good fifteen pixels short of the node, which
+ * is exactly what it looks like — six lines converging on nothing above the CPU.
+ */
+const inset = (p: Placed): number => Math.max(0, (p.h - glyphFor(p.w)) / 2);
+
 /** B(0.5) of a cubic, which is where a label on it belongs. */
 const midOf = (p0: number, p1: number, p2: number, p3: number): number =>
   (p0 + 3 * p1 + 3 * p2 + p3) / 8;
@@ -122,8 +143,14 @@ function curve(a: Placed, b: Placed, dir: "across" | "down", lift = 0): {
       mid: { x: midOf(x1, x1 + k, x2 - k, x2), y: midOf(y1, c1y, c2y, y2) },
     };
   }
+  // Inset the TARGET only, and this asymmetry is the point. A backend's content
+  // fills its box top to bottom — name, state, sparkline — so a line leaving the
+  // bottom edge leaves the node. A card's content is a mark and two short lines
+  // centred in a taller box, so a line arriving at the top edge stops in empty
+  // space above it. Insetting both ends made edges sprout from the middle of the
+  // backends instead.
   const x1 = a.x + a.w / 2, y1 = a.y + a.h;
-  const x2 = b.x + b.w / 2, y2 = b.y;
+  const x2 = b.x + b.w / 2, y2 = b.y + inset(b);
   const k = Math.max(20, (y2 - y1) * 0.55);
   return {
     d: `M ${x1} ${y1} C ${x1} ${y1 + k} ${x2} ${y2 - k} ${x2} ${y2}`,
@@ -310,7 +337,7 @@ function NodeBox({ p, tone, icon, selected, peer, dim, onSelect, onHover, title,
     : tone === "work" ? "warning.main" : tone === "fault" ? "error.main" : "faint";
   // Big enough to be the thing you see first, and still inside a node narrow
   // enough that nine backends fit a laptop without the stage scrolling.
-  const glyph = Math.round(Math.max(26, Math.min(36, p.w * 0.26)));
+  const glyph = glyphFor(p.w);
   return (
     <Tooltip title={title}>
       <Box
