@@ -1,12 +1,14 @@
 /**
  * The console.
  *
- * The graph IS the page: what this box is made of and what is moving through it,
- * with one rail beside it holding every action for whatever is selected. The
- * tables did not go away — they answer questions the picture cannot ("which of
- * the fourteen models is warm", "why has that job waited 40 seconds") — but they
- * are now drawers you open, not four screens you scroll past to reach the thing
- * you came for.
+ * Two views behind one shell. The graph IS the default page: what this box is
+ * made of and what is moving through it, with one rail beside it holding every
+ * action for whatever is selected, and the tables as drawers you open rather
+ * than four screens you scroll past. The dashboard is the same facts laid out to
+ * read top to bottom — a menu in the header switches between them, and the choice
+ * is remembered. Both are handed the same poll and the same theme from here, and
+ * the tables and every backend/peer panel are shared modules, so the two views
+ * cannot drift apart.
  *
  * Three structural rules the old page broke, each of which cost something:
  *
@@ -17,8 +19,7 @@
  *
  *   Stable identity across polls. Every list here is keyed by something that
  *   survives a refresh, because reconciliation is what keeps a button's in-flight
- *   state alive through the 3s poll — the old page kept module-level Sets to work
- *   around losing it, three separate times.
+ *   state alive through the 3s poll.
  *
  *   Motion means traffic. Nothing on this page animates unless something is
  *   really happening, or the graph becomes wallpaper.
@@ -30,26 +31,26 @@ import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
-import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableHead from "@mui/material/TableHead";
-import TableRow from "@mui/material/TableRow";
+import IconButton from "@mui/material/IconButton";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { ThemeProvider } from "@mui/material/styles";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Menu01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { Dot, mono, Row, Spacer, Tag } from "./bits.js";
-import { CallsTable, Depth, HistTable, Lanes } from "./charts.js";
+import { Dot, Row, Spacer, Tag } from "./bits.js";
+import Dashboard from "./dashboard.js";
 import { Graph, type Sel } from "./graph.js";
-import { Inspector, LoadAction, ShareToggle, type Ctx } from "./inspect.js";
-import { displayId, load, setKeyAsker, since } from "./lib.js";
+import { Inspector, type Ctx } from "./inspect.js";
+import { load, setKeyAsker } from "./lib.js";
+import { History, ModelsTable, QueueTable } from "./tables.js";
 import { makeTheme, MONO } from "./theme.js";
-import type { Backend, Node, UiData } from "./types.js";
-import { waitReason } from "./why.js";
+import type { UiData } from "./types.js";
 
 /* ------------------------------------------------------------------ data */
 
@@ -92,16 +93,6 @@ function useData(): { data: UiData | null; dead: boolean; refresh: () => void } 
   return { data, dead, refresh: () => poll(true) };
 }
 
-/** Now, once a second, so "waited" counts up between polls. */
-function useNow(): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
-
 /* --------------------------------------------------------------- drawers */
 
 type Drawer = "queue" | "models" | "history" | null;
@@ -129,396 +120,11 @@ function DrawerTab({ label, count, hot, open, onClick }: {
   );
 }
 
-/* ----------------------------------------------------------------- queue */
+/* ------------------------------------------------------------ graph view */
 
-/** Amber for anything the operator could act on, green for work in progress. */
-const TONE = { blocked: "warning.main", busy: "text.secondary", cold: "warning.main", lane: "text.secondary" } as const;
-
-/**
- * What is in flight, and for anything that is not, why not.
- *
- * A job waits for exactly one of four reasons and they call for different
- * responses: the backend is full (the ceiling working), the model has to load
- * (fine, once), another backend is holding the card (the interesting one), or
- * it is behind others in its lane. Only one of those is a hardware problem, and
- * a State column that said "queued" hid all four.
- */
-function QueueTable({ d }: { d: UiData }) {
-  const now = useNow();
-  const rank = { running: 0, queued: 1 };
-  const jobs = [...d.q.jobs].sort((a, b) => rank[a.state] - rank[b.state] || a.position - b.position);
-  const backends = d.net.nodes.find((n) => n.self)?.backends ?? [];
-  const resources = d.net.resources ?? [];
-
-  if (!jobs.length) {
-    return <Typography sx={{ ...mono, color: "faint", py: 3, textAlign: "center" }}>nothing in flight</Typography>;
-  }
-  return (
-    <Box sx={{ overflowX: "auto" }}>
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableCell>Lane</TableCell><TableCell>Model</TableCell><TableCell>Where</TableCell>
-            <TableCell>Caller</TableCell><TableCell>Status</TableCell><TableCell align="right">Waited</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {jobs.map((j) => {
-            const b = backends.find((x) => x.name === j.backend);
-            const wait = j.state === "queued" ? waitReason(j, b, resources) : null;
-            return (
-              <TableRow key={j.id}>
-                <TableCell sx={{ ...mono, color: j.lane === "chat" ? "success.main" : "text.secondary" }}>{j.lane}</TableCell>
-                <TableCell sx={{ ...mono, whiteSpace: "nowrap" }}>{displayId(j.model, d.aliases, d.net.available)}</TableCell>
-                <TableCell sx={{ ...mono, color: "text.secondary" }}>
-                  <Row spacing={0.75} align="baseline" wrap component="span" sx={{ display: "inline-flex" }}>
-                    <Box component="span">{j.offbox ? j.peer ?? "peer" : j.backend ?? "—"}</Box>
-                    {!j.offbox && (b?.resources ?? []).map((r) => <Tag key={r}>{r}</Tag>)}
-                  </Row>
-                </TableCell>
-                <TableCell sx={{ ...mono, color: "text.secondary" }}>{j.caller}</TableCell>
-                <TableCell sx={{ ...mono, color: wait ? TONE[wait.tone] : "success.main" }}>
-                  {j.offbox ? "on a peer" : wait ? (
-                    <Tooltip title={wait.tone === "blocked"
-                      ? "not this backend's own ceiling: another backend is running on hardware this one declared, and admission checks that first"
-                      : wait.tone === "cold"
-                        ? "this backend swaps, so the model in front has to be unloaded before this one loads — 20-60s of it"
-                        : wait.tone === "busy"
-                          ? "the backend is at its slot ceiling, which is the ceiling doing its job"
-                          : "ordinary queueing: other work scored higher in this lane"}>
-                      <Box component="span" sx={{ cursor: "help" }}>
-                        <Dot color={TONE[wait.tone]} />{wait.text}
-                      </Box>
-                    </Tooltip>
-                  ) : <><Dot color="success.main" />running</>}
-                </TableCell>
-                <TableCell align="right" sx={mono}>{since(now - j.since)}</TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </Box>
-  );
-}
-
-/* ---------------------------------------------------------------- models */
-
-interface ModelRow {
-  model: string;
-  on: Node[];
-  warmOn: Node[];
-  warm: boolean;
-  backends: Backend[];
-  unknown: boolean;
-  route?: { path: string; model: string; lane: string; queue: boolean };
-}
-
-/** Resolve an advertised id to the wire id backends actually report. */
-const wireOf = (d: UiData, m: string): string => d.aliases?.[m] ?? m;
-
-const backendHas = (d: UiData, b: Backend, m: string, list: "serves" | "loaded"): boolean => {
-  const ids = b[list] ?? [];
-  return ids.includes(m) || ids.includes(wireOf(d, m));
-};
-
-/**
- * Variant groups from the aliases map.
- *
- * X is a variant of P when aliases[X] === P and P is itself in net.available.
- * An `as` naming something not in available is a rename, not a variant — those
- * rows stand alone.
- */
-function variantGroups(d: UiData): Map<string, string[]> {
-  const groups = new Map<string, string[]>();
-  for (const [adv, as] of Object.entries(d.aliases ?? {})) {
-    if (adv === as) continue;
-    if (d.net.available.includes(as) && d.net.available.includes(adv)) {
-      if (!groups.has(as)) groups.set(as, []);
-      groups.get(as)!.push(adv);
-    }
-  }
-  return groups;
-}
-
-/** Which node serves a model, or null when we serve it ourselves. */
-function nodeOf(d: UiData, model: string): string | null {
-  const self = d.net.nodes.find((n) => n.self);
-  if (self?.serves?.includes(model)) return null;
-  const p = d.net.nodes.find((n) => !n.self
-    && ((n.serves ?? []).includes(model) || (n.configured ?? []).includes(model)));
-  return p?.name ?? null;
-}
-
-function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelect: (s: Sel) => void }) {
-  const { net } = d;
-  const self = net.nodes.find((n) => n.self);
-  const backends = self?.backends ?? [];
-  const groups = variantGroups(d);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
-  const holders = (m: string) => net.nodes.filter((n) =>
-    (n.serves ?? []).includes(m) || (n.configured ?? []).includes(m));
-
-  const variantIds = new Set<string>();
-  for (const vs of groups.values()) for (const v of vs) variantIds.add(v);
-
-  const allRows: ModelRow[] = net.available.map((m) => {
-    const on = holders(m);
-    const mine = backends.filter((b) => backendHas(d, b, m, "serves"));
-    return {
-      model: m, on, backends: mine,
-      warmOn: on.filter((n) => (n.loaded ?? []).includes(m)),
-      warm: net.readyNow.includes(m),
-      unknown: !net.readyNow.includes(m) && (net.unknownWarm ?? []).includes(m),
-    };
-  });
-
-  const rows = allRows.filter((r) => !variantIds.has(r.model));
-  // Route models are real work with real ids that queue, and they are in no
-  // catalogue: a client cannot ask for one by model id, it asks by path.
-  for (const b of backends) {
-    for (const rt of b.routes ?? []) {
-      if (!rt.queue || rows.some((r) => r.model === rt.model)) continue;
-      rows.push({ model: rt.model, on: self ? [self] : [], warmOn: [], warm: false,
-                  unknown: false, backends: [b], route: rt });
-    }
-  }
-  // Warm first — it is the perishable fact. Alphabetical within a group so rows
-  // do not shuffle between polls for no reason.
-  rows.sort((x, y) => Number(y.warm) - Number(x.warm) || x.model.localeCompare(y.model));
-
-  const Where = ({ r }: { r: ModelRow }) => {
-    const peers = r.on.filter((n) => !n.self);
-    if (!r.backends.length && !peers.length) return <Box component="span" sx={{ color: "faint" }}>—</Box>;
-    return (
-      <Row spacing={0.75} align="baseline" wrap component="span" sx={{ display: "inline-flex" }}>
-        {r.backends.map((b) => (
-          <Box component="span" key={b.name} onClick={() => onSelect({ kind: "backend", id: b.name })}
-               sx={{
-                 cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3,
-                 color: backendHas(d, b, r.model, "loaded") ? "success.main" : "text.secondary",
-               }}>{b.name}</Box>
-        ))}
-        {r.route && (
-          <Tag title={`reached by POST ${r.route.path}, not /v1/chat/completions — hearth forwards the body untouched and queues it as ${r.model}`}>
-            {r.route.path}
-          </Tag>
-        )}
-        {peers.map((n) => (
-          <Box component="span" key={n.name} onClick={() => onSelect({ kind: "peer", id: n.name })}
-               sx={{
-                 cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3,
-                 color: (n.loaded ?? []).includes(r.model) ? "success.main" : "text.secondary",
-               }}>{n.name}</Box>
-        ))}
-      </Row>
-    );
-  };
-
-  const State = ({ r }: { r: ModelRow }) => (
-    <Tooltip title={
-      r.route ? "a path, not a model id — this backend does not report what it holds, so neither can we"
-      : r.unknown ? "this backend does not report what it has loaded"
-      : r.warm && r.warmOn.length && !r.warmOn.some((n) => n.self)
-        ? `loaded on ${r.warmOn.map((n) => n.name).join(", ")}, not here` : ""}>
-      <Typography component="span" sx={{
-        fontFamily: MONO, fontSize: 11,
-        color: r.warm ? "success.main" : "faint", fontWeight: r.warm ? 600 : 400,
-      }}>
-        <Dot color={r.warm ? "success.main" : r.route || r.unknown ? "faint" : "text.secondary"} />
-        {r.warm ? "warm" : r.route || r.unknown ? "unknown" : "cold"}
-      </Typography>
-    </Tooltip>
-  );
-
-  return (
-    <Box sx={{ overflowX: "auto" }}>
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableCell>Model</TableCell><TableCell>Where</TableCell><TableCell>State</TableCell>
-            <TableCell>Shared</TableCell><TableCell align="right">Load</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {!rows.length && (
-            <TableRow><TableCell colSpan={5} sx={{ color: "faint", py: 2 }}>no models reachable</TableCell></TableRow>
-          )}
-          {rows.map((r) => {
-            const variants = groups.get(r.model);
-            const open = expanded[r.model];
-            return (
-              <Fragment key={r.model}>
-                <TableRow sx={r.warm ? undefined : { opacity: 0.6 }}>
-                  <TableCell sx={{ ...mono, whiteSpace: "nowrap" }}>
-                    {variants?.length ? (
-                      <Box component="span" onClick={() => setExpanded((e) => ({ ...e, [r.model]: !e[r.model] }))}
-                           sx={{ cursor: "pointer", userSelect: "none" }}>
-                        {r.model}
-                        <Box component="span" sx={{ color: "faint", ml: 0.5, fontSize: 11 }}>
-                          {open ? "−" : "+"}{variants.length}
-                        </Box>
-                      </Box>
-                    ) : r.model}
-                  </TableCell>
-                  <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={r} /></TableCell>
-                  <TableCell><State r={r} /></TableCell>
-                  <TableCell><ShareToggle model={r.model} d={d} ctx={ctx} /></TableCell>
-                  <TableCell align="right">
-                    {/* No load button for a route model: /v1/warm takes a model id
-                        and this one is only ever reached by path. */}
-                    {!r.warm && !r.unknown && !r.route && ctx.canWarm && (
-                      <LoadAction model={r.model} peer={nodeOf(d, r.model)} ctx={ctx} />
-                    )}
-                  </TableCell>
-                </TableRow>
-                {open && variants?.map((v) => {
-                  const vr = allRows.find((x) => x.model === v);
-                  if (!vr) return null;
-                  return (
-                    <TableRow key={v} sx={{ bgcolor: "action.hover" }}>
-                      <TableCell sx={{ ...mono, pl: 3, whiteSpace: "nowrap",
-                                       borderLeft: "2px solid", borderColor: "divider" }}>{v}</TableCell>
-                      <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={vr} /></TableCell>
-                      <TableCell><State r={vr} /></TableCell>
-                      <TableCell><ShareToggle model={v} d={d} ctx={ctx} /></TableCell>
-                      <TableCell align="right">
-                        {!vr.warm && !vr.unknown && ctx.canWarm && (
-                          <LoadAction model={v} peer={nodeOf(d, v)} ctx={ctx} />
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </Fragment>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </Box>
-  );
-}
-
-/* ---------------------------------------------------------------- history */
-
-function History({ d }: { d: UiData }) {
-  const self = d.net.nodes.find((n) => n.self);
-  const [numbers, setNumbers] = useState(false);
-  // Which models sit on a backend that actually evicts. Everything else cannot
-  // thrash by construction.
-  const thrashy = useMemo(() => {
-    const s = new Set<string>();
-    for (const b of self?.backends ?? []) if (b.evicts) for (const m of b.serves ?? []) s.add(m);
-    return s.size ? s : null;
-  }, [self]);
-
-  return (
-    <Box>
-      <Box sx={{ mb: 2.5 }}>
-        <Typography sx={{ fontSize: 11.5, mb: 0.75 }}>Jobs waiting for the local backend</Typography>
-        <Depth hist={d.hist} aliases={d.aliases} available={d.net.available} />
-      </Box>
-      <Box sx={{ mb: 2 }}>
-        <Row align="baseline" spacing={1.25} sx={{ mb: 0.75 }}>
-          <Typography sx={{ fontSize: 11.5 }}>{d.calls ? "Which model was in use" : "Which model was loaded"}</Typography>
-          {d.calls && (
-            <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint" }}>
-              track = loaded, segment = one request
-            </Typography>
-          )}
-          <Spacer />
-          <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint" }}>
-            {/* Only say "thrash" where something actually evicts. */}
-            {d.net.evicts === false ? "these backends hold models resident" : "each change of row is a cold load"}
-          </Typography>
-        </Row>
-        <Lanes hist={d.hist} calls={d.calls} thrashy={thrashy} aliases={d.aliases} available={d.net.available} />
-      </Box>
-      <Button onClick={() => setNumbers((n) => !n)}>{numbers ? "hide" : "show"} the numbers</Button>
-      {numbers && (
-        <Box sx={{ mt: 1.5 }}>
-          <Box sx={{ overflowX: "auto" }}>
-            <HistTable hist={d.hist} aliases={d.aliases} available={d.net.available} />
-          </Box>
-          <CallsTable calls={d.calls} aliases={d.aliases} available={d.net.available} />
-        </Box>
-      )}
-    </Box>
-  );
-}
-
-/* -------------------------------------------------------------- the key */
-
-/**
- * Asking for the API key, in the page.
- *
- * This was `window.prompt`, which has room for a sentence and no room for the
- * two things an operator actually needs: what this key IS, and where to get it.
- * So the first write on a keyed node opened a bare box asking for a secret, with
- * a rejection indistinguishable from a click that did nothing.
- *
- * Mounted once by the shell and handed to lib.ts, which resolves the promise it
- * hands back — so `postWrite` can wait for a person without the write path
- * knowing anything about React.
- */
-function KeyDialog() {
-  const [resolve, setResolve] = useState<((k: string | null) => void) | null>(null);
-  const [value, setValue] = useState("");
-
-  useEffect(() => {
-    setKeyAsker(() => new Promise<string | null>((r) => {
-      setValue("");
-      // Stored through a setter function, or React would call the resolver
-      // instead of storing it — useState treats a function argument as an
-      // updater, and a promise that resolves itself on mount is a fine way to
-      // spend an afternoon.
-      setResolve(() => r);
-    }));
-  }, []);
-
-  const done = (k: string | null) => {
-    resolve?.(k);
-    setResolve(null);
-  };
-
-  return (
-    <Dialog open={resolve !== null} onClose={() => done(null)} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ fontSize: 14, fontWeight: 600 }}>
-        This node needs a key for controls
-      </DialogTitle>
-      <DialogContent>
-        <Typography sx={{ fontSize: 11.5, color: "text.secondary", mb: 1.5, lineHeight: 1.7 }}>
-          Reading is open on this socket; changing something is not. The key is stored
-          in this browser only and never leaves it. If the node refuses it you will be
-          told on the control, and asked again next time.
-        </Typography>
-        <TextField
-          autoFocus fullWidth type="password" value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) done(value.trim()); }}
-          slotProps={{ htmlInput: { "aria-label": "API key", spellCheck: false } }}
-        />
-        <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint", mt: 1.5 }}>
-          {/* Points at the CONFIG, not at anyone's box. An earlier version of
-              this line printed the exact ssh command that fetches the key on the
-              node it was written for — a host alias and an env path, baked into
-              a public repo and wrong for every other operator. Whoever is
-              looking at this dialog knows where their own config lives. */}
-          any key from this node&apos;s apiKeys list
-        </Typography>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => done(null)}>cancel</Button>
-        <Button onClick={() => done(value.trim() || null)} disabled={!value.trim()}>use key</Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
-/* ------------------------------------------------------------------ page */
-
-function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }) {
+function Console({ d, ctx, dead, menu }: {
+  d: UiData | null; ctx: Ctx; dead: boolean; menu?: React.ReactNode;
+}) {
   const [sel, setSel] = useState<Sel>(null);
   const [drawer, setDrawer] = useState<Drawer>(null);
   const self = d?.net.nodes.find((n) => n.self);
@@ -532,9 +138,6 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
     <Box sx={{
       // Exactly one viewport on a wide screen, so the drawer bar is always
       // reachable without scrolling and the stage takes whatever is left over.
-      // minHeight alone let the stage grow the document instead, which put the
-      // drawers below the fold. On a narrow screen the rail stacks under the
-      // stage and the document scrolls normally, so the clamp is lifted.
       minHeight: "100dvh", height: { md: "100dvh" }, overflow: { md: "hidden" },
       display: "flex", flexDirection: "column", bgcolor: "background.default",
     }}>
@@ -544,6 +147,7 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
         px: 3, py: 1.25, borderBottom: "1px solid", borderColor: "line",
         bgcolor: "background.paper", flexShrink: 0,
       }}>
+        {menu}
         <Typography component="span" sx={{ fontSize: 15, fontWeight: 700, letterSpacing: "-.01em" }}>
           hea<Box component="span" sx={{ color: "success.main" }}>r</Box>th
         </Typography>
@@ -620,20 +224,149 @@ function Console({ d, ctx, dead }: { d: UiData | null; ctx: Ctx; dead: boolean }
   );
 }
 
+/* -------------------------------------------------------------- the key */
+
+/**
+ * Asking for the API key, in the page.
+ *
+ * This was `window.prompt`, which has room for a sentence and no room for the
+ * two things an operator actually needs: what this key IS, and where to get it.
+ * So the first write on a keyed node opened a bare box asking for a secret, with
+ * a rejection indistinguishable from a click that did nothing.
+ *
+ * Mounted once by the shell and handed to lib.ts, which resolves the promise it
+ * hands back — so `postWrite` can wait for a person without the write path
+ * knowing anything about React.
+ */
+function KeyDialog() {
+  const [resolve, setResolve] = useState<((k: string | null) => void) | null>(null);
+  const [value, setValue] = useState("");
+
+  useEffect(() => {
+    setKeyAsker(() => new Promise<string | null>((r) => {
+      setValue("");
+      // Stored through a setter function, or React would call the resolver
+      // instead of storing it — useState treats a function argument as an
+      // updater, and a promise that resolves itself on mount is a fine way to
+      // spend an afternoon.
+      setResolve(() => r);
+    }));
+  }, []);
+
+  const done = (k: string | null) => {
+    resolve?.(k);
+    setResolve(null);
+  };
+
+  return (
+    <Dialog open={resolve !== null} onClose={() => done(null)} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: 14, fontWeight: 600 }}>
+        This node needs a key for controls
+      </DialogTitle>
+      <DialogContent>
+        <Typography sx={{ fontSize: 11.5, color: "text.secondary", mb: 1.5, lineHeight: 1.7 }}>
+          Reading is open on this socket; changing something is not. The key is stored
+          in this browser only and never leaves it. If the node refuses it you will be
+          told on the control, and asked again next time.
+        </Typography>
+        <TextField
+          autoFocus fullWidth type="password" value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) done(value.trim()); }}
+          slotProps={{ htmlInput: { "aria-label": "API key", spellCheck: false } }}
+        />
+        <Typography sx={{ fontFamily: MONO, fontSize: 10.5, color: "faint", mt: 1.5 }}>
+          {/* Points at the CONFIG, not at anyone's box. An earlier version of
+              this line printed the exact ssh command that fetches the key on the
+              node it was written for — a host alias and an env path, baked into
+              a public repo and wrong for every other operator. Whoever is
+              looking at this dialog knows where their own config lives. */}
+          any key from this node&apos;s apiKeys list
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => done(null)}>cancel</Button>
+        <Button onClick={() => done(value.trim() || null)} disabled={!value.trim()}>use key</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/* ------------------------------------------------------------------ views */
+
+/**
+ * Which view is showing, remembered per browser.
+ *
+ * The graph is the default — it is what a visit is usually for. An operator who
+ * prefers the dashboard's every-number-at-once read should not re-pick it every
+ * reload, so the choice is stored. localStorage can throw (private mode, storage
+ * disabled), and a page that refuses to render because it could not remember a
+ * preference is worse than one that forgets it, so both sides are guarded and
+ * fall back to the graph.
+ */
+type View = "graph" | "dashboard";
+const VIEW_KEY = "hearth.view";
+
+function useView(): [View, (v: View) => void] {
+  const [view, setView] = useState<View>(() => {
+    try { return localStorage.getItem(VIEW_KEY) === "dashboard" ? "dashboard" : "graph"; }
+    catch { return "graph"; }
+  });
+  const choose = useCallback((v: View) => {
+    setView(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode: this session only */ }
+  }, []);
+  return [view, choose];
+}
+
+/** The view switcher: both views folded behind one menu in the header. */
+function ViewMenu({ view, onView }: { view: View; onView: (v: View) => void }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const pick = (v: View) => { onView(v); setAnchor(null); };
+  return (
+    <>
+      <IconButton
+        aria-label="switch view" aria-haspopup="menu" aria-expanded={Boolean(anchor)}
+        onClick={(e) => setAnchor(e.currentTarget)}
+        sx={{ borderRadius: 1.5, p: 0.5, color: "text.secondary", "&:hover": { color: "text.primary" } }}
+      >
+        <HugeiconsIcon icon={Menu01Icon} size={18} color="currentColor" strokeWidth={2}
+                       aria-hidden style={{ display: "block" }} />
+      </IconButton>
+      <Menu
+        anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+      >
+        <MenuItem selected={view === "graph"} onClick={() => pick("graph")}>Graph</MenuItem>
+        <MenuItem selected={view === "dashboard"} onClick={() => pick("dashboard")}>Dashboard</MenuItem>
+      </Menu>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ page */
+
 export default function App() {
   const { data, dead, refresh } = useData();
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
   const theme = useMemo(() => makeTheme(prefersDark ? "dark" : "light"), [prefersDark]);
+  const [view, setView] = useView();
   const ctx: Ctx = {
     canWarm: data?.canWarm ?? false,
     control: data?.control ?? "off",
     refresh,
   };
+  // One menu element, handed to whichever view is mounted so it sits inside that
+  // view's own header rather than floating over it.
+  const menu = <ViewMenu view={view} onView={setView} />;
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <KeyDialog />
-      <Console d={data} ctx={ctx} dead={dead} />
+      {view === "graph"
+        ? <Console d={data} ctx={ctx} dead={dead} menu={menu} />
+        : <Dashboard d={data} ctx={ctx} dead={dead} menu={menu} />}
     </ThemeProvider>
   );
 }

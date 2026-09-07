@@ -570,7 +570,7 @@ function Pending({ d, ctx }: { d: UiData; ctx: Ctx }) {
 
 /* --------------------------------------------------------------- panels */
 
-function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
+export function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
   const cap = d.q.capacity;
   const queued = Object.values(cap.queued).reduce((a, b) => a + b, 0);
   const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
@@ -607,7 +607,7 @@ function SelfPanel({ d, ctx }: { d: UiData; ctx: Ctx }) {
   );
 }
 
-function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
+export function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
   const busy = (n.slots ?? 0) - (n.free ?? 0);
   const loaded = n.loaded ?? [];
   return (
@@ -636,7 +636,7 @@ function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
   );
 }
 
-function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
+export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
   const resources = d.net.resources ?? [];
   const held = blockers(b, resources);
   const slots = b.slots ?? 0;
@@ -727,7 +727,7 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
   );
 }
 
-function ResourcePanel({ name, d }: { name: string; d: UiData }) {
+export function ResourcePanel({ name, d }: { name: string; d: UiData }) {
   const r = (d.net.resources ?? []).find((x) => x.name === name);
   const backends = (d.net.nodes.find((n) => n.self)?.backends ?? [])
     .filter((b) => (b.resources ?? []).includes(name));
@@ -838,6 +838,61 @@ function Overview({ d }: { d: UiData }) {
 
 /* ------------------------------------------------------------- the panel */
 
+/**
+ * The header for whatever is selected, in the graph's own terms.
+ *
+ * A component rather than a closure inside the rail, because the dashboard
+ * draws the same panels as cards and needs the same heading on each. Deriving
+ * the mark, the colour and the status line twice is exactly the drift this
+ * whole arrangement exists to avoid — the rail and a card must not disagree
+ * about whether a backend is blocked.
+ */
+export function PanelHeadFor({ d, sel, onBack }: {
+  d: UiData; sel: Sel; onBack?: () => void;
+}) {
+  const self = d.net.nodes.find((n) => n.self);
+  const peer = sel?.kind === "peer" ? d.net.nodes.find((n) => n.name === sel.id) : undefined;
+  const backend = sel?.kind === "backend"
+    ? (self?.backends ?? []).find((b) => b.name === sel.id) : undefined;
+  const card = sel?.kind === "resource"
+    ? (d.net.resources ?? []).find((r) => r.name === sel.id) : undefined;
+
+  if (sel?.kind === "self" && self) {
+    const queued = Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0);
+    const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
+    return <PanelHead icon="self" tone={queued ? "work" : "live"} name={self.name}
+                      status={running || queued ? `${running} running · ${queued} queued` : "idle"}
+                      onBack={onBack} />;
+  }
+  if (peer) {
+    return <PanelHead icon="peer" tone={!peer.up ? "fault" : peer.free === 0 ? "work" : "live"}
+                      name={peer.name} status={peer.up ? "answering" : "not answering"}
+                      onBack={onBack} />;
+  }
+  if (backend) {
+    const held = blockers(backend, d.net.resources ?? []);
+    const q = backend.queued ?? 0;
+    const used = d.q.jobs.filter((j) => !j.offbox && j.backend === backend.name && j.state === "running").length;
+    const proxied = (backend.proxying ?? []).length;
+    const stalled = held.length > 0 && q > 0;
+    return <PanelHead icon={backendIcon(backend.kind, (backend.routes ?? []).length > 0)}
+                      tone={stalled ? "work" : used || proxied ? "live" : "idle"}
+                      name={backend.name}
+                      status={stalled ? "blocked" : used ? `${used} running`
+                        : proxied ? `${proxied} forwarded` : "idle"}
+                      onBack={onBack} />;
+  }
+  if (card) {
+    const backends = (self?.backends ?? []).filter((b) => (b.resources ?? []).includes(card.name));
+    const loose = backends.some((b) => (b.proxying ?? []).length > 0);
+    return <PanelHead icon="card" tone={card.holder ? "live" : loose ? "work" : "idle"}
+                      name={card.name}
+                      status={card.holder ? `${card.holder} holding` : loose ? "in use, unscheduled" : "free"}
+                      onBack={onBack} />;
+  }
+  return null;
+}
+
 export function Inspector({ d, sel, ctx, onSelect }: {
   d: UiData; sel: Sel; ctx: Ctx; onSelect: (s: Sel) => void;
 }) {
@@ -849,53 +904,6 @@ export function Inspector({ d, sel, ctx, onSelect }: {
   const card = sel?.kind === "resource"
     ? (d.net.resources ?? []).find((r) => r.name === sel.id)
     : undefined;
-
-  /**
-   * The header for whatever is selected, in the graph's own terms.
-   *
-   * Built here rather than inside each panel so the mark, the colour and the
-   * one-line status cannot drift between them — four panels each drawing their
-   * own heading is four chances for the rail to disagree with the node you just
-   * clicked.
-   */
-  const head = (): React.ReactNode => {
-    if (sel?.kind === "self" && self) {
-      const queued = Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0);
-      const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
-      return <PanelHead icon="self" tone={queued ? "work" : "live"} name={self.name}
-                        status={running || queued ? `${running} running · ${queued} queued` : "idle"}
-                        onBack={() => onSelect(null)} />;
-    }
-    if (peer) {
-      return <PanelHead icon="peer" tone={!peer.up ? "fault" : peer.free === 0 ? "work" : "live"}
-                        name={peer.name}
-                        status={peer.up ? "answering" : "not answering"}
-                        onBack={() => onSelect(null)} />;
-    }
-    if (backend) {
-      const resources = d.net.resources ?? [];
-      const held = blockers(backend, resources);
-      const q = backend.queued ?? 0;
-      const used = d.q.jobs.filter((j) => !j.offbox && j.backend === backend.name && j.state === "running").length;
-      const proxied = (backend.proxying ?? []).length;
-      const stalled = held.length > 0 && q > 0;
-      return <PanelHead icon={backendIcon(backend.kind, (backend.routes ?? []).length > 0)}
-                        tone={stalled ? "work" : used || proxied ? "live" : "idle"}
-                        name={backend.name}
-                        status={stalled ? "blocked" : used ? `${used} running`
-                          : proxied ? `${proxied} forwarded` : "idle"}
-                        onBack={() => onSelect(null)} />;
-    }
-    if (card) {
-      const backends = (self?.backends ?? []).filter((b) => (b.resources ?? []).includes(card.name));
-      const loose = backends.some((b) => (b.proxying ?? []).length > 0);
-      return <PanelHead icon="card" tone={card.holder ? "live" : loose ? "work" : "idle"}
-                        name={card.name}
-                        status={card.holder ? `${card.holder} holding` : loose ? "in use, unscheduled" : "free"}
-                        onBack={() => onSelect(null)} />;
-    }
-    return null;
-  };
 
   // A selection can go away underneath you — a peer removed from the config, a
   // backend renamed. Falling back to the overview beats an empty rail that
@@ -913,7 +921,7 @@ export function Inspector({ d, sel, ctx, onSelect }: {
       bgcolor: "background.paper",
       p: 2, overflowY: "auto", minWidth: 0,
     }}>
-      {head()}
+      <PanelHeadFor d={d} sel={sel} onBack={() => onSelect(null)} />
       {body}
       {!ctx.canWarm && (
         <Typography sx={{ mt: 2.5, fontSize: 10.5, color: "faint", lineHeight: 1.6 }}>
