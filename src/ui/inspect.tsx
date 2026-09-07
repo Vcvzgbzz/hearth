@@ -469,7 +469,7 @@ function MapEditor({ n, ctx }: { n: Node; ctx: Ctx }) {
 
       {unmapped.length > 0 && (
         <Section label="offered" count={unmapped.length}
-                 note="this peer lends these and you have not mapped them, so nothing can route there">
+                 note="this peer lends these and you have not mapped, so nothing can route to them">
           {unmapped.map((theirs) => (
             <Row key={theirs} spacing={1} align="center" sx={{ py: 0.5 }}>
               {ctx.canWarm ? (
