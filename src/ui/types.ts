@@ -32,6 +32,9 @@ export interface ModelStats {
   tools?: boolean;
   thinking?: boolean;
   quant?: string;
+  /** Where the record came from. "declared" is the operator's word about a
+   *  model nothing has loaded yet, and the page must not draw it as measured. */
+  from?: "declared" | "observed" | "both";
 }
 
 export interface Backend {

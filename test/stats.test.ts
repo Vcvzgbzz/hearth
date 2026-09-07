@@ -27,7 +27,7 @@ import { silentLogger } from "../src/log.js";
 import { PeerRegistry, type PeerCapacity } from "../src/peers.js";
 import { decide } from "../src/route.js";
 import { createNode, type HearthNode } from "../src/server.js";
-import { cleanStats, needsOf, statsFromProps, unfit } from "../src/stats.js";
+import { cleanStats, mergeStats, needsOf, statsFromProps, unfit } from "../src/stats.js";
 
 /* ------------------------------------------------------------ reading props */
 
@@ -71,6 +71,31 @@ import { cleanStats, needsOf, statsFromProps, unfit } from "../src/stats.js";
   assert.equal(cleanStats(null), undefined);
   assert.equal(cleanStats({ nothing: "useful" }), undefined, "an object with no fields we know is no claim");
   assert.deepEqual(cleanStats({ vision: false }), { vision: false }, "but a NEGATIVE claim is a claim");
+}
+
+/* --------------------------------------------------- declared under observed */
+
+{
+  assert.equal(mergeStats(null, null), null, "nothing plus nothing is still nothing");
+
+  // The case the declaration exists for: a model nobody has loaded. Only the
+  // operator's word, and the record says so.
+  assert.deepEqual(mergeStats({ context: 4096 }, null), { context: 4096, from: "declared" });
+
+  // And the case it stops mattering: the process answered for itself.
+  assert.deepEqual(
+    mergeStats({ context: 4096 }, { context: 131072 }),
+    { context: 131072, from: "both" },
+    "observed wins — a declaration is only a prediction of how it will be launched",
+  );
+
+  // Per field, not per record. A backend that reports a window and nothing else
+  // must not erase what was declared about the rest of it.
+  assert.deepEqual(
+    mergeStats({ context: 4096, quant: "Q4_K" }, { context: 8192 }),
+    { context: 8192, quant: "Q4_K", from: "both" },
+  );
+  assert.deepEqual(mergeStats(null, { context: 8192 }), { context: 8192, from: "observed" });
 }
 
 /* ------------------------------------------------------- measuring a request */
@@ -244,8 +269,10 @@ function swapBackend() {
       return;
     }
     if (url === "/v1/models") {
+      // beta is in the catalogue and never loaded — the shape llama-swap
+      // actually reports, and the case a declaration is for.
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ data: [{ id: "alpha" }] }));
+      res.end(JSON.stringify({ data: [{ id: "alpha" }, { id: "beta" }] }));
       return;
     }
     if (url === "/upstream/alpha/props") {
@@ -389,6 +416,114 @@ function listen(node: HearthNode): Promise<string> {
   await node.close();
   server.closeAllConnections();
   server.close();
+}
+
+/* ------------------------------------------- a declared window on a COLD model */
+
+// The whole point of declaring. Nothing has loaded `beta`, so nothing can be
+// asked about it — and asking llama-swap would LOAD it, which is the eviction
+// and the cold load this check exists to prevent. Without a declaration the
+// oversized request is admitted, evicts whatever is resident, waits out the
+// load and fails; with one it is refused before admission, having touched
+// nothing.
+{
+  const be = swapBackend();
+  await be.listen();
+  const cfg = parseConfig({
+    name: "me",
+    backend: { url: be.url(), kind: "llama-swap" },
+    scheduler: { lanes: { chat: { priority: 0 } } },
+    models: { beta: { stats: { context: 4096 } } },
+  });
+  const node = createNode(cfg, silentLogger);
+  const url = await listen(node);
+  await node.pool.first().state.ensureFresh();
+
+  const r = await fetch(`${url}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "beta", messages: [{ role: "user", content: "x".repeat(200_000) }] }),
+  });
+  assert.equal(r.status, 400, "a cold model with a declared window still refuses");
+  const body = (await r.json()) as { error?: { message?: string } };
+  assert.ok(body.error?.message?.includes("4096"), body.error?.message);
+  assert.equal(be.ran(), 0, "and nothing was sent to the backend to load it");
+
+  // The console gets the provenance, not just the number.
+  const ui = (await (await fetch(`${url}/ui/data`)).json()) as
+    { net: { nodes: { self?: boolean; stats?: Record<string, { context?: number; from?: string }> }[] } };
+  const self = ui.net.nodes.find((n) => n.self);
+  assert.equal(self?.stats?.beta?.context, 4096);
+  assert.equal(self?.stats?.beta?.from, "declared", "drawn as the operator's word, not as measured");
+
+  await node.close();
+  be.close();
+}
+
+/* ------------------------------------ a relayed 4xx is not a successful call */
+
+// The local path passes a backend's own error straight through, which is right
+// — "this prompt does not fit" is a better message than anything we would
+// invent. It is not a success, and the call history recorded it as one, so the
+// console drew a green bar for every request that failed this way.
+{
+  const server = createServer((req, res) => {
+    const u = req.url ?? "";
+    if (u === "/v1/models") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "solo" }] }));
+      return;
+    }
+    if (u === "/v1/chat/completions") {
+      req.resume();
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "the request exceeds the available context size" }));
+      return;
+    }
+    res.writeHead(404); res.end("nope");
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const cfg = parseConfig({
+    name: "me",
+    backend: { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, kind: "none" },
+    scheduler: { lanes: { chat: { priority: 0 } } },
+  });
+  const node = createNode(cfg, silentLogger);
+  const url = await listen(node);
+
+  const r = await fetch(`${url}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "solo", messages: [{ role: "user", content: "hi" }] }),
+  });
+  assert.equal(r.status, 400, "the backend's own status reaches the client untouched");
+
+  const ui = (await (await fetch(`${url}/ui/data`)).json()) as { calls?: { ok: boolean }[] };
+  assert.equal(ui.calls?.length, 1, "the call is recorded");
+  assert.equal(ui.calls?.[0]?.ok, false, "and recorded as a failure, not a success");
+
+  await node.close();
+  server.closeAllConnections();
+  server.close();
+}
+
+/* --------------------------------------------------------- config validation */
+
+// Loud, unlike the same fields arriving from a peer. A silently ignored typo in
+// a file the operator wrote is discovered months later by its absence.
+{
+  const withStats = (stats: unknown) => () => parseConfig({
+    name: "me",
+    backend: { url: "http://127.0.0.1:1", serves: ["m"], kind: "none" },
+    models: { m: { stats } },
+  });
+  assert.throws(withStats({ context: "lots" }), /positive whole number/);
+  assert.throws(withStats({ context: 0 }), /positive whole number/);
+  assert.throws(withStats({ vision: "yes" }), /expected true or false/);
+  assert.throws(withStats({ visio: true }), /not a model stat/);
+  const ok = withStats({ context: 8192, vision: true, quant: "Q4_K" })();
+  assert.deepEqual(ok.models.m!.stats, { context: 8192, vision: true, quant: "Q4_K" });
+  assert.equal(withStats({})().models.m!.stats, null, "an empty block is no claim");
 }
 
 console.log("stats ok");

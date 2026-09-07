@@ -20,7 +20,7 @@
 import type { BackendConfig, HearthConfig, RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import type { Logger } from "./log.js";
-import type { ModelStats } from "./stats.js";
+import { mergeStats, type ModelStats } from "./stats.js";
 import { ResourceArbiter } from "./resources.js";
 import { Scheduler } from "./scheduler.js";
 
@@ -454,10 +454,24 @@ export class BackendPool {
     return this.statsFor(model)?.context ?? null;
   }
 
-  /** Everything known about an advertised model id. Null until it has been
-   *  loaded once — same reason as contextLength, and the same honest gap. */
+  /**
+   * Everything known about an advertised model id, declared under observed.
+   *
+   * The declaration is what makes a COLD model checkable at all: the backend
+   * cannot be asked about one without loading it, so without a declared window
+   * the first oversized request evicts whatever is resident, waits out the
+   * load, and only then fails. Once the model does load, its own answer wins
+   * field by field — see mergeStats.
+   *
+   * A variant falls back to its parent's declaration, the same way concurrency
+   * does: `coder-low` and `coder` are one set of weights in one process, so the
+   * window cannot differ between them, and restating it per variant is a
+   * restatement that can drift.
+   */
   statsFor(model: string): ModelStats | null {
-    return this.for(model).state.statsFor(this.outboundId(model));
+    const route = this.cfg.models[model];
+    const declared = route?.stats ?? (route?.as ? this.cfg.models[route.as]?.stats : null) ?? null;
+    return mergeStats(declared, this.for(model).state.statsFor(this.outboundId(model)));
   }
 
   /** Everything warm anywhere. Several at once is normal now: one backend per

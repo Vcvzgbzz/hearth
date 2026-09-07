@@ -776,6 +776,37 @@ backend remains the authority on its own limits; this only moves the clear
 refusals to the near side of the network, where the message can name numbers and
 the request can still be sent somewhere else.
 
+### When nothing can be asked
+
+Stats are learned from the running process, which is authoritative and needs no
+config at all. Two cases can't be reached that way:
+
+- **A model that has never been loaded.** Asking llama-swap for a cold model's
+  props *loads it* to answer, which is the eviction and the sixty-second load
+  this whole check exists to avoid. So hearth never asks — and an unknown model
+  refuses nothing, which means the first oversized request evicts whatever is
+  resident, waits out the load, and only then fails.
+- **A backend that isn't OpenAI-shaped** (`kind: none`). It has no `/props` and
+  never will. A declaration is reported for these and never enforced: their
+  requests arrive on a declared path carrying a body hearth does not read, so
+  there is nothing to measure it against. You get the number on the page, which
+  is otherwise the one model whose window nothing could ever tell you.
+
+Say it yourself for those:
+
+```yaml
+models:
+  deep:      { stats: { context: 32768 } }
+  video-wan: { stats: { context: 8192, vision: true } }
+```
+
+`context`, `vision`, `tools`, `thinking`, `quant` — all optional, and a typo is
+a startup error rather than a field that quietly does nothing. A declaration is
+a *prediction of how the process will be launched*, so the moment the real thing
+loads, its own answer wins, field by field. The console draws a declared value
+dimmer and says in the tooltip that nothing has confirmed it, because "the
+operator says 32k" and "the process reports 32k" are different claims.
+
 The estimate is `chars / 3.5`, not a real tokenizer: tokenizing properly means
 shipping a vocab per model or asking the backend, which loads it. It reads about
 a tenth low on dense text, which is the safe direction — this code only ever

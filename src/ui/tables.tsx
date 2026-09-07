@@ -257,8 +257,17 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
         </Tooltip>
       );
     }
+    // A declared record is the operator's word about a model that has not been
+    // loaded yet, so it is drawn dimmer and says so. Not pedantry: it is the
+    // one number here that nothing has checked, and the case it exists for —
+    // a cold model — is exactly when nobody can check it.
+    const declared = st.from === "declared";
     const notes = [
-      `reported by ${src.name}`,
+      declared
+        ? `declared in ${src.name}'s config — nothing has loaded this model to confirm it`
+        : st.from === "both"
+          ? `reported by ${src.name}, with declared values where it does not say`
+          : `reported by ${src.name}`,
       st.quant ? `quantized ${st.quant}` : null,
       st.vision === false ? "text only, no images" : null,
       st.tools === false ? "no tool calls" : null,
@@ -267,7 +276,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
     return (
       <Tooltip title={notes}>
         <Row spacing={0.75} align="baseline" component="span" sx={{ display: "inline-flex" }}>
-          <Typography component="span" sx={{ ...mono, fontSize: 11 }}>
+          <Typography component="span" sx={{ ...mono, fontSize: 11, color: declared ? "faint" : undefined }}>
             {st.context === undefined ? "—" : ctxLabel(st.context)}
           </Typography>
           {st.vision === true && <Tag>vision</Tag>}

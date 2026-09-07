@@ -46,6 +46,17 @@ export interface ModelStats {
   /** e.g. "Q5_K - Medium". Cosmetic, but it is the only quality signal you get
    *  about a model running on hardware you do not own. */
   quant?: string;
+  /**
+   * Where this came from. Not a stat — provenance, and it is load-bearing.
+   *
+   * "the operator says 32k" and "the process reports 32k" are different claims,
+   * and this codebase does not flatten that kind of difference anywhere else
+   * (knowsWarm, unknownWarm). A declared number is what lets a COLD model be
+   * checked at all, which is the whole reason declaration exists; it is also
+   * the one that can be wrong without anything noticing, so the page says which
+   * it is drawing.
+   */
+  from?: "declared" | "observed" | "both";
 }
 
 /** llama.cpp /props -> stats. Every field independently optional: builds differ,
@@ -83,7 +94,35 @@ export function cleanStats(v: unknown): ModelStats | undefined {
   if (typeof s.tools === "boolean") out.tools = s.tools;
   if (typeof s.thinking === "boolean") out.thinking = s.thinking;
   if (typeof s.quant === "string") out.quant = s.quant.slice(0, 40);
-  return known(out) ? out : undefined;
+  if (!known(out)) return undefined;
+  // Provenance survives the peer hop: a lender that DECLARED a window rather
+  // than measuring it is telling the borrower something real about how much to
+  // trust the number.
+  if (s.from === "declared" || s.from === "observed" || s.from === "both") out.from = s.from;
+  return out;
+}
+
+/**
+ * The declared record under whatever the backend has actually reported.
+ *
+ * Per FIELD, not per record: you declare the context window for a model that
+ * has never been loaded, and once it loads the process's own answer replaces it
+ * while the fields it does not report (nothing else knows the quantization of
+ * an ollama model) keep the declared value. Observed always wins, because a
+ * running process is the only thing that can be right about itself — a
+ * declaration is a prediction of how it WILL be launched.
+ */
+export function mergeStats(
+  declared: ModelStats | null | undefined,
+  observed: ModelStats | null | undefined,
+): ModelStats | null {
+  if (!declared && !observed) return null;
+  if (!declared) return { ...observed!, from: "observed" };
+  if (!observed) return { ...declared, from: "declared" };
+  // Spreading is per-field precisely because statsFromProps only sets the keys
+  // it actually saw: an absent `vision` is an absent KEY, not an undefined one,
+  // so it cannot overwrite a declared value with nothing.
+  return { ...declared, ...observed, from: "both" };
 }
 
 /** What one request is asking a model for. */

@@ -732,6 +732,9 @@ export function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx })
               st.vision === true ? "vision" : null,
               st.tools === true ? "tools" : null,
               st.thinking === true ? "thinking" : null,
+              // The panel has room for the word, and a cold model's whole
+              // subtitle can be a declaration nothing has confirmed.
+              st.from === "declared" ? "declared" : null,
               // Not the quantization: it is the one stat here that changes
               // nothing about what you can send, and this line has to share a
               // row with the load button. It is in the models table's tooltip.

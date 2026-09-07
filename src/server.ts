@@ -346,7 +346,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
    * the entire node until restart with nothing in the log to say why. pipeline
    * settles either way and destroys the body for us.
    */
-  async function pipeThrough(up: UpstreamResponse, res: ServerResponse): Promise<void> {
+  /** Relays the upstream answer and hands back the status it relayed, so a
+   *  caller can record what actually happened. A backend's own 4xx is passed
+   *  to the client untouched — it is a better error than anything we could
+   *  invent — but it is NOT a success, and the request log and the console's
+   *  call history used to record it as one. */
+  async function pipeThrough(up: UpstreamResponse, res: ServerResponse): Promise<number> {
     res.writeHead(up.status, {
       ...forwardable(up.headers),
       "Content-Type": up.headers["content-type"] ?? "application/json",
@@ -355,6 +360,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       "X-Accel-Buffering": "no",
     });
     await pipeline(up.body, res);
+    return up.status;
   }
 
   /**
@@ -401,6 +407,10 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       loaded: local.state.loaded(),
     }, need);
 
+    // What the local backend answered, for the log and the call history. A
+    // relayed 400 — "this prompt does not fit" is the common one — is a failed
+    // request that happens to carry a useful body.
+    let localStatus = 0;
     const runLocal = async (): Promise<void> => {
       await local.state.ensureFresh();
       // Our id out, the backend's id in — the same rewrite the peer path below
@@ -411,7 +421,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         json: pool.outboundBody(model, payload),
         signal,
       });
-      await pipeThrough(up, res);
+      localStatus = await pipeThrough(up, res);
     };
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
@@ -459,7 +469,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         logRequest(t, { model, lane, caller, backend: local.name, target: "local", reason: decision.reason }, false, e);
         throw e;
       }
-      logRequest(t, { model, lane, caller, backend: local.name, target: "local", reason: decision.reason }, true);
+      logRequest(
+        t,
+        { model, lane, caller, backend: local.name, target: "local", reason: decision.reason,
+          ...(localStatus >= 400 ? { status: localStatus } : {}) },
+        localStatus < 400,
+        localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
+      );
       return;
     }
 
@@ -537,8 +553,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     }
     logRequest(
       t,
-      { model, lane, caller, target: fellBack ? "local" : "peer", peer: peer.name, offbox: !fellBack },
-      true,
+      { model, lane, caller, target: fellBack ? "local" : "peer", peer: peer.name, offbox: !fellBack,
+        ...(fellBack && localStatus >= 400 ? { status: localStatus } : {}) },
+      // Only the fallback can have relayed a bad status: a peer's own 4xx threw
+      // a PeerStatusError further up and never reached here.
+      !fellBack || localStatus < 400,
+      fellBack && localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
     );
   }
 
@@ -1247,6 +1267,9 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         if (fromPeer !== null) {
           const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
           const serving = pool.for(model);
+          // As on the local path: what we relayed to the borrower, so lent
+          // capacity that failed is not filed as lent capacity that worked.
+          let lentStatus = 0;
           try {
             await serving.scheduler.submit(
               // peerMaxConcurrent rather than maxPerCaller. A peer is always a
@@ -1269,7 +1292,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
                   json: pool.outboundBody(model, payload),
                   signal: ctrl.signal,
                 });
-                await pipeThrough(up, res);
+                lentStatus = await pipeThrough(up, res);
               },
             );
           } catch (e) {
@@ -1281,7 +1304,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             throw e;
           }
           // Lent capacity is the thing you most want a record of.
-          logRequest(t, { model, lane, target: "local", forPeer: fromPeer }, true);
+          logRequest(
+            t,
+            { model, lane, target: "local", forPeer: fromPeer,
+              ...(lentStatus >= 400 ? { status: lentStatus } : {}) },
+            lentStatus < 400,
+            lentStatus >= 400 ? `backend answered ${lentStatus}` : undefined,
+          );
         } else {
           await dispatch(payload, model, lane, caller, res, ctrl.signal);
         }
@@ -1754,7 +1783,18 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // and a peer running the same weights at 32k — and a union would have to
     // pick one of those numbers and get it wrong for somebody.
     const selfStats: Record<string, ModelStats> = {};
-    for (const m of pool.catalog()) {
+    // Route models as well as the catalogue. A `kind: none` backend is in no
+    // catalogue and can never answer /props, so a declaration is the ONLY thing
+    // that will ever be known about it — and leaving it out of the payload
+    // would mean the one model whose stats can only be declared is the one the
+    // page cannot show. Nothing is enforced for these: their requests arrive on
+    // a declared path with a body we do not read, so there is nothing to
+    // measure. Reported, not checked.
+    const named = new Set(pool.catalog());
+    for (const b of pool.all()) {
+      for (const r of b.cfg.routes) if (r.model !== "") named.add(r.model);
+    }
+    for (const m of named) {
       const st = pool.statsFor(m);
       if (st) selfStats[m] = st;
     }
