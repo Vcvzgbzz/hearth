@@ -534,23 +534,34 @@ export function Graph({ d, sel, onSelect }: {
       const toBackend = `self>backend:${b.name}`;
       for (let i = 0; i < n; i++) bump(toBackend);
       if (!managed.has(toBackend)) loose.add(toBackend);
-      // The card edge too. Leaving it dark while the card itself said "in use"
-      // was the picture contradicting itself: the work reached the backend and
-      // then apparently stopped there.
+    }
+
+    /**
+     * Hardware edges light for the backend USING the hardware.
+     *
+     * Which is not the same question as who the arbiter gave it to, and keying
+     * off `holder` was wrong in a way that only showed once hardware could be
+     * shared: a shared resource has no holder by design — nobody holds it,
+     * several things use it — so guard→cpu stayed dark the entire time guard
+     * was running. The work reached the backend and then apparently stopped
+     * there, which is the same contradiction forwarded work used to draw.
+     *
+     * Scheduled work is green even on shared hardware. hearth admitted it; it
+     * simply is not excluding anyone, and that is a fact about the hardware
+     * rather than about the job.
+     */
+    for (const b of backends) {
+      const running = jobs.some((j) => !j.offbox && j.backend === b.name);
+      const forwarded = (b.proxying ?? []).length > 0;
+      if (!running && !forwarded) continue;
       for (const r of b.resources ?? []) {
         const toCard = `backend:${b.name}>resource:${r}`;
-        const arbiterHolds = resources.some((x) => x.name === r && x.holder === b.name);
         if (!m.has(toCard)) m.set(toCard, 0);
-        if (!arbiterHolds) loose.add(toCard);
+        if (!running && forwarded) loose.add(toCard);
       }
     }
 
     for (const sp of sparks) if (!m.has(sp.edge)) m.set(sp.edge, 0);
-    for (const r of resources) {
-      if (r.holder && !m.has(`backend:${r.holder}>resource:${r.name}`)) {
-        m.set(`backend:${r.holder}>resource:${r.name}`, 0);
-      }
-    }
     return { count: m, loose };
   }, [jobs, sparks, resources, backends, peerNames]);
 
