@@ -47,7 +47,11 @@ export default function Dashboard({ d, ctx, dead, menu }: {
   const backends = self?.backends ?? [];
   const running = d ? d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length : 0;
   const queued = d ? Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0) : 0;
-  const cardsBusy = resources.filter((r) => r.holder).length;
+  // Only hardware that is actually arbitrated. A shared resource can never have
+  // a holder, so counting it would grow the denominator and report the box as
+  // less busy the more CPU sidecars it declares.
+  const arbitrated = resources.filter((r) => !r.shared);
+  const cardsBusy = arbitrated.filter((r) => r.holder).length;
 
   return (
     <Container maxWidth={false} sx={{ maxWidth: 960, py: 3, pb: 8, bgcolor: "background.default", minHeight: "100dvh" }}>
@@ -76,7 +80,7 @@ export default function Dashboard({ d, ctx, dead, menu }: {
         {d && (
           <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 1 }}>
             {resources.length > 0 && (
-              <StatTile label="cards busy" value={`${cardsBusy}/${resources.length}`} hot={cardsBusy > 0}
+              <StatTile label="cards busy" value={`${cardsBusy}/${arbitrated.length}`} hot={cardsBusy > 0}
                         title="hardware with a backend running on it right now" />
             )}
             <StatTile label="running" value={running} hot={running > 0} title="jobs in flight on this box" />

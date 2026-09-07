@@ -21,6 +21,8 @@
  */
 import {
   ArrowDataTransferHorizontalIcon,
+  ChipIcon,
+  CpuIcon,
   GpuIcon,
   PinLocation01Icon,
   Route01Icon,
@@ -28,7 +30,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
-export type IconKind = "self" | "peer" | "swap" | "single" | "path" | "card";
+export type IconKind = "self" | "peer" | "swap" | "single" | "path" | "card" | "cpu" | "chip";
 
 const GLYPH = {
   /** This node — the machine the page is served from. */
@@ -55,8 +57,12 @@ const GLYPH = {
   single: PinLocation01Icon,
   /** Not an OpenAI server: a declared path we forward, and never look inside. */
   path: Route01Icon,
-  /** Silicon — the thing every backend takes turns on. */
+  /** A card — the thing backends take turns on. */
   card: GpuIcon,
+  /** A CPU, which they do not take turns on: several run there at once. */
+  cpu: CpuIcon,
+  /** Hardware that is neither, for a use nobody anticipated. */
+  chip: ChipIcon,
 } as const;
 
 /**
@@ -81,6 +87,10 @@ export function TypeIcon({ kind, size }: { kind: IconKind; size: number }) {
     />
   );
 }
+
+/** Which mark a piece of hardware gets, from what it was declared to be. */
+export const resourceIcon = (kind: string | undefined): IconKind =>
+  kind === "cpu" ? "cpu" : kind === "other" ? "chip" : "card";
 
 /** Which mark a backend gets, from what it is rather than what it is called. */
 export const backendIcon = (kind: string | undefined, hasRoutes: boolean): IconKind =>

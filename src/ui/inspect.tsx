@@ -24,7 +24,7 @@ import { useState } from "react";
 
 import { CopyButton, Pre, Row, Why } from "./bits.js";
 import { Graph, type Sel } from "./graph.js";
-import { backendIcon, TypeIcon, type IconKind } from "./icons.js";
+import { backendIcon, resourceIcon, TypeIcon, type IconKind } from "./icons.js";
 import { clock, displayId, postWrite, since } from "./lib.js";
 import { MONO } from "./theme.js";
 import { blockers } from "./why.js";
@@ -737,11 +737,18 @@ export function ResourcePanel({ name, d }: { name: string; d: UiData }) {
 
   return (
     <>
-      <Fact label="holder" hint="who is RUNNING on it, not whose weights are resident — the arbiter frees a card the moment the last job on it finishes, so free-and-still-loaded is the normal resting state">
-        <Box sx={{ color: r.holder ? "success.main" : "faint" }}>
-          {r.holder ? r.holder : "free"}
-        </Box>
-      </Fact>
+      {r.shared ? (
+        <Fact label="shared"
+              hint="everything declared on it runs at once, so hearth does not arbitrate it: nothing waits for it and nothing is evicted off it">
+          <Box sx={{ color: "faint" }}>not arbitrated — {backends.length} backend(s) use it</Box>
+        </Fact>
+      ) : (
+        <Fact label="holder" hint="who is RUNNING on it, not whose weights are resident — the arbiter frees a card the moment the last job on it finishes, so free-and-still-loaded is the normal resting state">
+          <Box sx={{ color: r.holder ? "success.main" : "faint" }}>
+            {r.holder ? r.holder : "free"}
+          </Box>
+        </Fact>
+      )}
       {unqueued.length > 0 && (
         <Fact label="also busy" hint="hearth forwards this work rather than scheduling it, so the arbiter does not hold the card and cannot make anything else wait for it">
           <Box sx={{ color: "warning.main" }}>
@@ -750,7 +757,7 @@ export function ResourcePanel({ name, d }: { name: string; d: UiData }) {
         </Fact>
       )}
 
-      <Section label="competing" count={backends.length}>
+      <Section label={r.shared ? "using it" : "competing"} count={backends.length}>
         {backends.map((b) => {
           const q = b.queued ?? 0;
           const mine = r.holder === b.name;
@@ -765,7 +772,8 @@ export function ResourcePanel({ name, d }: { name: string; d: UiData }) {
                 color: mine ? "success.main" : q > 0 ? "warning.main" : "text.secondary",
               }}>{b.name}</Typography>
               <Typography sx={{ fontSize: 10, color: "faint" }}>
-                {mine ? "holding" : q > 0 ? `${q} waiting` : "idle"}
+                {r.shared ? (b.queued ?? 0) > 0 ? `${b.queued} queued` : "idle"
+                  : mine ? "holding" : q > 0 ? `${q} waiting` : "idle"}
               </Typography>
             </Box>
           );
@@ -792,6 +800,7 @@ function Overview({ d }: { d: UiData }) {
   const self = d.net.nodes.find((n) => n.self);
   const peers = d.net.nodes.filter((n) => !n.self);
   const resources = d.net.resources ?? [];
+  const arbitrated = resources.filter((r) => !r.shared);
   const running = d.q.jobs.filter((j) => j.state === "running" && !j.offbox).length;
   const queued = Object.values(d.q.capacity.queued).reduce((a, b) => a + b, 0);
   const stat = (label: string, value: React.ReactNode, hot?: boolean) => (
@@ -812,8 +821,11 @@ function Overview({ d }: { d: UiData }) {
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, mb: 2 }}>
         {stat("running", running, running > 0)}
         {stat("queued", queued, queued > 0)}
-        {resources.length > 0 && stat("cards busy", `${resources.filter((r) => r.holder).length}/${resources.length}`,
-          resources.some((r) => r.holder))}
+        {/* Only hardware that is actually arbitrated. A shared resource can never
+            have a holder, so counting it here would grow the denominator and
+            report a box as less busy the more CPU sidecars it declares. */}
+        {arbitrated.length > 0 && stat("cards busy", `${arbitrated.filter((r) => r.holder).length}/${arbitrated.length}`,
+          arbitrated.some((r) => r.holder))}
         {stat("warm", d.net.readyNow.length)}
         {peers.length > 0 && stat("peers", `${peers.filter((n) => n.up).length}/${peers.length}`,
           peers.some((n) => !n.up))}
@@ -885,9 +897,12 @@ export function PanelHeadFor({ d, sel, onBack }: {
   if (card) {
     const backends = (self?.backends ?? []).filter((b) => (b.resources ?? []).includes(card.name));
     const loose = backends.some((b) => (b.proxying ?? []).length > 0);
-    return <PanelHead icon="card" tone={card.holder ? "live" : loose ? "work" : "idle"}
+    return <PanelHead icon={resourceIcon(card.kind)}
+                      tone={card.holder ? "live" : loose ? "work" : "idle"}
                       name={card.name}
-                      status={card.holder ? `${card.holder} holding` : loose ? "in use, unscheduled" : "free"}
+                      status={card.shared ? "shared — not arbitrated"
+                        : card.holder ? `${card.holder} holding`
+                        : loose ? "in use, unscheduled" : "free"}
                       onBack={onBack} />;
   }
   return null;

@@ -89,6 +89,39 @@ export type UiControl = "off" | "key";
  * stops polling. That wants its own mechanism, and this shape leaves room for
  * one rather than pretending to cover it.
  */
+/**
+ * What a named resource IS, declared once rather than inferred from use.
+ *
+ * `resources:` on a backend has always meant "hardware I use", and the arbiter
+ * has always read that as "hardware I must not share". For a card that is the
+ * same sentence. For a CPU it is not: six sidecars run on one CPU quite happily,
+ * and serializing them would be wrong — worse than wrong, since a backend taking
+ * a resource UNLOADS every other backend holding it, so declaring a shared CPU
+ * under the old rules would have thrashed models that are meant to stay
+ * resident.
+ *
+ * There was no way to say that, so the only safe move was to declare nothing —
+ * which is why the console could not show what a sidecar runs on. Declaring the
+ * resource fixes both: the operator says `resources: [cpu]`, which is true, and
+ * says here that the CPU does not need serializing.
+ *
+ * `kind` is display only and never reaches admission. `shared` is the one that
+ * changes behaviour, and it does so by keeping the resource away from the
+ * arbiter entirely rather than by teaching the arbiter a second mode.
+ */
+export interface ResourceDecl {
+  /** What to draw it as. Behaviour never reads this. */
+  kind: "gpu" | "cpu" | "other";
+  /**
+   * True when several backends may use it at once.
+   *
+   * A shared resource is not arbitrated at all: it is filtered out before the
+   * scheduler ever sees it, so `resources.ts` stays exactly what it says it is —
+   * mutual exclusion — and knows nothing about sharing.
+   */
+  shared: boolean;
+}
+
 export interface RouteRule {
   /**
    * Exact pathname, query string ignored. `/sdapi/v1/txt2img`, `/generate`.
@@ -247,6 +280,14 @@ export interface ModelRoute {
 }
 
 export interface HearthConfig {
+  /**
+   * Declared hardware, by name.
+   *
+   * Optional and additive: a name a backend uses but nobody declares is an
+   * exclusive `gpu`, which is what every config written before this meant and
+   * what the arbiter has always done with it.
+   */
+  resources: Record<string, ResourceDecl>;
   /**
    * The file this config was loaded from, or null when it was built in memory.
    *
@@ -660,6 +701,29 @@ export function parseConfig(raw: unknown): HearthConfig {
     );
   }
 
+  /**
+   * Declared hardware. Everything here is optional, including the block.
+   *
+   * Validated up front rather than on first use: a typo in `kind` that only
+   * surfaces as the wrong icon weeks later is exactly the class of thing
+   * --check exists to catch at deploy time.
+   */
+  const resourceDecls: Record<string, ResourceDecl> = {};
+  if (root.resources !== undefined) {
+    const rd = asRecord(root.resources, "resources");
+    for (const [name, raw] of Object.entries(rd)) {
+      const at = `resources.${name}`;
+      const entry = asRecord(raw ?? {}, at);
+      const kind = str(entry.kind, `${at}.kind`, "gpu");
+      if (kind !== "gpu" && kind !== "cpu" && kind !== "other") {
+        throw new ConfigError(
+          `${at}.kind must be gpu, cpu or other (got ${JSON.stringify(kind)})`,
+        );
+      }
+      resourceDecls[name] = { kind, shared: bool(entry.shared, `${at}.shared`, false) };
+    }
+  }
+
   const backends: BackendConfig[] = [];
   if (root.backends !== undefined) {
     if (!Array.isArray(root.backends)) throw new ConfigError("backends must be a list");
@@ -933,6 +997,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     stateFile: str(root.stateFile, "stateFile", "") || null,
     listen: mainListen,
     uiListen,
+    resources: resourceDecls,
     backends,
     scheduler: {
       concurrency: defaultConcurrency,
