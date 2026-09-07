@@ -42,13 +42,30 @@ export interface Ctx {
 /* -------------------------------------------------------------- fittings */
 
 /** A label above a value, the unit this panel is built from. */
+/**
+ * The rail's two vertical lines.
+ *
+ * Everything hangs off these: a label, a section heading and a list row all
+ * start at the margin, and a value, the panel title and a model name all start
+ * at the gutter. Before this there were five different left edges — the header
+ * floated right of the labels, model names had an indent of their own, and the
+ * value column lined up with nothing above or below it. Each piece looked fine
+ * and the panel felt wrong, which is what a missing grid feels like.
+ *
+ * 64 because it clears the widest label ("in flight") and the 26px mark with
+ * room to breathe, without opening the canyon the old 74-plus-a-gap left
+ * between a short label and its value.
+ */
+const GUTTER = 64;
+
 export function Fact({ label, children, hint }: {
   label: string; children: React.ReactNode; hint?: string;
 }) {
   const body = (
-    <Box sx={{ display: "flex", gap: 1.5, alignItems: "baseline", py: 0.6 }}>
+    <Box sx={{ display: "flex", alignItems: "baseline", py: 0.55 }}>
       <Typography component="div" sx={{
-        fontSize: 10.5, color: "faint", flex: "0 0 74px", ...(hint ? { cursor: "help" } : {}),
+        fontSize: 10.5, color: "faint", flex: `0 0 ${GUTTER}px`,
+        ...(hint ? { cursor: "help" } : {}),
       }}>{label}</Typography>
       <Box sx={{ fontFamily: MONO, fontSize: 11.5, minWidth: 0, flex: 1 }}>{children}</Box>
     </Box>
@@ -64,13 +81,18 @@ export function Fact({ label, children, hint }: {
  * same weight as what the backend is doing right now, and seven of them in a
  * column read as a form dump rather than a panel.
  */
-export function Section({ label, count, children }: {
-  label: string; count?: React.ReactNode; children: React.ReactNode;
+export function Section({ label, count, note, children }: {
+  label: string;
+  /** A number, not a sentence — it sits on the heading's own baseline. */
+  count?: React.ReactNode;
+  /** The sentence, on its own line where it cannot fight the heading. */
+  note?: string;
+  children: React.ReactNode;
 }) {
   return (
-    <Box sx={{ mt: 2.25 }}>
+    <Box sx={{ mt: 2 }}>
       <Box sx={{
-        display: "flex", alignItems: "baseline", gap: 1, pb: 0.5, mb: 0.5,
+        display: "flex", alignItems: "baseline", gap: 1, pb: 0.4,
         borderBottom: "1px solid", borderColor: "divider",
       }}>
         <Typography sx={{
@@ -81,7 +103,10 @@ export function Section({ label, count, children }: {
           <Typography sx={{ fontFamily: MONO, fontSize: 10, color: "faint" }}>{count}</Typography>
         )}
       </Box>
-      {children}
+      {note && (
+        <Typography sx={{ fontSize: 10, color: "faint", mt: 0.5 }}>{note}</Typography>
+      )}
+      <Box sx={{ mt: 0.5 }}>{children}</Box>
     </Box>
   );
 }
@@ -115,8 +140,10 @@ export function PanelHead({ icon, tone, name, status, onBack }: {
           }}
         >← everything</Box>
       )}
-      <Box sx={{ display: "flex", gap: 1.25, alignItems: "center" }}>
-        <Box sx={{ color: colour, display: "flex" }}><TypeIcon kind={icon} size={26} /></Box>
+      <Box sx={{ display: "flex", alignItems: "center" }}>
+        <Box sx={{ color: colour, display: "flex", flex: `0 0 ${GUTTER}px` }}>
+          <TypeIcon kind={icon} size={28} />
+        </Box>
         <Box sx={{ minWidth: 0 }}>
           <Typography component="h2" sx={{
             fontFamily: MONO, fontSize: 13.5, fontWeight: 600, m: 0,
@@ -368,14 +395,17 @@ export function ModelLine({ model, d, ctx, warm, where, peer }: {
   const lendable = d.catalog.includes(model);
   return (
     <Box sx={{
-      display: "flex", alignItems: "center", gap: 1, py: 0.7,
+      display: "flex", alignItems: "center", py: 0.65,
       borderBottom: "1px solid", borderColor: "divider",
       "&:last-of-type": { borderBottom: "none" },
     }}>
-      <Box aria-hidden sx={{
-        width: 5, height: 5, borderRadius: "50%", flexShrink: 0,
-        bgcolor: warm ? "success.main" : "divider",
-      }} />
+      {/* An empty gutter, so the name starts on the same line as every value
+          and the panel title.
+          There was a warmth dot in here. It said the same thing as the right
+          column — which already reads "warm" or offers "load" — and once the
+          grid put it 64px from the name it described, it had lost the one thing
+          that made it legible. */}
+      <Box aria-hidden sx={{ flex: `0 0 ${GUTTER}px` }} />
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography component="div" sx={{
           fontFamily: MONO, fontSize: 11.5, overflow: "hidden",
@@ -438,7 +468,8 @@ function MapEditor({ n, ctx }: { n: Node; ctx: Ctx }) {
       </Section>
 
       {unmapped.length > 0 && (
-        <Section label="offered" count={`${unmapped.length} you have not mapped, so nothing can route to them`}>
+        <Section label="offered" count={unmapped.length}
+                 note="this peer lends these and you have not mapped them, so nothing can route there">
           {unmapped.map((theirs) => (
             <Row key={theirs} spacing={1} align="center" sx={{ py: 0.5 }}>
               {ctx.canWarm ? (
@@ -597,7 +628,7 @@ function PeerPanel({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
       {loaded.length > 0 && (
         <Section label="warm there" count={loaded.length}>
           {loaded.map((m) => (
-            <Typography key={m} sx={{ fontFamily: MONO, fontSize: 11.5, color: "success.main", py: 0.3 }}>{m}</Typography>
+            <Typography key={m} sx={{ fontFamily: MONO, fontSize: 11.5, color: "success.main", py: 0.3, pl: `${GUTTER}px` }}>{m}</Typography>
           ))}
         </Section>
       )}
@@ -663,9 +694,10 @@ function BackendPanel({ b, d, ctx }: { b: Backend; d: UiData; ctx: Ctx }) {
       )}
 
       {(b.routes ?? []).length > 0 && (
-        <Section label="paths" count="reached by POST, not by model id">
+        <Section label="paths" count={(b.routes ?? []).length}
+                 note="reached by POST to this path, not by model id">
           {(b.routes ?? []).map((rt) => (
-            <Box key={rt.path} sx={{ py: 0.35, fontFamily: MONO, fontSize: 11 }}>
+            <Box key={rt.path} sx={{ py: 0.35, pl: `${GUTTER}px`, fontFamily: MONO, fontSize: 11 }}>
               <Box component="span">{rt.path}</Box>
               <Box component="span" sx={{ color: "faint" }}>
                 {!rt.queue ? " · not queued"
@@ -724,7 +756,7 @@ function ResourcePanel({ name, d }: { name: string; d: UiData }) {
           const mine = r.holder === b.name;
           return (
             <Box key={b.name} sx={{
-              display: "flex", alignItems: "baseline", gap: 1, py: 0.4,
+              display: "flex", alignItems: "baseline", py: 0.4, pl: `${GUTTER}px`,
               borderBottom: "1px solid", borderColor: "divider",
               "&:last-of-type": { borderBottom: "none" },
             }}>
@@ -741,9 +773,10 @@ function ResourcePanel({ name, d }: { name: string; d: UiData }) {
       </Section>
 
       {evictions.length > 0 && (
-        <Section label="handoffs" count="a backend cleared off so another could use it">
+        <Section label="handoffs" count={evictions.length}
+                 note="a backend cleared off this card so another could use it">
           {evictions.map((e) => (
-            <Box key={`${e.t}:${e.backend}`} sx={{ py: 0.3, fontFamily: MONO, fontSize: 11, color: "text.secondary" }}>
+            <Box key={`${e.t}:${e.backend}`} sx={{ py: 0.3, pl: `${GUTTER}px`, fontFamily: MONO, fontSize: 11, color: "text.secondary" }}>
               <Box component="span" sx={{ color: "faint" }}>{clock(e.t)} </Box>
               {e.backend} → {e.for}
             </Box>
