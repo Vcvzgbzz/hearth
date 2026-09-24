@@ -59,6 +59,8 @@ export interface RouteChange {
 export interface Changes {
   maps: MapChange[];
   routes: RouteChange[];
+  /** A note set or cleared since the file was read; null is cleared. */
+  notes: { model: string; text: string | null }[];
 }
 
 /** A route as it is stored. Only the fields the console can set — the rest
@@ -85,6 +87,7 @@ export interface SavedState {
   share: Record<string, boolean>;
   maps: Record<string, Record<string, string | null>>;
   routes: Record<string, SavedRoute | null>;
+  notes?: Record<string, string | null>;
 }
 
 /**
@@ -112,6 +115,7 @@ export function readState(path: string, log: Logger): SavedState | null {
       share: raw.share ?? {},
       maps: raw.maps ?? {},
       routes: raw.routes ?? {},
+      notes: raw.notes ?? {},
     };
   } catch (e) {
     log.warn("state.unreadable", {
@@ -138,7 +142,8 @@ export function writeState(path: string, state: SavedState): void {
   const empty =
     Object.keys(state.share).length === 0 &&
     Object.keys(state.maps).length === 0 &&
-    Object.keys(state.routes).length === 0;
+    Object.keys(state.routes).length === 0 &&
+    Object.keys(state.notes ?? {}).length === 0;
   if (empty) {
     rmSync(path, { force: true });
     return;
@@ -207,6 +212,16 @@ export class Overrides {
     this.savedBlob = this.blob({ version: 1, savedAt: "", share: {}, maps: {}, routes: {} });
     this.baseMaps = new Map(cfg.peers.map((p) => [p.name, { ...p.models }]));
     this.baseRoutes = new Map(Object.entries(cfg.models).map(([id, r]) => [id, { ...r }]));
+    this.baseNotes = { ...cfg.notes };
+  }
+
+  private baseNotes: Record<string, string>;
+
+  /** Set or clear one model's note, live. Saved like everything else here. */
+  setNote(model: string, text: string | null): void {
+    const notes = (this.cfg.notes ??= {});
+    if (text === null || text.trim() === "") delete notes[model];
+    else notes[model] = text.trim();
   }
 
   /**
@@ -240,6 +255,7 @@ export class Overrides {
       if (r === null) delete this.cfg.models[id];
       else this.cfg.models[id] = { ...DEFAULT_ROUTE, ...this.cfg.models[id], ...r };
     }
+    for (const [model, text] of Object.entries(state.notes ?? {})) this.setNote(model, text);
     this.pruneDeadRoutes();
     this.markSaved(state);
   }
@@ -262,7 +278,8 @@ export class Overrides {
         ? null
         : { policy: r.policy!, peers: r.peers, fallbackLocal: r.fallbackLocal };
     }
-    return { version: 1, savedAt: new Date().toISOString(), share, maps, routes };
+    const notes = Object.fromEntries(c.notes.map((n) => [n.model, n.text]));
+    return { version: 1, savedAt: new Date().toISOString(), share, maps, routes, notes };
   }
 
   /**
@@ -375,6 +392,11 @@ export class Overrides {
       if (r.fallbackLocal) doc.deleteIn(["models", r.model, "fallbackLocal"]);
       else doc.setIn(["models", r.model, "fallbackLocal"], false);
     }
+    for (const n of changes.notes) {
+      if (n.text === null) doc.deleteIn(["notes", n.model]);
+      else doc.setIn(["notes", n.model], n.text);
+    }
+    if (changes.notes.length && Object.keys(this.cfg.notes ?? {}).length === 0) doc.delete("notes");
 
     // Match the file's own flow spacing rather than impose a house style. This
     // is rendered whole, so whichever setting is wrong for the file rewrites
@@ -462,6 +484,7 @@ export class Overrides {
     for (const p of this.cfg.peers) this.baseMaps.set(p.name, { ...p.models });
     this.baseRoutes.clear();
     for (const [id, r] of Object.entries(this.cfg.models)) this.baseRoutes.set(id, { ...r });
+    this.baseNotes = { ...this.cfg.notes };
   }
 
   /** Is there anything the sidecar would not survive a restart with? */
@@ -480,7 +503,7 @@ export class Overrides {
    * the order somebody happened to click things in.
    */
   private blob(state: SavedState): string {
-    return JSON.stringify({ share: state.share, maps: state.maps, routes: state.routes }, (_k, v) =>
+    return JSON.stringify({ share: state.share, maps: state.maps, routes: state.routes, notes: state.notes ?? {} }, (_k, v) =>
       v && typeof v === "object" && !Array.isArray(v)
         ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort((a, b) => a[0].localeCompare(b[0])))
         : v,
@@ -642,12 +665,21 @@ export class Overrides {
         removed: !now,
       });
     }
-    return { maps: maps.sort((a, b) => a.mine.localeCompare(b.mine)), routes: routes.sort((a, b) => a.model.localeCompare(b.model)) };
+    const now = this.cfg.notes ?? {};
+    const notes = [...new Set([...Object.keys(now), ...Object.keys(this.baseNotes)])]
+      .filter((m) => now[m] !== this.baseNotes[m])
+      .sort()
+      .map((model) => ({ model, text: now[model] ?? null }));
+    return {
+      maps: maps.sort((a, b) => a.mine.localeCompare(b.mine)),
+      routes: routes.sort((a, b) => a.model.localeCompare(b.model)),
+      notes,
+    };
   }
 
   dirty(): boolean {
     const c = this.changes();
-    return c.maps.length > 0 || c.routes.length > 0;
+    return c.maps.length > 0 || c.routes.length > 0 || c.notes.length > 0;
   }
 
   /**
@@ -702,6 +734,13 @@ export class Overrides {
     }
     for (const r of changes.routes.filter((x) => x.removed)) {
       out.push(`# remove models.${r.model} — nothing maps it any more`);
+    }
+    if (changes.notes.length) {
+      out.push("", "# top level, under notes: — merges with what is already there");
+      out.push("notes:");
+      for (const n of changes.notes) {
+        out.push(n.text === null ? `  # remove ${y(n.model)}` : `  ${y(n.model)}: ${y(n.text)}`);
+      }
     }
 
     return out.join("\n").trimEnd();

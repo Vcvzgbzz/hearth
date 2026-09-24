@@ -272,7 +272,7 @@ export interface Call {
 
 export interface Overrides {
   dirty: boolean;
-  changes: { maps: unknown[]; routes: unknown[] };
+  changes: { maps: unknown[]; routes: unknown[]; notes?: unknown[] };
   canSave: boolean;
   savesTo: "config" | "state" | null;
   savePath: string | null;

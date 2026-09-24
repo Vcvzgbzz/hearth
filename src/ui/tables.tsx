@@ -23,7 +23,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Dot, mono, Row, Spacer, Tag } from "./bits.js";
 import { CallsTable, Depth, HistTable, Lanes } from "./charts.js";
 import { type Sel } from "./graph.js";
-import { LoadAction, ShareToggle, type Ctx } from "./inspect.js";
+import { LoadAction, NoteEdit, ShareToggle, type Ctx } from "./inspect.js";
 import { ctxLabel, displayId, since } from "./lib.js";
 import { capabilityChips, capabilityGaps } from "./takes.js";
 import { MONO } from "./theme.js";
@@ -251,7 +251,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
     const src = [...r.on.filter((n) => n.self), ...r.on.filter((n) => !n.self)]
       .find((n) => n.stats?.[r.model]);
     const st = src?.stats?.[r.model];
-    if (!st || !src) {
+    if (!st || !src || Object.keys(st).every((k) => k === "note" || k === "from")) {
       return (
         <Tooltip title="nothing reported yet — a model has to be loaded once before its backend will say what it holds">
           <Box component="span" sx={{ color: "faint" }}>—</Box>
@@ -284,11 +284,17 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
     );
   };
 
-  const Note = ({ r }: { r: ModelRow }) => {
-    const note = r.on.map((n) => n.stats?.[r.model]?.note).find(Boolean);
-    return note ? (
+  // Called, not rendered as <Note>: a component declared in here is a new type every
+  // render, and React would remount NoteEdit and drop the draft on each live update.
+  const note = (r: ModelRow) => {
+    const self = r.on.find((n) => n.self);
+    if (self && d.catalog.includes(r.model)) {
+      return <NoteEdit model={r.model} note={self.stats?.[r.model]?.note} ctx={ctx} />;
+    }
+    const text = r.on.map((n) => n.stats?.[r.model]?.note).find(Boolean);
+    return text ? (
       <Typography sx={{ fontSize: 11, color: "text.secondary", whiteSpace: "normal", maxWidth: 360, mt: 0.25 }}>
-        {note}
+        {text}
       </Typography>
     ) : null;
   };
@@ -339,7 +345,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
                         </Box>
                       </Box>
                     ) : r.model}
-                    <Note r={r} />
+                    {note(r)}
                   </TableCell>
                   <TableCell sx={{ ...mono, color: "text.secondary" }}><Where r={r} /></TableCell>
                   <TableCell><State r={r} /></TableCell>

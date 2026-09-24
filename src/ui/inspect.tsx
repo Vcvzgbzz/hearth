@@ -370,6 +370,54 @@ export function ShareToggle({ model, d, ctx }: { model: string; d: UiData; ctx: 
   );
 }
 
+/** A model's note: what peers read beside it. Click to edit; Save in the rail keeps it. */
+export function NoteEdit({ model, note, ctx }: { model: string; note: string | undefined; ctx: Ctx }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [fail, setFail] = useState<string | null>(null);
+  const text = { fontSize: 11, whiteSpace: "normal", maxWidth: 360, mt: 0.25 } as const;
+
+  if (draft === null) {
+    if (!ctx.canWarm) return note ? <Typography sx={{ ...text, color: "text.secondary" }}>{note}</Typography> : null;
+    return (
+      <Tooltip title="what peers see beside this model — click to edit">
+        <Typography onClick={() => setDraft(note ?? "")}
+                    sx={{ ...text, cursor: "text", color: note ? "text.secondary" : "faint",
+                          "&:hover": { color: "text.primary" } }}>
+          {note ?? "+ note"}
+        </Typography>
+      </Tooltip>
+    );
+  }
+  const send = () => {
+    setBusy(true);
+    setFail(null);
+    postWrite("/control", { notes: { [model]: draft.trim() === "" ? null : draft } }, ctx.control)
+      .then(() => { setDraft(null); ctx.refresh(); })
+      .catch((e: unknown) => setFail(String((e as Error)?.message ?? e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Box sx={{ mt: 0.5, maxWidth: 360 }}>
+      <TextField size="small" multiline minRows={2} fullWidth autoFocus value={draft} disabled={busy}
+                 placeholder="what it is for, how to call it"
+                 onChange={(e) => setDraft(e.target.value)}
+                 onKeyDown={(e) => {
+                   if (e.key === "Escape") setDraft(null);
+                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
+                 }}
+                 slotProps={{ htmlInput: { maxLength: 500, "aria-label": `note for ${model}` } }} />
+      <Row spacing={0.5} align="center" sx={{ mt: 0.5 }}>
+        <Button size="small" onClick={send} disabled={busy}>set</Button>
+        <Button size="small" onClick={() => setDraft(null)} disabled={busy}>cancel</Button>
+        <Typography sx={{ fontSize: 10, color: fail ? "error.main" : "faint" }}>
+          {fail ?? `${draft.length}/500`}
+        </Typography>
+      </Row>
+    </Box>
+  );
+}
+
 /**
  * The load action.
  *
@@ -613,7 +661,7 @@ function Pending({ d, ctx }: { d: UiData; ctx: Ctx }) {
   if (!ov?.dirty) return null;
 
   const drift = [...d.share].sort().join(",") !== [...d.configuredShare].sort().join(",");
-  const n = ov.changes.maps.length + ov.changes.routes.length + (drift ? 1 : 0);
+  const n = ov.changes.maps.length + ov.changes.routes.length + (ov.changes.notes?.length ?? 0) + (drift ? 1 : 0);
   const toConfig = ov.savesTo === "config";
   const fate = !ov.canSave ? "these revert on restart"
     : ov.unsaved ? "not saved, so a restart discards them"

@@ -579,7 +579,7 @@ export class BackendPool {
     const declared = route?.stats ?? (route?.as ? this.cfg.models[route.as]?.stats : null) ?? null;
     const merged = mergeStats(declared, this.for(model).state.statsFor(this.outboundId(model)));
     const note = this.cfg.notes?.[model] ?? (route?.as ? this.cfg.notes?.[route.as] : undefined);
-    return note ? { from: "declared", ...merged, note } : merged;
+    return note ? { ...merged, note } : merged;
   }
 
   /** Everything warm anywhere. Several at once is normal now: one backend per

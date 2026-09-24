@@ -304,3 +304,27 @@ const boot = async () => {
 
 await new Promise<void>((r) => be.server.close(() => r()));
 console.log("saveconfig.test.ts ok");
+
+/* ------------------------------------------------------ notes from the page */
+
+{
+  writeFileSync(cfgPath, ORIGINAL);
+  const a = await boot();
+  assert.equal((await a.post({ notes: { mine: "use for: \"quoted\" things" } })).status, 200);
+  assert.equal((await a.post({ notes: { mine: 3 } })).status, 400, "a note is text or null");
+  assert.equal((await a.read()).dirty, true, "a note edit is a pending change like any other");
+  const port = (a.node.server.address() as AddressInfo).port;
+  const models = await (await fetch(`http://127.0.0.1:${port}/v1/models`)).json() as
+    { data: { id: string; description?: string }[] };
+  assert.equal(models.data.find((m) => m.id === "mine")?.description, "use for: \"quoted\" things", "live before any save");
+  assert.equal((await a.post({ save: true })).status, 200);
+  assert.equal((await a.read()).dirty, false);
+  await a.node.close();
+  assert.deepEqual(loadConfig(cfgPath).notes, { mine: "use for: \"quoted\" things" }, "saved into hearth.yaml");
+
+  const b = await boot();
+  assert.equal((await b.post({ notes: { mine: null } })).status, 200);
+  assert.equal((await b.post({ save: true })).status, 200);
+  await b.node.close();
+  assert.doesNotMatch(readFileSync(cfgPath, "utf8"), /notes:/, "clearing the last note removes the block");
+}

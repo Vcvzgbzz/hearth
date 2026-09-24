@@ -28,7 +28,7 @@ import { BackendPool } from "./pool.js";
 import { decide } from "./route.js";
 import { History, KEEP } from "./history.js";
 import { QueueFullError } from "./scheduler.js";
-import { needsOf, unfit, type ModelStats } from "./stats.js";
+import { needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { UI_HTML } from "./ui.js";
 import { send, type UpstreamResponse } from "./upstream.js";
 
@@ -1092,6 +1092,23 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
     }
 
+    if (body.notes !== undefined) {
+      if (typeof body.notes !== "object" || body.notes === null || Array.isArray(body.notes)) {
+        apiError(res, 400, "notes must be an object of model -> text or null");
+        return;
+      }
+      for (const [model, text] of Object.entries(body.notes as Record<string, unknown>)) {
+        if (text !== null && typeof text !== "string") {
+          apiError(res, 400, `notes.${model} must be text or null`);
+          return;
+        }
+        if (typeof text === "string" && text.trim().length > NOTE_MAX) {
+          apiError(res, 400, `notes.${model} is over ${NOTE_MAX} characters`);
+          return;
+        }
+      }
+    }
+
     // Mapping edits, and both blocks are ordered so a POST carrying share AND
     // a link either lands whole or changes nothing: everything above only
     // VALIDATES, link() validates before it mutates, and the share values are
@@ -1140,6 +1157,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         apiError(res, 400, e instanceof Error ? e.message : String(e));
         return;
       }
+    }
+
+    if (body.notes !== undefined) {
+      for (const [model, text] of Object.entries(body.notes as Record<string, string | null>)) {
+        overrides.setNote(model, text);
+      }
+      log.info("control.notes", { models: Object.keys(body.notes as object) });
     }
 
     if (body.share !== undefined) {
@@ -1461,12 +1485,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           // Same principle for context_length: absent when unknown, not null,
           // because we cannot see is not the same claim as a value.
           const entry: Entry = { id };
+          const note = pool.statsFor(id)?.note;
+          if (note) entry.description = note;
           if (pool.for(id).cfg.kind === "none") return entry;
           entry.status = { value: warm.has(id) ? "loaded" : "unloaded" };
           const ctx = pool.contextLength(id);
           if (ctx !== null) entry.context_length = ctx;
-          const note = pool.statsFor(id)?.note;
-          if (note) entry.description = note;
           return entry;
         }),
       };
@@ -2349,6 +2373,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     const dirty =
       changes.maps.length > 0 ||
       changes.routes.length > 0 ||
+      changes.notes.length > 0 ||
       [...shared()].sort().join(",") !== [...cfg.share].sort().join(",");
     return {
       changes,
