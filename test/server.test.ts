@@ -633,8 +633,8 @@ step("nodes up");
     name: "borrower",
     backend: { url: be.url(), llamaSwapExtras: false },
     peers: [{ name: "stubborn", url: stubbornUrl, token: "t", models: { big: "their-big" } }],
-    // fallbackLocal FALSE, matching the real fable-711 route: there is no local
-    // copy, so the refusal has to reach the caller instead of being absorbed.
+    // fallbackLocal FALSE: there is no local copy, so the refusal has to reach
+    // the caller instead of being absorbed.
     models: { big: { policy: "peer", peers: ["stubborn"], fallbackLocal: false } },
   });
   const node = createNode(cfg, silentLogger);

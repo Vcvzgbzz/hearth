@@ -905,8 +905,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
    * maintained, and it costs nothing to read. What it is NOT built on is
    * `answering()`, which means "something came back from this lately" -- on a
    * quiet box nothing does, so every backend reads silent while all of them
-   * are fine. (Verified on the live box before writing this: nine backends,
-   * `answering: false` on all nine, including one with a model resident.)
+   * are fine, even one with a model resident.
    *
    * So: 503 only when we are watching backends and have lost every one of
    * them. A config we cannot watch reports `watched: 0` and stays ok, because
