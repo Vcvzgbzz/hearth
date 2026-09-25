@@ -498,7 +498,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
       try {
         await local.scheduler.submit(
-          { lane, model, caller, ...(cfg.scheduler.maxPerCaller > 0 ? { maxPerCaller: cfg.scheduler.maxPerCaller } : {}), signal },
+          { lane, model, caller, ...(cfg.scheduler.maxPerCaller > 0 ? { maxPerCaller: cfg.scheduler.maxPerCaller } : {}), signal, tokens: pool.poolTokens(model, need) },
           async () => {
             t.startedAt = Date.now();
             await runLocal();
@@ -581,7 +581,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           // No maxPerCaller here. The caller already passed the cap on the way
           // in and its off-box job still counts against it, so applying it again
           // would reject its own retry.
-          await local.scheduler.submit({ lane, model, caller, signal }, runLocal);
+          await local.scheduler.submit({ lane, model, caller, signal, tokens: pool.poolTokens(model, need) }, runLocal);
         }
       },
     );
@@ -1654,7 +1654,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             //
             // Capped per backend, so a borrower filling the GPU queue does not
             // also lock itself out of the embedder.
-            { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal },
+            { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal, tokens: pool.poolTokens(model, needsOf(payload)) },
             async () => {
               t.startedAt = Date.now();
               await serving.state.ensureFresh();

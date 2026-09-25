@@ -136,7 +136,7 @@ key gets `POST /v1/chat/completions` for exactly the ids it names and a
 ```yaml
 apiKeys:
   - { key: env:HEARTH_APP_KEY, label: app }              # full
-  - { key: env:JARVIS_KEY, label: jarvis, models: [jarvis] }   # chat on one id, nothing else
+  - { key: env:VOICE_KEY, label: voice, models: [voice] }      # chat on one id, nothing else
 ```
 
 For the caller that only has a model picker and runs on the softest box you
@@ -215,10 +215,8 @@ a model lives, and it does not finish.
 
 **"On the host" is as far as this goes, and the limit is deliberate.** Weights
 are mmap'd from the model file, so whether they are served out of RAM or faulted
-off the disk depends on whether the model fits in RAM. Measured on one box: an
-88 GB model against a 44 GB memory cap kept 33% of its mapping resident and
-faulted 6-8k pages off the disk on *every* generation, never settling. That is a
-live measurement on the machine running the model — `/proc/<pid>/stat` and
+off the disk depends on whether the model fits in RAM; a model larger than RAM
+faults pages off the disk on *every* generation. That is a live measurement on the machine running the model — `/proc/<pid>/stat` and
 `smaps` — not something a launch command knows, and not something a proxy on
 another machine can see. hearth reports the assignment, which it can prove, and
 does not guess at the medium, which it cannot.
@@ -640,10 +638,8 @@ owns the card and make the other one a backstop.
 
 llama.cpp decodes one request at a time, so one GPU means one job and the queue
 is doing its job by serializing everything. vLLM does not: it answers a batch of
-sequences in roughly the time it answers one. On an Arc Pro B70, Qwen3-0.6B
-measured 87 tok/s at one request and 2741 tok/s at 32, with the wall clock for a
-200-token completion unchanged at 2.3s. Queued one behind the other, all of that
-is thrown away.
+sequences in roughly the time it answers one. Queued one behind the other, all
+of that is thrown away.
 
 llama-swap will happily run a vLLM entry — it execs whatever `cmd` says and
 proxies `${PORT}` — so one backend fronts both kinds of model at once. The
@@ -699,9 +695,34 @@ Do **not** reach for a second `backends:` entry pointing at the same llama-swap
 with a higher concurrency. Nothing schedules across backends, so the two queues
 would dispatch to one GPU simultaneously and thrash it.
 
-Worth knowing before you wire this up: vLLM takes 78-88s to come up under
-llama-swap, warm or cold, against 18s for llama-swap to load a 24 GB GGUF and
-answer. Batching has to be winning you something for that to pay.
+**A model whose requests share one context pool can say how big it is.** vLLM
+keeps a single KV cache for every running sequence, and llama.cpp does the same
+with `--kv-unified`. Slots alone do not protect it: two long agent turns fit the
+slot count and still overflow the pool, and vLLM answers by preempting them in
+turn until both crawl. `pool:` holds a request back while the ones already
+running would leave it too little room:
+
+```yaml
+models:
+  vllm-qwen:
+    concurrency: 4
+    pool: { tokens: 150000, output: 8192 }   # vLLM's KV size, less a margin
+  granite-8b:
+    concurrency: 2
+    pool: 65536                              # llama.cpp -c with --kv-unified
+```
+
+Each request counts as its estimated prompt plus its `max_tokens`, the same
+estimate the context-window check uses. `output` counts `max_tokens` at no more
+than that: vLLM preempts rather than fails when requests outgrow their estimate,
+so reserving an agent's full 32k cap for every turn would only serialize them.
+Leave it off for llama.cpp, where an overflowing unified cache fails requests.
+A request alone always runs; whether it fits the window at all is the context
+check's call.
+
+Worth knowing before you wire this up: vLLM usually takes a minute or more to
+come up under llama-swap, against seconds for a GGUF. Batching has to be winning
+you something for that to pay.
 
 ### Advertising a nicer id than the backend uses
 
@@ -749,19 +770,19 @@ they carry:
 
 ```yaml
 models:
-  Qwen3.8-Fable-735:                         # the seat itself, still usable as-is
+  my-model:                         # the seat itself, still usable as-is
     backend: swap
-  Qwen3.8-Fable-735-low:
+  my-model-low:
     backend: swap
-    as: Qwen3.8-Fable-735                    # same model on the wire, no second process
+    as: my-model                    # same model on the wire, no second process
     params: { reasoning_effort: low }
-  Qwen3.8-Fable-735-off:
+  my-model-off:
     backend: swap
-    as: Qwen3.8-Fable-735
+    as: my-model
     params: { reasoning_effort: none }
 ```
 
-A request for `Qwen3.8-Fable-735-low` reaches the backend as `Qwen3.8-Fable-735`
+A request for `my-model-low` reaches the backend as `my-model`
 with `reasoning_effort: low` on it. This is for the client that only has a model
 picker: a llama-swap alias carries no parameters, a second llama-swap entry is a
 second process (and on a one-GPU box, a seat swap), and a chat template cannot
@@ -782,9 +803,9 @@ The rules:
   gets `lane: batch` and never queues ahead of a person's chat turn:
 
   ```yaml
-  jarvis:
+  voice:
     backend: swap
-    as: coder
+    as: my-model
     lane: batch
     params: { reasoning_effort: none }
   ```
@@ -801,8 +822,8 @@ The rules:
   ids reads as cold while the seat is resident.
 - Every model hearth advertises carries its actual context window (`context_length`
   in the `/v1/models` response), learned from the backend's live model settings
-  (`n_ctx` on llama.cpp servers, `num_ctx` or the model's `context_length` on
-  ollama). A cold llama-swap model is never probed (its `/props` endpoint loads
+  (`n_ctx` on llama.cpp servers, `max_model_len` on vLLM, `num_ctx` or the
+  model's `context_length` on ollama). A cold llama-swap model is never probed (its `/props` endpoint loads
   the model to answer), so an unloaded model correctly omits `context_length`
   (not `null`) until it is loaded. Clients can size their own limits from this
   instead of a hand-maintained config value.
@@ -1017,6 +1038,9 @@ numbers and on the same poll:
 | `thinking` | whether it reasons before it answers | nothing — see below |
 | `effort` | whether its chat template takes a `reasoning_effort` | nothing — see below |
 | `quant` | e.g. `Q5_K - Medium` | nothing — it is the only quality signal you get about hardware you do not own |
+
+vLLM has no `/props`; its context window is read from `max_model_len` on its own
+`/v1/models`, and the rest stays unknown unless declared.
 
 All six come from one `/props` call that already happens the first time a model
 is loaded, so this costs no extra traffic. They appear on `/ui` under **takes**,

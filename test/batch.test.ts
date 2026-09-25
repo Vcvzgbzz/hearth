@@ -224,4 +224,38 @@ const tick = () => new Promise((r) => setImmediate(r));
   for (const j of jobs) j.release();
 }
 
+// --- a shared pool holds back a job that would overflow it -----------------
+{
+  const s = new Scheduler({ lanes, concurrency: 1, slots: () => 4, pool: (m) => (m === "vllm" ? 100 : null) });
+  const log: string[] = [];
+  const sized = (tokens: number) => {
+    let release!: () => void;
+    const started = new Promise<void>((ready) => {
+      void s.submit({ lane: "chat", model: "vllm", caller: "test", tokens }, () => {
+        log.push(String(tokens));
+        ready();
+        return new Promise<void>((done) => (release = done));
+      });
+    });
+    return { started, release: () => release() };
+  };
+  const big = sized(60);
+  await big.started;
+  const small = sized(30);
+  await small.started;
+  const over = sized(20);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(log, ["60", "30"], "90 of 100 is held; 20 more would overflow");
+  big.release();
+  await over.started;
+  assert.deepEqual(log, ["60", "30", "20"], "it runs once there is room");
+  small.release();
+  over.release();
+
+  const alone = sized(500);
+  await alone.started;
+  assert.equal(log.at(-1), "500", "a job alone always runs, however large");
+  alone.release();
+}
+
 console.log("batch: ok");

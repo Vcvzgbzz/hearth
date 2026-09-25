@@ -57,6 +57,14 @@ const minimal = { backend: { url: "http://127.0.0.1:9292" } };
   assert.equal(cfg.models.coder!.policy, "fastest");
 }
 
+// --- pool: a bare number, or tokens plus an output cap ---------------------
+{
+  const cfg = parseConfig({ ...minimal, models: { a: { pool: 1000 }, b: { pool: { tokens: 1000, output: 64 } } } });
+  assert.deepEqual(cfg.models.a!.pool, { tokens: 1000, output: null });
+  assert.deepEqual(cfg.models.b!.pool, { tokens: 1000, output: 64 });
+  assert.throws(() => parseConfig({ ...minimal, models: { c: { pool: 0 } } }), /models\.c\.pool/);
+}
+
 // --- a policy that can never fire is a typo, not a preference --------------
 {
   assert.throws(

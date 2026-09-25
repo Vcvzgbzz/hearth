@@ -17,7 +17,7 @@
  */
 import type { ActivityDecl, WarmSource } from "./config.js";
 import type { Logger } from "./log.js";
-import { known, statsFromProps, type ModelStats } from "./stats.js";
+import { known, statsFromModels, statsFromProps, type ModelStats } from "./stats.js";
 import { getJson, send } from "./upstream.js";
 
 /** llama-swap only counts a model as loaded once it's ready to serve. */
@@ -66,8 +66,8 @@ function countField(body: unknown, field: string): number | null {
 /**
  * ...and this is what it says for the minute before that.
  *
- * A cold load is the longest thing that happens on this box — 47.8s measured
- * for a 32k-context model off the disk — and it was the one event the console
+ * A cold load is the longest thing that happens on a node — often most of a
+ * minute off the disk — and it was the one event the console
  * could not name. The backend drew "nothing loaded" with a job running on it,
  * which is true twice over and explains nothing: the model is not loaded, and
  * the request is running, and the reason it will sit there for another minute
@@ -98,9 +98,8 @@ interface ModelStatus {
  *
  * "On the host" is as far as this goes, deliberately. The weights are mmap'd
  * from the model file, so whether they are served out of RAM or faulted off the
- * disk depends on whether the model fits in RAM — measured on one box, an 88 GB
- * model against a 44 GB cap faulted 6-8k pages off the disk on EVERY
- * generation, and never settled. Which of those is happening is a live
+ * disk depends on whether the model fits in RAM; one larger than RAM faults
+ * pages off the disk on every generation. Which of those is happening is a live
  * measurement on the machine running the model, not something a launch command
  * can tell you, and not something a proxy on another box can see.
  *
@@ -442,17 +441,13 @@ export class BackendState {
   private async fetchStats(wire: string): Promise<void> {
     try {
       let stats: ModelStats = {};
-      if (this.kind === "llama-swap") {
-        if (!this.loadedIds.includes(wire)) return;
-        stats = statsFromProps(await getJson<unknown>(
-          `${this.url}/upstream/${encodeURIComponent(wire)}/props`,
-          { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 },
-        ));
-      } else if (this.kind === "single") {
-        stats = statsFromProps(await getJson<unknown>(
-          `${this.url}/props`,
-          { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 },
-        ));
+      if (this.kind === "llama-swap" || this.kind === "single") {
+        if (this.kind === "llama-swap" && !this.loadedIds.includes(wire)) return;
+        const base = this.kind === "llama-swap" ? `${this.url}/upstream/${encodeURIComponent(wire)}` : this.url;
+        const opts = { headersTimeoutMs: 2_000, totalTimeoutMs: 2_000 };
+        // llama-server answers /props; vLLM has none and reports max_model_len on /v1/models.
+        stats = await getJson<unknown>(`${base}/props`, opts).then(statsFromProps, () => ({}));
+        if (!known(stats)) stats = statsFromModels(await getJson<unknown>(`${base}/v1/models`, opts));
       } else if (this.kind === "ollama") {
         const n = await this.ollamaContext(wire);
         if (n !== null) stats = { context: n };
@@ -594,11 +589,9 @@ export class BackendState {
    * technicality. Frames only arrive when something changes, so a backend that
    * is up, connected and simply not being used goes quiet for as long as the
    * box is quiet — and this read false for every one of them after a minute,
-   * while the page drew each one a red "nothing back in a minute". Measured on
-   * a live node: nine backends, all silent by this measure, one with a model
-   * resident. The connection being open is a live fact about the backend, held
-   * by the OS and dropped the moment it goes; that is the thing worth
-   * reporting, and the timestamp is the fallback for when there is no stream.
+   * while the page drew each one a red "nothing back in a minute". The open
+   * connection is a live fact about the backend, held by the OS and dropped the
+   * moment it goes; the timestamp is the fallback for when there is no stream.
    */
   answering(): boolean {
     if (this.streaming) return true;

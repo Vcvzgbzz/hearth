@@ -28,9 +28,9 @@ import { createNode } from "../src/server.js";
 interface Offload { model: string; cpuLayers: number | null; cpuExpertsAll: boolean; cpuOnly: boolean }
 interface UiBackend { name: string; loaded?: string[]; loading?: string[]; offload?: Offload[] }
 
-/** `deep`, verbatim from the live box's /running. */
-const DEEP_CMD = `/root/llama-server-wrapper.sh --host 127.0.0.1 --port 10003
---model /root/models/qwen38-flash-next/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf
+/** A split MoE launch as llama-swap's /running reports it. */
+const DEEP_CMD = `llama-server --host 127.0.0.1 --port 10003
+--model /models/big-moe/big-moe-IQ4_XS-00001-of-00003.gguf
 --n-gpu-layers 99
 --n-cpu-moe 32
 --ctx-size 32768

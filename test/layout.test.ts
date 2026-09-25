@@ -116,23 +116,23 @@ for (const height of [640, 795, 900, 1100, 1400]) {
 // through the near one. web's real shape, in web's real declared order.
 {
   const spec: [string, string[]][] = [
-    ["swap-image", ["b60"]], ["video", ["b60"]], ["swap", ["b70"]], ["swap-deep", ["b70", "b60"]],
+    ["swap-image", ["c60"]], ["video", ["c60"]], ["swap", ["c70"]], ["swap-deep", ["c70", "c60"]],
     ["guard", ["cpu"]], ["judge", ["cpu"]], ["expander", ["cpu"]],
     ["embed", ["cpu"]], ["classifier", ["cpu"]], ["tts", ["cpu"]],
   ];
   const backends: Backend[] = spec.map(([name, resources]) => ({ name, resources }));
   const resources: Resource[] = [
-    ...["b60", "b70", "cpu"].map((name) => ({
+    ...["c60", "c70", "cpu"].map((name) => ({
       name, kind: name === "cpu" ? ("cpu" as const) : ("gpu" as const), holder: null,
       backends: spec.filter(([, rs]) => rs.includes(name)).map(([n]) => n),
     })),
     { name: "host", kind: "other", shared: true, holder: null, backends: ["swap-deep"],
-      host: { cards: ["b70", "b60"], detail: "deep · 27 layers" } } as Resource,
+      host: { cards: ["c70", "c60"], detail: "deep · 27 layers" } } as Resource,
   ];
   const scene = layout(1200, 740, [], orderBackends(backends, resources), resources);
   const x = (id: string) => scene.nodes.get(`resource:${id}`)!.x;
-  const lo = Math.min(x("b60"), x("b70"));
-  const hi = Math.max(x("b60"), x("b70"));
+  const lo = Math.min(x("c60"), x("c70"));
+  const hi = Math.max(x("c60"), x("c70"));
   assert.ok(x("host") > lo && x("host") < hi, "the host sits between its two cards");
   assert.equal(countNodeHits(scene), 0, "so neither pair line crosses the other card");
 }
@@ -166,7 +166,7 @@ console.log("layout.test.ts ok");
 
   // web's own shape: two cards and a shared cpu with six sidecars on it.
   const real = mk([
-    ["swap", ["b70"]], ["swap-image", ["b60"]], ["video", ["b60"]],
+    ["swap", ["c70"]], ["swap-image", ["c60"]], ["video", ["c60"]],
     ["guard", ["cpu"]], ["judge", ["cpu"]], ["expander", ["cpu"]],
     ["embed", ["cpu"]], ["classifier", ["cpu"]], ["tts", ["cpu"]],
   ]);
@@ -174,15 +174,15 @@ console.log("layout.test.ts ok");
   // Declared interleaved, which is what grouping a config by purpose looks
   // like, plus one backend spanning two cards.
   const interleaved = mk([
-    ["guard", ["cpu"]], ["swap", ["b70"]], ["judge", ["cpu"]], ["swap-image", ["b60"]],
-    ["embed", ["cpu"]], ["video", ["b60"]], ["tts", ["cpu"]], ["deep", ["b60", "b70"]],
+    ["guard", ["cpu"]], ["swap", ["c70"]], ["judge", ["cpu"]], ["swap-image", ["c60"]],
+    ["embed", ["cpu"]], ["video", ["c60"]], ["tts", ["cpu"]], ["deep", ["c60", "c70"]],
     ["classifier", ["cpu"]],
   ]);
 
   // Eight sidecars on one shared cpu: a group far too big for one row, which is
   // the case that forced the wires straight.
   const manyCpu = mk([
-    ["gpu", ["b70"]],
+    ["gpu", ["c70"]],
     ...Array.from({ length: 8 }, (_, i) => [`side${i}`, ["cpu"]] as [string, string[]]),
   ]);
   // Two cards, no shared hardware, nothing in common between the halves.
@@ -232,8 +232,8 @@ console.log("layout.test.ts ok");
   // used to share its corridor with one leaving the upper row.
   {
     const resources = [
-      { name: "b60", backends: ["swap-image", "swap-deep", "video"] },
-      { name: "b70", backends: ["swap", "swap-deep"] },
+      { name: "c60", backends: ["swap-image", "swap-deep", "video"] },
+      { name: "c70", backends: ["swap", "swap-deep"] },
       { name: "cpu", backends: ["guard", "judge", "expander", "embed", "classifier", "tts"] },
     ] as Resource[];
     const backends = ["swap", "swap-image", "swap-deep", "video", "guard", "judge", "expander",
@@ -300,11 +300,11 @@ console.log("layout.test.ts ok");
   const order = orderBackends(interleaved.backends, interleaved.resources).map((b) => b.name);
   assert.ok(order.indexOf("deep") > order.indexOf("swap-image")
             && order.indexOf("deep") < order.indexOf("swap"),
-    `a backend on b60+b70 sits between them (got ${order.join(" ")})`);
+    `a backend on c60+c70 sits between them (got ${order.join(" ")})`);
 
   // Backends with no hardware draw no wire, so they sort out of the way rather
   // than splitting a run of backends that do.
-  const withBare = mk([["a", ["b60"]], ["b", ["b70"]]]);
+  const withBare = mk([["a", ["c60"]], ["b", ["c70"]]]);
   withBare.backends.splice(1, 0, { name: "bare" });
   const bareOrder = orderBackends(withBare.backends, withBare.resources).map((b) => b.name);
   assert.equal(bareOrder[bareOrder.length - 1], "bare",
@@ -325,10 +325,10 @@ console.log("layout.test.ts ok");
 // jump rather than carry on.
 {
   const { backends, resources } = (() => {
-    const spec: [string, string[]][] = [["swap", ["b70"]], ["side", ["cpu"]]];
+    const spec: [string, string[]][] = [["swap", ["c70"]], ["side", ["cpu"]]];
     return {
       backends: spec.map(([name, rs]) => ({ name, resources: rs })) as Backend[],
-      resources: ["b70", "cpu"].map((name) => ({
+      resources: ["c70", "cpu"].map((name) => ({
         name, kind: name === "cpu" ? ("cpu" as const) : ("gpu" as const),
         holder: null, backends: spec.filter(([, rs]) => rs.includes(name)).map(([n]) => n),
       })) as Resource[],
@@ -337,7 +337,7 @@ console.log("layout.test.ts ok");
 
   const scene = layout(1400, 900, [], orderBackends(backends, resources), resources);
   const first = scene.edges.find((e) => e.id === "self>backend:swap")!;
-  const second = scene.edges.find((e) => e.id === "backend:swap>resource:b70")!;
+  const second = scene.edges.find((e) => e.id === "backend:swap>resource:c70")!;
   const { d, len } = stitch([first, second]);
 
   assert.equal((d.match(/M/g) ?? []).length, 1,

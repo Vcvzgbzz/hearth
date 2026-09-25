@@ -98,6 +98,17 @@ export function statsFromProps(props: unknown): ModelStats {
 }
 
 /** Anything at all learned? An empty object is not worth caching or sending. */
+/** vLLM /v1/models -> stats. One process serves one window, whatever names it answers to. */
+export function statsFromModels(body: unknown): ModelStats {
+  const data = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return {};
+  for (const d of data) {
+    const n = (d as { max_model_len?: unknown } | null)?.max_model_len;
+    if (typeof n === "number" && n > 0) return { context: n };
+  }
+  return {};
+}
+
 export function known(s: ModelStats): boolean {
   return s.context !== undefined || s.vision !== undefined || s.tools !== undefined
     || s.thinking !== undefined || s.effort !== undefined || s.quant !== undefined
@@ -153,6 +164,8 @@ export function mergeStats(
 export interface Need {
   /** Prompt plus reserved output, estimated. See estimate(). */
   tokens: number;
+  /** The reserved output alone (`max_tokens`), already counted in `tokens`. */
+  output?: number;
   images: boolean;
   tools: boolean;
 }
@@ -221,6 +234,7 @@ export function needsOf(payload: Record<string, unknown>): Need {
       : 0;
   return {
     tokens: Math.ceil(text / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE + Math.max(0, reserve),
+    output: Math.max(0, reserve),
     images: images > 0,
     tools,
   };

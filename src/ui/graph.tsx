@@ -50,7 +50,7 @@ import type { Call, Job, Resource, UiData } from "./types.js";
  *  Named for the SIDE, not the medium. It was "host memory" until a
  *  measurement said otherwise: those weights are mmap'd from the model file,
  *  so whether they are served from RAM or read off the disk depends on whether
- *  the model fits in RAM — and an 88 GB model on a 44 GB box does not. */
+ *  the model fits in RAM. */
 const HOST = "host";
 
 export type Sel =
@@ -227,7 +227,7 @@ const Sub = ({ children, color = "faint", sx }: {
  * The last ten minutes of finished requests on one backend, as bars.
  *
  * The graph is honest about live traffic and therefore still most of the time —
- * at a homelab duty cycle a visit usually lands between requests, and a page
+ * at a light duty cycle a visit usually lands between requests, and a page
  * that is correct and blank is a page you stop opening. `calls` is the record
  * of what has actually been used, so the node can say "busy all morning" while
  * nothing is in flight this second.
@@ -597,7 +597,7 @@ export function Graph({ d, sel, onSelect }: {
             ))}
             {sparks.flatMap((s) =>
               // The same journey a running job makes, once, quickly. At a
-              // homelab's duty cycle most requests begin and end between two
+              // light duty cycle most requests begin and end between two
               // readings, so these are what the graph actually shows moving —
               // stopping them at the backend hid the half that costs the card.
               runs(s.backend).map((leg, k) => (

@@ -17,10 +17,10 @@
  * Put it behind the GPU's queue and a 20ms embedding waits on a 40s generation,
  * which is the opposite of why it exists.
  */
-import type { BackendConfig, HearthConfig, RouteRule } from "./config.js";
+import type { BackendConfig, HearthConfig, ModelRoute, RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import type { Logger } from "./log.js";
-import { mergeStats, type ModelStats } from "./stats.js";
+import { mergeStats, type ModelStats, type Need } from "./stats.js";
 import { ResourceArbiter } from "./resources.js";
 import { Scheduler } from "./scheduler.js";
 
@@ -137,6 +137,7 @@ export class BackendPool {
           // Undeclared is null, not the backend's number: the scheduler owns
           // that fallback, and answering it here would freeze the value.
           slots: (m) => this.slotsOf(m),
+          pool: (m) => this.poolOf(m)?.tokens ?? null,
           // Two ids that resolve to the same resident model ARE the same model
           // to a backend that batches; without this the scheduler sees a
           // foreign job and refuses to run them together.
@@ -466,6 +467,21 @@ export class BackendPool {
    * arrangement `params` exists for silently gave up batching unless the
    * operator restated the ceiling on every id.
    */
+  /** A model's shared-context pool, inherited from the seat it fronts like its slots. */
+  private poolOf(model: string): ModelRoute["pool"] {
+    const r = this.cfg.models[model];
+    if (!r) return null;
+    return r.pool ?? (r.as === null ? null : this.cfg.models[r.as]?.pool ?? null);
+  }
+
+  /** What a request holds of its model's pool while it runs, or undefined without one. */
+  poolTokens(model: string, need: Need): number | undefined {
+    const p = this.poolOf(model);
+    if (!p) return undefined;
+    const output = need.output ?? 0;
+    return need.tokens - output + Math.min(output, p.output ?? output);
+  }
+
   private slotsOf(model: string): number | null {
     const r = this.cfg.models[model];
     if (!r) return null;

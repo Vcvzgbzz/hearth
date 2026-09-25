@@ -321,6 +321,8 @@ export interface ModelRoute {
   stats: ModelStats | null;
   /** Reshapes this id's backend answers into another server's format; see emulate.ts. */
   emulate: Emulation | null;
+  /** Tokens the model's running requests share (vLLM's KV cache, llama.cpp `--kv-unified`); `output` caps each request's counted `max_tokens`, null counts it whole. */
+  pool: { tokens: number; output: number | null } | null;
   /**
    * How many jobs for THIS model may run at once locally, or null to use the
    * backend's own `concurrency`.
@@ -736,6 +738,17 @@ function modelConcurrency(entry: Record<string, unknown>, id: string): number | 
   const key = has("concurrency") ? "concurrency" : "batch";
   if (!has(key)) return null;
   return count(entry[key], `models.${id}.${key}`, 1, 1);
+}
+
+/** `pool: 144000`, or `pool: { tokens: 144000, output: 8192 }`. */
+function modelPool(v: unknown, id: string): ModelRoute["pool"] {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "number") return { tokens: count(v, `models.${id}.pool`, 1, 1), output: null };
+  const p = asRecord(v, `models.${id}.pool`);
+  return {
+    tokens: count(p.tokens, `models.${id}.pool.tokens`, 0, 1),
+    output: p.output === undefined || p.output === null ? null : count(p.output, `models.${id}.pool.output`, 1, 1),
+  };
 }
 
 /**
@@ -1229,6 +1242,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       lane: lane === "" ? null : lane,
       stats: declaredStats(entry.stats, id),
       emulate: emulate === "" ? null : (emulate as Emulation),
+      pool: modelPool(entry.pool, id),
     };
   }
 

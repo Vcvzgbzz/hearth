@@ -27,7 +27,7 @@ import { silentLogger } from "../src/log.js";
 import { PeerRegistry, type PeerCapacity } from "../src/peers.js";
 import { decide } from "../src/route.js";
 import { createNode, type HearthNode } from "../src/server.js";
-import { cleanStats, mergeStats, needsOf, statsFromProps, unfit } from "../src/stats.js";
+import { cleanStats, mergeStats, needsOf, statsFromModels, statsFromProps, unfit } from "../src/stats.js";
 
 /* ------------------------------------------------------------ reading props */
 
@@ -581,5 +581,10 @@ function listen(node: HearthNode): Promise<string> {
   assert.throws(withStats({ effort: "high" }), /expected true or false/, "the dial EXISTS or not; its level is not a stat");
   assert.throws(withStats({ efort: true }), /effort/, "and the hint for a typo names it");
 }
+
+// vLLM has no /props; its window is max_model_len on /v1/models.
+assert.deepEqual(statsFromModels({ data: [{ id: "m", max_model_len: 131072 }] }), { context: 131072 });
+assert.deepEqual(statsFromModels({ data: [{ id: "m" }] }), {}, "llama-server lists no window here");
+assert.equal(needsOf({ max_tokens: 500, messages: [] }).output, 500, "the reserved output is reported on its own");
 
 console.log("stats ok");

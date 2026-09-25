@@ -82,6 +82,8 @@ export interface SchedulerOptions {
    * that has not been told otherwise.
    */
   slots?: (model: string) => number | null;
+  /** Tokens this model's running jobs may hold between them (summed `tokens`), or null for no limit. */
+  pool?: (model: string) => number | null;
   /**
    * The id a model actually occupies the backend under, for the ONE question
    * this scheduler asks about model identity: would running these two together
@@ -143,6 +145,8 @@ export interface JobSpec {
   id?: string;
   /** Reject once this caller has this many queued-or-running in the lane. */
   maxPerCaller?: number;
+  /** Context this job holds while it runs, counted against the model's pool. */
+  tokens?: number;
   /** No slot needed, this one runs off-box. */
   offbox?: boolean;
   /** Which peer is running it, for off-box jobs. Only used by status surfaces,
@@ -199,6 +203,7 @@ interface Job<T = unknown> {
   caller: string;
   offbox: boolean;
   peer?: string;
+  tokens: number;
   enqueuedAt: number;
   startedAt: number | null;
   state: "queued" | "running";
@@ -226,6 +231,7 @@ export class Scheduler {
   private readonly resident: () => string | null;
   private readonly isWarm: (model: string) => boolean;
   private readonly slotsOf: (model: string) => number | null;
+  private readonly poolOf: (model: string) => number | null;
   private readonly wireOf: (model: string) => string;
   private readonly coresident: boolean;
   private readonly onChange?: (jobs: JobView[]) => void;
@@ -264,6 +270,7 @@ export class Scheduler {
     this.resident = opts.resident ?? (() => null);
     this.isWarm = opts.warm ?? ((m) => m === this.resident());
     this.slotsOf = opts.slots ?? (() => null);
+    this.poolOf = opts.pool ?? (() => null);
     this.wireOf = opts.wire ?? ((m) => m);
     this.coresident = opts.coresident ?? false;
     this.onChange = opts.onChange;
@@ -433,6 +440,24 @@ export class Scheduler {
     if (this.queued.length === 0 || this.arbiter.owed(this.resources, this)) this.dropHold();
   }
 
+  /**
+   * Would this job overflow the context its model shares between running jobs?
+   * A job alone always fits: whether one request fits the window is unfit()'s call.
+   */
+  private overPool(job: Job): boolean {
+    const pool = this.poolOf(job.model);
+    if (pool === null) return false;
+    const wire = this.wireOf(job.model);
+    let used = 0;
+    let sharing = false;
+    for (const j of this.running) {
+      if (this.wireOf(j.model) !== wire) continue;
+      used += j.tokens;
+      sharing = true;
+    }
+    return sharing && used + job.tokens > pool;
+  }
+
   private canAdmit(job: Job): boolean {
     // Before this backend's own ceilings, because they are about how much work
     // it may run and this is about whether it may run at all. `available`
@@ -440,6 +465,7 @@ export class Scheduler {
     // blocked by itself.
     if (!this.hardwareFree()) return false;
     if (this.heldBy(job.model) >= this.limitFor(job.model)) return false;
+    if (this.overPool(job)) return false;
     if (this.running.size < this.concurrency) return true;
     const wire = this.wireOf(job.model);
     for (const j of this.running) if (this.wireOf(j.model) !== wire) return false;
@@ -691,6 +717,7 @@ export class Scheduler {
         caller: spec.caller,
         offbox: spec.offbox === true,
         ...(spec.peer ? { peer: spec.peer } : {}),
+        tokens: spec.tokens ?? 0,
         enqueuedAt: Date.now(),
         startedAt: null,
         state: "queued",
