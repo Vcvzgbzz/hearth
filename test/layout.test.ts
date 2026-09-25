@@ -113,26 +113,26 @@ for (const height of [640, 795, 900, 1100, 1400]) {
 // A model split across two cards and the host draws a pair line from each card
 // to the host. Placed by its backend, the host tied with that backend's own
 // card and landed beside it, so the line from the other card ran straight
-// through the near one. web's real shape, in web's real declared order.
+// through the near one.
 {
   const spec: [string, string[]][] = [
-    ["swap-image", ["c60"]], ["video", ["c60"]], ["swap", ["c70"]], ["swap-deep", ["c70", "c60"]],
+    ["swap-image", ["gpu0"]], ["video", ["gpu0"]], ["swap", ["gpu1"]], ["swap-deep", ["gpu1", "gpu0"]],
     ["guard", ["cpu"]], ["judge", ["cpu"]], ["expander", ["cpu"]],
     ["embed", ["cpu"]], ["classifier", ["cpu"]], ["tts", ["cpu"]],
   ];
   const backends: Backend[] = spec.map(([name, resources]) => ({ name, resources }));
   const resources: Resource[] = [
-    ...["c60", "c70", "cpu"].map((name) => ({
+    ...["gpu0", "gpu1", "cpu"].map((name) => ({
       name, kind: name === "cpu" ? ("cpu" as const) : ("gpu" as const), holder: null,
       backends: spec.filter(([, rs]) => rs.includes(name)).map(([n]) => n),
     })),
     { name: "host", kind: "other", shared: true, holder: null, backends: ["swap-deep"],
-      host: { cards: ["c70", "c60"], detail: "deep · 27 layers" } } as Resource,
+      host: { cards: ["gpu1", "gpu0"], detail: "deep · 27 layers" } } as Resource,
   ];
   const scene = layout(1200, 740, [], orderBackends(backends, resources), resources);
   const x = (id: string) => scene.nodes.get(`resource:${id}`)!.x;
-  const lo = Math.min(x("c60"), x("c70"));
-  const hi = Math.max(x("c60"), x("c70"));
+  const lo = Math.min(x("gpu0"), x("gpu1"));
+  const hi = Math.max(x("gpu0"), x("gpu1"));
   assert.ok(x("host") > lo && x("host") < hi, "the host sits between its two cards");
   assert.equal(countNodeHits(scene), 0, "so neither pair line crosses the other card");
 }
@@ -164,9 +164,9 @@ console.log("layout.test.ts ok");
     return { backends, resources };
   };
 
-  // web's own shape: two cards and a shared cpu with six sidecars on it.
+  // Two cards and a shared cpu with six sidecars on it; `cpu` sorts before the cards.
   const real = mk([
-    ["swap", ["c70"]], ["swap-image", ["c60"]], ["video", ["c60"]],
+    ["swap", ["gpu1"]], ["swap-image", ["gpu0"]], ["video", ["gpu0"]],
     ["guard", ["cpu"]], ["judge", ["cpu"]], ["expander", ["cpu"]],
     ["embed", ["cpu"]], ["classifier", ["cpu"]], ["tts", ["cpu"]],
   ]);
@@ -174,15 +174,15 @@ console.log("layout.test.ts ok");
   // Declared interleaved, which is what grouping a config by purpose looks
   // like, plus one backend spanning two cards.
   const interleaved = mk([
-    ["guard", ["cpu"]], ["swap", ["c70"]], ["judge", ["cpu"]], ["swap-image", ["c60"]],
-    ["embed", ["cpu"]], ["video", ["c60"]], ["tts", ["cpu"]], ["deep", ["c60", "c70"]],
+    ["guard", ["cpu"]], ["swap", ["gpu1"]], ["judge", ["cpu"]], ["swap-image", ["gpu0"]],
+    ["embed", ["cpu"]], ["video", ["gpu0"]], ["tts", ["cpu"]], ["deep", ["gpu0", "gpu1"]],
     ["classifier", ["cpu"]],
   ]);
 
   // Eight sidecars on one shared cpu: a group far too big for one row, which is
   // the case that forced the wires straight.
   const manyCpu = mk([
-    ["gpu", ["c70"]],
+    ["gpu", ["gpu1"]],
     ...Array.from({ length: 8 }, (_, i) => [`side${i}`, ["cpu"]] as [string, string[]]),
   ]);
   // Two cards, no shared hardware, nothing in common between the halves.
@@ -232,8 +232,8 @@ console.log("layout.test.ts ok");
   // used to share its corridor with one leaving the upper row.
   {
     const resources = [
-      { name: "c60", backends: ["swap-image", "swap-deep", "video"] },
-      { name: "c70", backends: ["swap", "swap-deep"] },
+      { name: "gpu0", backends: ["swap-image", "swap-deep", "video"] },
+      { name: "gpu1", backends: ["swap", "swap-deep"] },
       { name: "cpu", backends: ["guard", "judge", "expander", "embed", "classifier", "tts"] },
     ] as Resource[];
     const backends = ["swap", "swap-image", "swap-deep", "video", "guard", "judge", "expander",
@@ -300,11 +300,11 @@ console.log("layout.test.ts ok");
   const order = orderBackends(interleaved.backends, interleaved.resources).map((b) => b.name);
   assert.ok(order.indexOf("deep") > order.indexOf("swap-image")
             && order.indexOf("deep") < order.indexOf("swap"),
-    `a backend on c60+c70 sits between them (got ${order.join(" ")})`);
+    `a backend on gpu0+gpu1 sits between them (got ${order.join(" ")})`);
 
   // Backends with no hardware draw no wire, so they sort out of the way rather
   // than splitting a run of backends that do.
-  const withBare = mk([["a", ["c60"]], ["b", ["c70"]]]);
+  const withBare = mk([["a", ["gpu0"]], ["b", ["gpu1"]]]);
   withBare.backends.splice(1, 0, { name: "bare" });
   const bareOrder = orderBackends(withBare.backends, withBare.resources).map((b) => b.name);
   assert.equal(bareOrder[bareOrder.length - 1], "bare",
@@ -325,10 +325,10 @@ console.log("layout.test.ts ok");
 // jump rather than carry on.
 {
   const { backends, resources } = (() => {
-    const spec: [string, string[]][] = [["swap", ["c70"]], ["side", ["cpu"]]];
+    const spec: [string, string[]][] = [["swap", ["gpu1"]], ["side", ["cpu"]]];
     return {
       backends: spec.map(([name, rs]) => ({ name, resources: rs })) as Backend[],
-      resources: ["c70", "cpu"].map((name) => ({
+      resources: ["gpu1", "cpu"].map((name) => ({
         name, kind: name === "cpu" ? ("cpu" as const) : ("gpu" as const),
         holder: null, backends: spec.filter(([, rs]) => rs.includes(name)).map(([n]) => n),
       })) as Resource[],
@@ -337,7 +337,7 @@ console.log("layout.test.ts ok");
 
   const scene = layout(1400, 900, [], orderBackends(backends, resources), resources);
   const first = scene.edges.find((e) => e.id === "self>backend:swap")!;
-  const second = scene.edges.find((e) => e.id === "backend:swap>resource:c70")!;
+  const second = scene.edges.find((e) => e.id === "backend:swap>resource:gpu1")!;
   const { d, len } = stitch([first, second]);
 
   assert.equal((d.match(/M/g) ?? []).length, 1,
