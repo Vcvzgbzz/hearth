@@ -122,7 +122,7 @@ await node.pool.first().state.refresh();
   const t = ev.find((e) => e.timings)!.timings as Record<string, number>;
   assert.equal(t.predicted_n, 11);
   assert.equal(t.cache_n, 60);
-  assert.ok(t.predicted_ms >= 25, "generation time spans first to last token");
+  assert.ok((t.predicted_ms ?? 0) >= 25, "generation time spans first to last token");
 }
 
 // --- a route without emulate is relayed untouched ----------------------------
