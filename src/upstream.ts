@@ -178,8 +178,8 @@ export function send(url: string, opts: RequestOptions = {}): Promise<UpstreamRe
      * `fail` alone isn't enough: `settled` flips the moment headers land, so it
      * does nothing for the common case of a client hanging up mid-stream. That
      * used to mean the generation just kept going into a dead socket, holding a
-     * scheduler slot for its full length. I measured 4.6s of wasted GPU past the
-     * disconnect on a 3B. On a 27B it's about a minute per cancelled request.
+     * scheduler slot for its full length — on a large model, up to a minute of
+     * GPU per cancelled request.
      *
      * Destroying the request makes the response stream emit an error, so a
      * `for await` over the body throws and the caller unwinds on its own.

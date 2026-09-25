@@ -500,7 +500,10 @@ export function layout(width: number, height: number, peers: Node[],
         const room = inner - rw;
         if (used > 0 && used < room) {
           const scale = room / used;
+          const packed = placed.map((p) => p.x);
           for (const p of placed) p.x = PAD + (p.x - first) * scale;
+          // The stretch must not slide a card past another card's backends, or their wires cross.
+          if (!separated(placed, rw, nodes)) placed.forEach((p, k) => (p.x = packed[k]!));
         }
       } else if (placed.length === 1) {
         placed[0]!.x = PAD + (inner - rw) / 2;
@@ -624,6 +627,21 @@ export function layout(width: number, height: number, peers: Node[],
   // dead page under the cards; grow past it only when even the tight layout
   // does not fit, which is the one case worth a scrollbar.
   return { nodes, edges, width, height: Math.max(height, Y.needed) };
+}
+
+/** Does each card in a row sit between its neighbours' backends? Backends on several cards are exempt. */
+function separated(row: { r: Resource; x: number }[], rw: number, nodes: Map<string, Placed>): boolean {
+  const own = (r: Resource): number[] => r.backends
+    .filter((b) => row.filter((o) => o.r.backends.includes(b)).length === 1)
+    .map((b) => nodes.get(`backend:${b}`))
+    .filter((n): n is Placed => !!n)
+    .map((n) => n.x + n.w / 2);
+  for (let k = 0; k + 1 < row.length; k++) {
+    const left = row[k]!, right = row[k + 1]!;
+    if (own(left.r).some((x) => x > right.x + rw / 2 + 1)) return false;
+    if (own(right.r).some((x) => x < left.x + rw / 2 - 1)) return false;
+  }
+  return true;
 }
 
 /* -------------------------------------------------------- crossings */

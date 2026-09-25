@@ -98,6 +98,17 @@ export function statsFromProps(props: unknown): ModelStats {
 }
 
 /** Anything at all learned? An empty object is not worth caching or sending. */
+/** vLLM /v1/models -> stats. One process serves one window, whatever names it answers to. */
+export function statsFromModels(body: unknown): ModelStats {
+  const data = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return {};
+  for (const d of data) {
+    const n = (d as { max_model_len?: unknown } | null)?.max_model_len;
+    if (typeof n === "number" && n > 0) return { context: n };
+  }
+  return {};
+}
+
 export function known(s: ModelStats): boolean {
   return s.context !== undefined || s.vision !== undefined || s.tools !== undefined
     || s.thinking !== undefined || s.effort !== undefined || s.quant !== undefined
@@ -153,6 +164,8 @@ export function mergeStats(
 export interface Need {
   /** Prompt plus reserved output, estimated. See estimate(). */
   tokens: number;
+  /** The reserved output alone (`max_tokens`), already counted in `tokens`. */
+  output?: number;
   images: boolean;
   tools: boolean;
 }
@@ -221,6 +234,7 @@ export function needsOf(payload: Record<string, unknown>): Need {
       : 0;
   return {
     tokens: Math.ceil(text / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE + Math.max(0, reserve),
+    output: Math.max(0, reserve),
     images: images > 0,
     tools,
   };
@@ -244,6 +258,24 @@ export function needsOf(payload: Record<string, unknown>): Need {
  * thing to SEE (the console shows which models take the lever) and not a thing
  * to fail. Everything in this function is a request that genuinely cannot run.
  */
+/** Smallest output worth shrinking `max_tokens` to; below it the request is refused so the client compacts. */
+const MIN_OUTPUT = 1024;
+
+/**
+ * When only the reserved output overflows the window, lower the payload's
+ * `max_tokens` to the room the prompt leaves and return the need that results.
+ * The prompt is padded a tenth, since the estimate reads dense text low.
+ */
+export function fitOutput(stats: ModelStats | undefined | null, need: Need, payload: Record<string, unknown>): Need {
+  const context = stats?.context;
+  const output = need.output ?? 0;
+  if (context === undefined || need.tokens <= context || output === 0) return need;
+  const room = context - Math.ceil((need.tokens - output) * 1.1);
+  if (room < MIN_OUTPUT || room >= output) return need;
+  payload[typeof payload.max_tokens === "number" ? "max_tokens" : "max_completion_tokens"] = room;
+  return { ...need, tokens: need.tokens - output + room, output: room };
+}
+
 export function unfit(stats: ModelStats | undefined | null, need: Need): string | null {
   if (!stats) return null;
   if (need.images && stats.vision === false) return "does not accept images";

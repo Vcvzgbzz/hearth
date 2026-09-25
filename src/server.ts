@@ -29,7 +29,7 @@ import { BackendPool } from "./pool.js";
 import { decide } from "./route.js";
 import { History, KEEP } from "./history.js";
 import { QueueFullError } from "./scheduler.js";
-import { needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
+import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { UI_HTML } from "./ui.js";
 import { send, type UpstreamResponse } from "./upstream.js";
 
@@ -490,7 +490,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // repeat it, so a request that fitted the peer but not the local model
       // still reaches the backend and is refused there — one rare path with
       // an uglier error, not a wrong answer.
-      const tooMuch = unfit(pool.statsFor(model), need);
+      const fitted = fitOutput(pool.statsFor(model), need, payload);
+      const tooMuch = unfit(pool.statsFor(model), fitted);
       if (tooMuch !== null) {
         logRequest(t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
         apiError(res, 400, `${model} ${tooMuch}`, "invalid_request_error");
@@ -498,7 +499,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
       try {
         await local.scheduler.submit(
-          { lane, model, caller, ...(cfg.scheduler.maxPerCaller > 0 ? { maxPerCaller: cfg.scheduler.maxPerCaller } : {}), signal },
+          { lane, model, caller, ...(cfg.scheduler.maxPerCaller > 0 ? { maxPerCaller: cfg.scheduler.maxPerCaller } : {}), signal, tokens: pool.poolTokens(model, fitted) },
           async () => {
             t.startedAt = Date.now();
             await runLocal();
@@ -581,7 +582,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           // No maxPerCaller here. The caller already passed the cap on the way
           // in and its off-box job still counts against it, so applying it again
           // would reject its own retry.
-          await local.scheduler.submit({ lane, model, caller, signal }, runLocal);
+          await local.scheduler.submit({ lane, model, caller, signal, tokens: pool.poolTokens(model, need) }, runLocal);
         }
       },
     );
@@ -905,8 +906,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
    * maintained, and it costs nothing to read. What it is NOT built on is
    * `answering()`, which means "something came back from this lately" -- on a
    * quiet box nothing does, so every backend reads silent while all of them
-   * are fine. (Verified on the live box before writing this: nine backends,
-   * `answering: false` on all nine, including one with a model resident.)
+   * are fine, even one with a model resident.
    *
    * So: 503 only when we are watching backends and have lost every one of
    * them. A config we cannot watch reports `watched: 0` and stays ok, because
@@ -1612,7 +1612,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // is queued and before it evicts anything. 4xx on purpose: their
       // request is wrong, and PeerStatusError.isRefusal means they hand that
       // verdict to their caller instead of retrying it at us.
-      const why = unfit(pool.statsFor(model), needsOf(payload));
+      const why = unfit(pool.statsFor(model), fitOutput(pool.statsFor(model), needsOf(payload), payload));
       if (why !== null) {
         apiError(res, 400, `${model} ${why}`, "invalid_request_error");
         return;
@@ -1654,7 +1654,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             //
             // Capped per backend, so a borrower filling the GPU queue does not
             // also lock itself out of the embedder.
-            { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal },
+            { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal, tokens: pool.poolTokens(model, needsOf(payload)) },
             async () => {
               t.startedAt = Date.now();
               await serving.state.ensureFresh();

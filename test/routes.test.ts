@@ -275,7 +275,7 @@ console.log("routes.test.ts ok");
     backends: [
       {
         name: "img", url: "http://127.0.0.1:1",
-        serves: ["image", "image-eikon"],
+        serves: ["image", "image-lora"],
         routes: [{ path: "/upstream/{model}/generate", lane: "batch" }],
       },
       { name: "llm", url: "http://127.0.0.1:2", serves: ["coder"] },
@@ -283,10 +283,10 @@ console.log("routes.test.ts ok");
   });
   const pool = new BackendPool(cfg, silentLogger);
 
-  const hit = pool.forPath("/upstream/image-eikon/generate");
+  const hit = pool.forPath("/upstream/image-lora/generate");
   assert.ok(hit, "a served model matches the pattern");
   assert.equal(hit.slot.name, "img");
-  assert.equal(hit.rule.model, "image-eikon", "the captured segment IS the model id");
+  assert.equal(hit.rule.model, "image-lora", "the captured segment IS the model id");
   assert.equal(hit.rule.lane, "batch");
   assert.equal(hit.rule.queue, true);
 

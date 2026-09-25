@@ -27,7 +27,7 @@ import { silentLogger } from "../src/log.js";
 import { PeerRegistry, type PeerCapacity } from "../src/peers.js";
 import { decide } from "../src/route.js";
 import { createNode, type HearthNode } from "../src/server.js";
-import { cleanStats, mergeStats, needsOf, statsFromProps, unfit } from "../src/stats.js";
+import { cleanStats, fitOutput, mergeStats, needsOf, statsFromModels, statsFromProps, unfit } from "../src/stats.js";
 
 /* ------------------------------------------------------------ reading props */
 
@@ -220,6 +220,25 @@ import { cleanStats, mergeStats, needsOf, statsFromProps, unfit } from "../src/s
   assert.deepEqual(cleanStats({ thinking: false }), { thinking: false }, "but it is still reported");
   assert.deepEqual(cleanStats({ effort: true }), { effort: true }, "the dial crosses the peer hop on its own");
   assert.deepEqual(cleanStats({ effort: "yes" }), undefined, "and only as a boolean");
+}
+
+/* ------------------------------------------------ shrinking the reservation */
+
+{
+  // 20k of prompt plus 32k reserved overflows 32k; the prompt alone does not.
+  const payload: Record<string, unknown> = { max_tokens: 32_000 };
+  const need = { tokens: 52_000, output: 32_000, images: false, tools: false };
+  const fitted = fitOutput({ context: 32_768 }, need, payload);
+  assert.equal(payload.max_tokens, 32_768 - 22_000, "max_tokens shrinks to the room left, prompt padded a tenth");
+  assert.equal(unfit({ context: 32_768 }, fitted), null, "and the request now fits");
+
+  const tight: Record<string, unknown> = { max_completion_tokens: 8_000 };
+  const full = { tokens: 38_000, output: 8_000, images: false, tools: false };
+  assert.equal(fitOutput({ context: 32_768 }, full, tight), full, "a prompt that leaves no room is left to be refused");
+  assert.equal(tight.max_completion_tokens, 8_000, "and its body is untouched");
+
+  const unknown: Record<string, unknown> = { max_tokens: 32_000 };
+  assert.equal(fitOutput(null, need, unknown), need, "an unknown window changes nothing");
 }
 
 /* ------------------------------------------------------------------ routing */
@@ -581,5 +600,10 @@ function listen(node: HearthNode): Promise<string> {
   assert.throws(withStats({ effort: "high" }), /expected true or false/, "the dial EXISTS or not; its level is not a stat");
   assert.throws(withStats({ efort: true }), /effort/, "and the hint for a typo names it");
 }
+
+// vLLM has no /props; its window is max_model_len on /v1/models.
+assert.deepEqual(statsFromModels({ data: [{ id: "m", max_model_len: 131072 }] }), { context: 131072 });
+assert.deepEqual(statsFromModels({ data: [{ id: "m" }] }), {}, "llama-server lists no window here");
+assert.equal(needsOf({ max_tokens: 500, messages: [] }).output, 500, "the reserved output is reported on its own");
 
 console.log("stats ok");

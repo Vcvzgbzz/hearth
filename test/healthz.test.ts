@@ -9,9 +9,7 @@
  * What it is built on matters as much as that it exists. The tempting signal is
  * `answering()` -- "something came back from this backend lately" -- and it is
  * wrong: on a quiet box nothing comes back from anything, so a healthy node
- * reads silent across the board. Measured on the live box while writing this:
- * nine backends, `answering: false` on all nine, one of them with a model
- * resident. A probe built on that would have gone red and stayed red.
+ * reads silent across the board, even with a model resident. A probe built on that would have gone red and stayed red.
  *
  * The event stream is the real signal. Where one is held open, a backend going
  * away drops it; where there is none, hearth does not probe and says so rather
