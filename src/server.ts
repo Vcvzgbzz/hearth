@@ -21,6 +21,7 @@ import {
   type BackendConfig, type HearthConfig, type RoutePolicy,
 } from "./config.js";
 import { Controls } from "./controls.js";
+import { emulatedRequest, relayEmulated } from "./emulate.js";
 import { Overrides, readState, writeState } from "./overrides.js";
 import type { Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
@@ -384,6 +385,15 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
    *  to the client untouched — it is a better error than anything we could
    *  invent — but it is NOT a success, and the request log and the console's
    *  call history used to record it as one. */
+  /** Sends a chat completion to a local backend, emulating another server's answers if the route asks. */
+  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal } & ReturnType<typeof backendDeadline>): Promise<number> {
+    const emulate = cfg.models[model]?.emulate ?? null;
+    const body = pool.outboundBody(model, payload);
+    const sentAt = Date.now();
+    const up = await send(`${url}/v1/chat/completions`, { json: emulate ? emulatedRequest(body) : body, ...opts });
+    return emulate ? relayEmulated(up, res, forwardable(up.headers), sentAt) : pipeThrough(up, res);
+  }
+
   async function pipeThrough(up: UpstreamResponse, res: ServerResponse): Promise<number> {
     res.writeHead(up.status, {
       ...forwardable(up.headers),
@@ -450,12 +460,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // does with theirModel, just for a local backend — plus the route's
       // `params` stamped over the client's. Identity unless the model sets
       // one of them, so the common payload is untouched.
-      const up = await send(`${local.cfg.url}/v1/chat/completions`, {
-        json: pool.outboundBody(model, payload),
-        signal,
-        ...backendDeadline(local.cfg),
-      });
-      localStatus = await pipeThrough(up, res);
+      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg) });
     };
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
@@ -1657,12 +1662,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
               // stamped params apply on the way to the backend as for a local
               // caller. (Before, a lent `as` model reached the backend under
               // the advertised id and 404'd.)
-              const up = await send(`${serving.cfg.url}/v1/chat/completions`, {
-                json: pool.outboundBody(model, payload),
-                signal: ctrl.signal,
-                ...backendDeadline(serving.cfg),
-              });
-              lentStatus = await pipeThrough(up, res);
+              lentStatus = await sendLocal(serving.cfg.url, model, payload, res, { signal: ctrl.signal, ...backendDeadline(serving.cfg) });
             },
           );
         } catch (e) {

@@ -173,6 +173,7 @@ const DEFAULT_ROUTE: ModelRoute = {
   params: null,
   lane: null,
   stats: null,
+  emulate: null,
 };
 
 export class Overrides {

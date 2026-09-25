@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
+import { EMULATIONS, type Emulation } from "./emulate.js";
 import { known, NOTE_MAX, type ModelStats } from "./stats.js";
 
 export type RoutePolicy = "local" | "peer" | "spillover" | "fastest";
@@ -318,6 +319,8 @@ export interface ModelRoute {
    * field. See declaredStats().
    */
   stats: ModelStats | null;
+  /** Reshapes this id's backend answers into another server's format; see emulate.ts. */
+  emulate: Emulation | null;
   /**
    * How many jobs for THIS model may run at once locally, or null to use the
    * backend's own `concurrency`.
@@ -1193,6 +1196,10 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
     const alias = str(entry.as, `models.${id}.as`, "");
     const params = modelParams(entry.params, id);
+    const emulate = str(entry.emulate, `models.${id}.emulate`, "");
+    if (emulate !== "" && !(EMULATIONS as readonly string[]).includes(emulate)) {
+      throw new ConfigError(`models.${id}.emulate is "${emulate}"; known: ${EMULATIONS.join(", ")}`);
+    }
     const lane = str(entry.lane, `models.${id}.lane`, "");
     if (lane !== "" && !(lane in lanes)) {
       throw new ConfigError(
@@ -1221,6 +1228,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       params,
       lane: lane === "" ? null : lane,
       stats: declaredStats(entry.stats, id),
+      emulate: emulate === "" ? null : (emulate as Emulation),
     };
   }
 
