@@ -243,6 +243,7 @@ const tick = () => new Promise((r) => setImmediate(r));
   await big.started;
   const small = sized(30);
   await small.started;
+  assert.equal(s.capacityFor("vllm").free, 0, "peers are told there is no room, though two slots are free");
   const over = sized(20);
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(log, ["60", "30"], "90 of 100 is held; 20 more would overflow");

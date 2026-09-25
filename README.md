@@ -1057,6 +1057,11 @@ it, you get a `400` naming both numbers before anything is queued or evicted —
 and a borrower who asks anyway gets the same `400` from the lender, rather than a
 swap and a wasted load.
 
+When only the reserved output overflows, the local model shrinks `max_tokens` to
+the room the prompt leaves instead of refusing: an agent that always asks for 32k
+gets a shorter cap, not a dead turn. A prompt that leaves under 1024 tokens is
+still refused, so the client can compact.
+
 `thinking` and `effort` are two facts, and one word used to cover both. A model
 can reason on every turn with no dial to turn, so "it thinks" and "you can tell
 it how hard" get a chip each. `thinking` is read from any one sign: an effort

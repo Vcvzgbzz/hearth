@@ -487,6 +487,24 @@ export class Scheduler {
    * over-commit this exists to stop.
    */
   capacityFor(model: string): ReturnType<Scheduler["capacity"]> {
+    const cap = this.slotCapacityFor(model);
+    return cap.free > 0 && this.poolFull(model) ? { ...cap, free: 0 } : cap;
+  }
+
+  /**
+   * Is less than an even share of this model's pool left? A caller's job size is
+   * unknown here, so free slots behind a nearly full pool would only queue.
+   */
+  private poolFull(model: string): boolean {
+    const pool = this.poolOf(model);
+    if (pool === null) return false;
+    const wire = this.wireOf(model);
+    let used = 0;
+    for (const j of this.running) if (this.wireOf(j.model) === wire) used += j.tokens;
+    return pool - used < pool / this.limitFor(model);
+  }
+
+  private slotCapacityFor(model: string): ReturnType<Scheduler["capacity"]> {
     const base = this.capacity();
     const limit = this.limitFor(model);
     if (limit === this.concurrency) return base;
