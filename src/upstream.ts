@@ -1,15 +1,6 @@
 /**
- * HTTP client for talking to a backend or a peer.
- *
- * Not `fetch`, and that's the important thing about this file. Node's fetch
- * (undici) enforces a 300s headersTimeout measured to the first response
- * header, and an inference server sends nothing at all until it starts
- * generating. A cold model load, a queue on the far side, or just a slow peer
- * blows straight past it. You get "TypeError: fetch failed" while the timeout
- * you actually configured never fires.
- *
- * You can't raise headersTimeout per-request, so there's no fixing it from the
- * outside. Hence node:http, where nothing times out unless the caller says so.
+ * HTTP client for backends and peers, on node:http rather than fetch: undici's 300s
+ * headersTimeout cannot be raised per request, and inference sends no headers until it starts.
  */
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -20,27 +11,11 @@ export interface UpstreamResponse {
   headers: Record<string, string | string[] | undefined>;
   /** Raw body chunks. Async-iterable: `for await (const chunk of body)`. */
   body: IncomingMessage;
-  /**
-   * Drain the whole body to a string, up to `maxBytes`.
-   *
-   * Error path and control plane only, where there's nothing worth streaming
-   * and you just want to see what upstream said. Capped because this is the one
-   * place a reply we did not ask the size of is held in memory: a peer is
-   * another machine somebody else administers, and "it will be small" is a
-   * hope, not a limit.
-   */
+  /** Drain the body to a string, capped at `maxBytes`; error and control-plane paths only. */
   text: (maxBytes?: number) => Promise<string>;
 }
 
-/**
- * The most of a buffered body we will hold.
- *
- * Every caller of `text()` wants either a small JSON control-plane reply or the
- * first couple of hundred characters of an error, and both are orders of
- * magnitude under this. It exists so that a peer answering `/peer/state` with
- * a firehose costs us a bounded amount of memory rather than however much it
- * can push inside the deadline.
- */
+/** The most of a buffered body we hold, so a peer's oversized reply costs bounded memory. */
 const MAX_TEXT_BYTES = 1 << 20;
 
 export class UpstreamError extends Error {
@@ -66,12 +41,7 @@ export interface RequestOptions {
    *  and shouldn't be reinterpreting. Ignored if `json` is set. */
   raw?: Buffer;
   signal?: AbortSignal;
-  /**
-   * Deadline for the response headers only, in ms. Omit it for inference, where
-   * the honest answer is "however long it takes". Peer polling sets a short one:
-   * a peer that can't answer a capacity check in a couple of seconds is one to
-   * route around, not wait for.
-   */
+  /** Deadline for response headers only, in ms. Omit for inference; peer polls set a short one. */
   headersTimeoutMs?: number;
   /** Total deadline for `getJson`, body included. Defaults to 2x the headers
    *  timeout. Does nothing in `send`, which is for streams. */
@@ -100,14 +70,7 @@ export function send(url: string, opts: RequestOptions = {}): Promise<UpstreamRe
     }
 
     let settled = false;
-    /**
-     * Single exit for every failure.
-     *
-     * Worth keeping it that way. The first version set the flag and destroyed
-     * the request, assuming the 'error' handler would reject. But that handler
-     * bails on an already-settled request, so a headers timeout killed the
-     * socket and left the promise pending forever.
-     */
+    /** Single exit for every failure, so a headers timeout always settles the promise. */
     const fail = (e: Error) => {
       if (settled) return;
       settled = true;
@@ -173,16 +136,8 @@ export function send(url: string, opts: RequestOptions = {}): Promise<UpstreamRe
     );
 
     /**
-     * Abort, from either half of the request.
-     *
-     * `fail` alone isn't enough: `settled` flips the moment headers land, so it
-     * does nothing for the common case of a client hanging up mid-stream. That
-     * used to mean the generation just kept going into a dead socket, holding a
-     * scheduler slot for its full length — on a large model, up to a minute of
-     * GPU per cancelled request.
-     *
-     * Destroying the request makes the response stream emit an error, so a
-     * `for await` over the body throws and the caller unwinds on its own.
+     * Abort from either side. Destroying the request also stops a generation whose client hung
+     * up mid-stream, instead of it holding a slot to the end.
      */
     const abort = () => {
       if (settled) {
@@ -205,17 +160,8 @@ export function send(url: string, opts: RequestOptions = {}): Promise<UpstreamRe
 }
 
 /**
- * Request and parse JSON. This buffers, so it's for control-plane calls only.
- * Never point it at a generation.
- *
- * It has a total deadline, unlike `send`. headersTimeoutMs only covers the
- * handshake, so a peer that answered `200 {` and then went quiet left the
- * promise pending forever. Every poll tick leaked another socket and buffer,
- * and since none of them ever settled, `consecutiveFailures` stayed at zero and
- * the poller never worked out the peer was down.
- *
- * The buffering is fine here because every caller wants a small JSON body
- * quickly or not at all.
+ * Request and parse JSON, for control-plane calls only; never a generation. Has a total
+ * deadline, so a peer that stalls mid-body still fails.
  */
 export async function getJson<T>(url: string, opts: RequestOptions = {}): Promise<T> {
   const totalMs = opts.totalTimeoutMs ?? (opts.headersTimeoutMs ?? 10_000) * 2;

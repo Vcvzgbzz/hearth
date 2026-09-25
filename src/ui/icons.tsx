@@ -1,23 +1,6 @@
 /**
- * One mark per kind of thing on the stage.
- *
- * Every node used to be the same rounded rectangle, so a GPU, a model server
- * and a peer machine were distinguishable only by reading them. On a stage with
- * a dozen boxes that is a lot of reading to answer "what am I looking at".
- *
- * Hugeicons (MIT), bundled rather than fetched. The page is one self-contained
- * response served on loopback behind an SSH tunnel and is routinely opened with
- * no route to the internet at all — the same reason the theme names system font
- * stacks instead of letting MUI pull Roboto from Google. A CDN icon set would be
- * six invisible squares on the machine this page exists to look after.
- *
- * Both packages are devDependencies, so nothing is added to what
- * `npm install @vcvzgbzz/hearth` pulls down; only the handful of icons named
- * below reach the bundle.
- *
- * The mark carries BOTH what a thing is (its glyph) and how it is doing (its
- * colour, inherited from the node's status tone), which is why these are drawn
- * as strokes in currentColor rather than as anything pre-coloured.
+ * One mark per kind of node, drawn in currentColor so the node's status tints it. Hugeicons
+ * (MIT), bundled because the page is often opened with no internet route.
  */
 import {
   ArrowDataTransferHorizontalIcon,
@@ -40,21 +23,7 @@ const GLYPH = {
   ram: RamMemoryIcon,
   /** This node — the machine the page is served from. */
   self: ServerStack01Icon,
-  /**
-   * A peer: the SAME mark as self, deliberately.
-   *
-   * A peer is a machine running this same software, which is exactly what the
-   * self node is — drawing it as a chain link made the relationship the subject
-   * and the thing itself an afterthought, and put two unlike shapes on the one
-   * row where the shapes should match. What actually differs is whose it is and
-   * whether it answers, and the row already says both: `self` is tagged as such,
-   * and the mark takes its colour from the node's state — a healthy peer in
-   * the cool peer hue, a down peer in fault red — so the shape matches while
-   * the colour keeps the machines apart.
-   *
-   * Kept as its own kind rather than aliased at the call site, so making them
-   * differ again is one line here.
-   */
+  /** A peer runs this same software, so it shares self's mark; colour tells them apart. */
   peer: ServerStack01Icon,
   /** A backend that swaps: one model in, the last one out. */
   swap: ArrowDataTransferHorizontalIcon,
@@ -70,13 +39,7 @@ const GLYPH = {
   chip: ChipIcon,
 } as const;
 
-/**
- * No `title` here on purpose: HugeiconsIcon renders no children, so an <svg>
- * <title> passed in is silently dropped — checked in its dist rather than
- * assumed. The mark is aria-hidden and every node states its name and kind in
- * text beside it, with the type spelled out in the node's own tooltip, so
- * nothing is lost by not having one.
- */
+/** No `title`: HugeiconsIcon drops children. The mark is aria-hidden and the node names itself in text. */
 export function TypeIcon({ kind, size }: { kind: IconKind; size: number }) {
   return (
     <HugeiconsIcon

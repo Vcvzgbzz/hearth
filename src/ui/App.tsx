@@ -1,28 +1,6 @@
 /**
- * The console.
- *
- * Two views behind one shell. The graph IS the default page: what this box is
- * made of and what is moving through it, with one rail beside it holding every
- * action for whatever is selected, and the tables as drawers you open rather
- * than four screens you scroll past. The dashboard is the same facts laid out to
- * read top to bottom — a menu in the header switches between them, and the choice
- * is remembered. Both are handed the same poll and the same theme from here, and
- * the tables and every backend/peer panel are shared modules, so the two views
- * cannot drift apart.
- *
- * Three structural rules the old page broke, each of which cost something:
- *
- *   One place for actions. A control beside the fact it changes sounds right and
- *   scatters the controls down four sections, which is how the two switches that
- *   decide whether this box federates at all ended up in a heading two screens
- *   down.
- *
- *   Stable identity across polls. Every list here is keyed by something that
- *   survives a refresh, because reconciliation is what keeps a button's in-flight
- *   state alive through the 3s poll.
- *
- *   Motion means traffic. Nothing on this page animates unless something is
- *   really happening, or the graph becomes wallpaper.
+ * The console: a graph view and a dashboard view over one poll and theme, sharing the tables
+ * and panels. Actions live in one rail, lists key on stable ids, and motion means traffic.
  */
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -51,24 +29,8 @@ import type { UiData } from "./types.js";
 /* ------------------------------------------------------------------ data */
 
 /**
- * Pushed, with the poll kept as the way back.
- *
- * /ui/events sends one snapshot and then only what changed. The poll it
- * replaces asked for 95KB every 3 seconds and 93% of that was history the page
- * already had, so an idle box now sends nothing at all.
- *
- * The fallback is not decoration. EventSource is the one transport a proxy, an
- * extension or an older server can break in a way that looks like silence, and
- * a status page that renders nothing is worse than one that renders slowly. So
- * a stream that never delivers a snapshot is abandoned for the poll, and the
- * page carries on exactly as it used to.
- *
- * The poll keeps both its old guards. /ui/data calls peers.ensureFresh(), which
- * can exceed the 3s interval exactly when a peer is timing out — which is
- * exactly when you are watching. Unguarded, requests stack and an older
- * response can land after a newer one and render stale state over fresh.
- * document.hidden stops a forgotten background tab polling a peer-probing
- * endpoint forever.
+ * Pushed over /ui/events (a snapshot, then changes), falling back to polling /ui/data if no
+ * snapshot arrives. Polls never overlap, and a hidden tab stops polling.
  */
 function useData(): { data: UiData | null; dead: boolean; live: boolean; refresh: () => void } {
   const [data, setData] = useState<UiData | null>(null);
@@ -89,10 +51,7 @@ function useData(): { data: UiData | null; dead: boolean; live: boolean; refresh
 
   const startPolling = useCallback(() => {
     if (polling.current !== null) return;
-    // The FIRST load is forced: document.hidden is true more often than you
-    // would think — a background tab, a prerender, an embedded pane — and
-    // gating the initial fetch on it left the page permanently blank there,
-    // waiting on a visibilitychange that may never come.
+    // The first load ignores document.hidden, or a background tab stays blank.
     poll(true);
     polling.current = window.setInterval(() => poll(false), 3000);
   }, [poll]);
@@ -151,10 +110,7 @@ function useData(): { data: UiData | null; dead: boolean; live: boolean; refresh
     });
 
     es.onerror = () => {
-      // EventSource retries by itself, and a node restarting is the common
-      // case — so an error AFTER we have data is not a reason to abandon the
-      // transport, only to say the page is stale. One that arrives before the
-      // first snapshot is a transport that does not work here.
+      // After data arrives an error only marks the page stale; EventSource retries by itself.
       if (!got) fallBack();
       else setDead(true);
     };
@@ -225,10 +181,7 @@ function Console({ d, ctx, dead, live, menu }: {
   const toggle = (which: Exclude<Drawer, null>) =>
     setDrawer((cur) => (cur === which ? null : which));
 
-  // Escape backs out of whatever is open, innermost first. The rail's own
-  // "← everything" link is a small target and the only other way out of a
-  // selection, and a drawer covering half the stage has no way out at all
-  // without finding the tab that opened it again.
+  // Escape backs out of whatever is open, innermost first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -344,18 +297,7 @@ function Console({ d, ctx, dead, live, menu }: {
 
 /* -------------------------------------------------------------- the key */
 
-/**
- * Asking for the API key, in the page.
- *
- * This was `window.prompt`, which has room for a sentence and no room for the
- * two things an operator actually needs: what this key IS, and where to get it.
- * So the first write on a keyed node opened a bare box asking for a secret, with
- * a rejection indistinguishable from a click that did nothing.
- *
- * Mounted once by the shell and handed to lib.ts, which resolves the promise it
- * hands back — so `postWrite` can wait for a person without the write path
- * knowing anything about React.
- */
+/** The in-page API key prompt, which says what the key is and where to find it. lib.ts awaits it. */
 function KeyDialog() {
   const [resolve, setResolve] = useState<((k: string | null) => void) | null>(null);
   const [value, setValue] = useState("");
@@ -363,10 +305,7 @@ function KeyDialog() {
   useEffect(() => {
     setKeyAsker(() => new Promise<string | null>((r) => {
       setValue("");
-      // Stored through a setter function, or React would call the resolver
-      // instead of storing it — useState treats a function argument as an
-      // updater, and a promise that resolves itself on mount is a fine way to
-      // spend an afternoon.
+      // A setter function, or useState would call the resolver as an updater.
       setResolve(() => r);
     }));
   }, []);
@@ -413,18 +352,8 @@ function KeyDialog() {
 /* ------------------------------------------------------------------ views */
 
 /**
- * Which view is showing, remembered per browser.
- *
- * The graph is the default where there is room for it — it is what a visit is
- * usually for. The stage has a floor of MIN_STAGE px and a rail beside it, so
- * on a phone the graph is a diagram you scroll sideways with its controls
- * pushed below the fold; the dashboard is the same facts in a column, which is
- * what a narrow screen wants. So the FALLBACK follows the viewport and an
- * explicit choice always wins over it, in either direction.
- *
- * localStorage can throw (private mode, storage disabled), and a page that
- * refuses to render because it could not remember a preference is worse than
- * one that forgets it, so both sides are guarded.
+ * Which view shows, remembered per browser; defaults to the dashboard on narrow screens.
+ * localStorage may throw, so both sides are guarded.
  */
 type View = "graph" | "dashboard";
 const VIEW_KEY = "hearth.view";
@@ -443,14 +372,7 @@ function useView(fallback: View): [View, (v: View) => void] {
   return [view, choose];
 }
 
-/**
- * The view switcher.
- *
- * Two mutually exclusive destinations, drawn as two controls that both say
- * where they go and which one you are on. A menu would hide half of that
- * behind a click and read as "there is navigation here", which there is not —
- * there are two views.
- */
+/** The view switcher: two controls, each naming where it goes. */
 function ViewMenu({ view, onView }: { view: View; onView: (v: View) => void }) {
   const item = (v: View, label: string) => (
     <Button

@@ -1,14 +1,4 @@
-/**
- * The three tables, shared.
- *
- * Queue, Models and the last-ten-minutes history. The graph console opens these
- * as drawers; the dashboard stacks them down a scroll. They live here, in one
- * copy, for exactly the reason the second console was turned down the first time:
- * a fix to how a queue row is keyed, or how "blocked" is told from "busy", has to
- * land in one place or the two views drift. Everything here keys off a stable id
- * and reads the current shape of /ui/data — `j.id`, `proxying`, `queued > 0` —
- * because both callers get whichever is correct here, together.
- */
+/** Queue, Models and history tables, one copy shared by the graph's drawers and the dashboard. */
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Table from "@mui/material/Table";
@@ -46,13 +36,8 @@ function useNow(): number {
 const TONE = { blocked: "warning.main", busy: "text.secondary", cold: "warning.main", lane: "text.secondary" } as const;
 
 /**
- * What is in flight, and for anything that is not, why not.
- *
- * A job waits for exactly one of four reasons and they call for different
- * responses: the backend is full (the ceiling working), the model has to load
- * (fine, once), another backend is holding the card (the interesting one), or
- * it is behind others in its lane. Only one of those is a hardware problem, and
- * a State column that said "queued" hid all four.
+ * In-flight jobs, and why each waiting one waits: backend full, model loading, card held by
+ * another backend, or behind others in its lane.
  */
 export function QueueTable({ d }: { d: UiData }) {
   const now = useNow();
@@ -133,13 +118,7 @@ const backendHas = (d: UiData, b: Backend, m: string, list: "serves" | "loaded")
   return ids.includes(m) || ids.includes(wireOf(d, m));
 };
 
-/**
- * Variant groups from the aliases map.
- *
- * X is a variant of P when aliases[X] === P and P is itself in net.available.
- * An `as` naming something not in available is a rename, not a variant — those
- * rows stand alone.
- */
+/** Variant groups: X is a variant of P when aliases[X] === P and P is advertised; otherwise a rename. */
 function variantGroups(d: UiData): Map<string, string[]> {
   const groups = new Map<string, string[]>();
   for (const [adv, as] of Object.entries(d.aliases ?? {})) {
@@ -161,13 +140,7 @@ function nodeOf(d: UiData, model: string): string | null {
   return p?.name ?? null;
 }
 
-/**
- * The model catalogue.
- *
- * `onSelect` is optional: the graph console passes it so a backend or peer name
- * jumps the rail to that node; the dashboard has no rail, so it omits it and the
- * names render as plain text rather than dead links.
- */
+/** The model catalogue. `onSelect` links names to the rail; the dashboard omits it. */
 export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelect?: (s: Sel) => void }) {
   const { net } = d;
   const self = net.nodes.find((n) => n.self);
@@ -238,15 +211,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
     );
   };
 
-  /**
-   * What this model can take: window first, then the two capabilities that
-   * change whether a request runs at all.
-   *
-   * Reads the node's own numbers rather than a merged map, self first: a local
-   * request runs on the local backend, so when both we and a peer serve an id,
-   * the number that describes what YOU will get is ours. The tooltip names
-   * whose reading it is, because on a borrowed model it is not ours.
-   */
+  /** Window, vision and tools, from our own reading first: a local request runs on our backend. */
   const Takes = ({ r }: { r: ModelRow }) => {
     const src = [...r.on.filter((n) => n.self), ...r.on.filter((n) => !n.self)]
       .find((n) => n.stats?.[r.model]);
@@ -258,10 +223,7 @@ export function ModelsTable({ d, ctx, onSelect }: { d: UiData; ctx: Ctx; onSelec
         </Tooltip>
       );
     }
-    // A declared record is the operator's word about a model that has not been
-    // loaded yet, so it is drawn dimmer and says so. Not pedantry: it is the
-    // one number here that nothing has checked, and the case it exists for —
-    // a cold model — is exactly when nobody can check it.
+    // A declared record is unverified until the model loads, so it is drawn dimmer.
     const declared = st.from === "declared";
     const notes = [
       declared

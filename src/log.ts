@@ -1,10 +1,4 @@
-/**
- * One-line JSON on stdout. That's what journald wants, and it's what
- * `journalctl -o cat | jq` can read without any help.
- *
- * No log files and no rotation, because whatever supervises the process
- * already does that better than we would.
- */
+/** One-line JSON on stdout for journald; the supervisor owns files and rotation. */
 export type Level = "debug" | "info" | "warn" | "error";
 
 const ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };

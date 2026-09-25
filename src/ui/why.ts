@@ -1,39 +1,15 @@
-/**
- * Derivations over the payload that are worth checking without a browser.
- *
- * Its own file, and not part of lib.ts, for one reason: lib.ts touches fetch,
- * window and localStorage, so it only typechecks with the DOM lib. Everything
- * here is pure and nothing else, which means a node test can import it and
- * assert the answers directly — and the answers are the part worth asserting,
- * since getting the wait order wrong reports somebody else's GPU as this
- * backend being busy, and getting the percentile wrong reports a healthy box
- * as a slow one.
- */
+/** Pure derivations over the payload, kept free of DOM so node tests can assert them. */
 import type { Backend, Call, Job, Resource } from "./types.js";
 
-/**
- * The hardware this backend needs that somebody ELSE is standing on.
- *
- * Empty for a backend that declared no resources, and empty for one whose
- * resources are free or held by itself — re-entrance is the normal case, a
- * backend running its second job is not blocked by its first.
- */
+/** Resources this backend needs that ANOTHER backend holds; its own hold never blocks it. */
 export function blockers(b: Backend, resources: Resource[]): Resource[] {
   const mine = b.resources ?? [];
   return resources.filter((r) => mine.includes(r.name) && r.holder !== null && r.holder !== b.name);
 }
 
 /**
- * Why this job is not running.
- *
- * The distinction the old page could not draw at all, and the one worth having:
- * a queue of four behind a busy backend is the system working, and a queue of
- * four behind a card somebody else is holding is the system waiting on a swap
- * that has not happened yet. They look identical as a number.
- *
- * Ordered the way admission actually decides — hardware first, because
- * canAdmit() checks it before either of the backend's own ceilings, so a
- * blocked backend reports "full" for a reason that is not the real one.
+ * Why a job is not running, in the order admission decides: hardware held elsewhere, then
+ * the backend's own ceilings.
  */
 export interface Wait {
   text: string;
@@ -66,17 +42,8 @@ export function waitReason(j: Job, b: Backend | undefined, resources: Resource[]
 }
 
 /**
- * The window's calls as the four numbers worth a line of the page.
- *
- * `calls` already carries every finished request, and per-request hover is the
- * wrong place to keep the only answer to "is this box slow, and is anything
- * failing" — a failure rate nobody can see until they open two disclosures is
- * a failure rate nobody sees.
- *
- * Nearest-rank percentiles over the run time alone. Queue wait is the
- * scheduler's doing and is reported beside it rather than folded in, because
- * they call for different responses: a slow p95 is a model or a card, and a
- * long wait is a queue.
+ * The window's calls as p50/p95 run time, failure rate and queue wait. Wait is kept apart
+ * from run time: a slow p95 is a model or card, a long wait is a queue.
  */
 export interface CallStats {
   n: number;

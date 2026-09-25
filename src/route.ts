@@ -1,13 +1,6 @@
 /**
- * Where should this request run?
- *
- * Pure, and kept away from the server, so the question worth testing ("when
- * does work leave this machine?") can be tested without a socket anywhere in
- * sight. The server does plumbing. This decides.
- *
- * Local is always the default. A model with no `models` entry never leaves, and
- * neither does one whose peers don't map it. Work goes elsewhere only if the
- * config said so and a peer is known-good right now.
+ * Where a request runs: local unless the config routes it to a peer that is known-good
+ * right now. Pure, so it tests without a socket.
  */
 import type { HearthConfig } from "./config.js";
 import type { PeerRegistry } from "./peers.js";
@@ -31,24 +24,8 @@ export type Decision =
   | { target: "unavailable"; reason: string };
 
 /**
- * Rough "how soon does this start" score. Lower is sooner.
- *
- * Three terms, and the last one usually decides it:
- *
- *   queued   work already in line
- *   busy     nothing free, so something has to finish first
- *   cold     model isn't loaded, so there's a swap coming
- *
- * Queue depth on its own isn't enough. An idle node holding the wrong model has
- * to evict and reload first, which is tens of seconds on anything large, and a
- * node with the model already resident and one job queued will beat it easily.
- * Compare depth alone and you hand the work to whichever side happens to be
- * idle and cold, which is the slower answer.
- *
- * Crude on purpose. A real duration model needs per-model load times and token
- * rates, which is a research project. coldPenalty is in queued-jobs-equivalent
- * so the terms add up, and it's a knob because the right value depends on your
- * model size and disk.
+ * "How soon does this start", lower is sooner: queued work, plus one if nothing is free,
+ * plus `coldPenalty` (in queued-job units) when the model has to load first.
  */
 function pressure(
   queued: number,
@@ -66,16 +43,7 @@ export function decide(
   cfg: HearthConfig,
   peers: PeerRegistry,
   local: LocalLoad,
-  /**
-   * What the request needs, when the caller knows. Optional so every caller
-   * that does not deal in chat payloads keeps working unchanged.
-   *
-   * A peer that cannot take THIS request is not a candidate for it. That is the
-   * whole point of carrying model stats over the protocol: an oversized prompt
-   * comes home to a backend with a bigger window instead of crossing the
-   * network to be refused. Only a peer that positively reported a limit is
-   * dropped — silence is not a limit.
-   */
+  /** What the request needs; a peer that reported a smaller limit is skipped. Silence is not a limit. */
   need?: Need,
 ): Decision {
   const route = cfg.models[model];
@@ -99,10 +67,7 @@ export function decide(
     candidates = kept;
   }
   if (candidates.length === 0) {
-    // A down peer is the normal case here, but if fallbackLocal is off, honour
-    // it. This used to only change the reason string, so the one knob meaning
-    // "never run this here" worked when a peer errored and did nothing when a
-    // peer was simply down. People set it because the local box would OOM.
+    // With fallbackLocal off, a down peer refuses rather than running here.
     const why = refused ?? "no peer available";
     if (!route.fallbackLocal) {
       return { target: "unavailable", reason: `${why} and fallbackLocal is off` };
@@ -141,11 +106,7 @@ export function decide(
   );
   let best: { name: string; p: number } | null = null;
   for (const name of candidates) {
-    // Ask about THIS model, not about the node. A peer fronting several
-    // backends can be busy on its GPU and completely idle on the queue that
-    // would actually serve us; node-level numbers would send our work away, or
-    // keep it home, for reasons that have nothing to do with our model.
-    // Their id, since that is the only name their side reports under.
+    // Scored on THIS model's queue, under the peer's own id for it.
     const theirId = peers.theirModelId(name, model);
     if (theirId === undefined) continue;
     const load = peers.loadFor(name, theirId);

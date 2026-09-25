@@ -1,17 +1,6 @@
 /**
- * The dashboard view.
- *
- * Every number at once, down one scroll: the vitals, then the hardware, the
- * queue, the models, the peers and the last ten minutes — the read the graph
- * answers a click at a time. It is built entirely from the pieces the graph
- * already uses: the three tables come from tables.tsx, and each hardware, card
- * and peer section is the SAME panel the inspector rail draws for a selection.
- * Nothing here re-derives what a slot count or a blocked backend means, so the
- * two views cannot disagree — which is the whole reason the first attempt at a
- * second console, a restored copy of the old one, was right to be turned down.
- *
- * Presentational only: the shell owns the poll, the theme and the view menu, and
- * hands this {d, ctx, dead} plus the `menu` element to seat in the header.
+ * The dashboard view: every number down one scroll, built from the same tables and panels
+ * the graph uses so the two cannot disagree. Presentational; the shell owns poll and theme.
  */
 import Box from "@mui/material/Box";
 import Container from "@mui/material/Container";

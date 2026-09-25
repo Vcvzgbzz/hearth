@@ -1,17 +1,4 @@
-/**
- * The two charts, and the table that says the same thing for a screen reader.
- *
- * Hand-drawn SVG rather than a charting library, which is a deliberate hold:
- * both of these are one series each with tuned proportions, and @mui/x-charts
- * would cost a dependency and a fight over the same tick labels. If a third
- * chart with a different shape ever turns up, revisit.
- *
- * Two bugs the old imperative version had are structurally gone here rather
- * than fixed: the chart height and the viewBox came from separate literals and
- * drifted (viewBox 130 against H 150, silently squashed), and the lanes tooltip
- * closed over the enclosing loop cursor so `hist[i]` was undefined by the time
- * anyone hovered. Both now come from one expression each.
- */
+/** The two charts and their screen-reader table, as hand-drawn SVG. */
 import Box from "@mui/material/Box";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -43,16 +30,8 @@ function Empty({ msg }: { msg: string }) {
 }
 
 /**
- * The x-axis labels both charts share, as HTML spans over a track column.
- *
- * Rules learned from a freshly restarted node, where the ten-minute window
- * held one minute of samples: every tick read "22:06", the first one was
- * centred on the plot's left edge and spilled into the label column, and the
- * last one sat on top of "now". So: a label never repeats its predecessor,
- * the first tick is anchored to the edge instead of centred on it, nothing
- * is placed in the last tenth of the track where "now" lives, and while the
- * window is shorter than two minutes the labels carry seconds, because a
- * minute alone cannot tell two of them apart.
+ * Shared x-axis labels: never repeat a label, anchor the first to the edge, keep clear of
+ * "now", and show seconds while the window is under two minutes.
  */
 function timeTicks(hist: Sample[]) {
   const span = hist.length > 1 ? hist[hist.length - 1]!.t - hist[0]!.t : 0;
@@ -85,17 +64,7 @@ function timeTicks(hist: Sample[]) {
   return ticks;
 }
 
-/**
- * Queue depth over the window.
- *
- * One series, so no legend: the heading names it. Area plus an emphasised
- * endpoint, recessive grid, crosshair on hover.
- *
- * `hist.length < 2` is not a formality. History.start() takes a sample
- * immediately "so the graph has a point immediately, not in 5s" -- with one
- * sample every x() divides by zero, the browser silently drops a path full of
- * NaN, and you get a blank chart under a header claiming "1 samples".
- */
+/** Queue depth over the window. Needs two samples, or every x() divides by zero. */
 export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: Record<string, string>; available?: string[] }) {
   const t = useTheme();
   const [at, setAt] = useState<number | null>(null);
@@ -119,11 +88,7 @@ export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: 
   // so the hover readout, the lanes and the tables never disagree about a name.
   const fold = (id: string): string => displayId(id, aliases, available);
 
-  // Y-axis: 0 and the peak only; anything more is noise at this size.
-  // (Gridlines at each integer were added in the redesign to give the line
-  // context; they are recessive, not labels.) The labels live in the left
-  // grid column as HTML, at the same percentage heights as the gridlines, so
-  // the plot itself can span the track column edge to edge like a lane.
+  // Y labels at 0 and the peak only, as HTML in the left column at the gridlines' heights.
   const yLabels = [];
   for (let v = 0; v <= peak; v++) {
     if (v !== 0 && v !== peak) continue;
@@ -238,25 +203,8 @@ export function Depth({ hist, aliases, available }: { hist: Sample[]; aliases?: 
 }
 
 /**
- * Which model was in use, over the window.
- *
- * One grid row per lane (model). The faint residency band shows what was loaded
- * (from hist[].residents). Bright segments overlaid on the band show individual
- * requests from `calls`. Failed calls are drawn in the fault colour.
- *
- * Identity by POSITION, not hue. One lane per model; a swap is a step between
- * rows, so A-B-A-B thrash reads as a staircase. Everything stays ember, which
- * keeps colour meaning exactly one thing on this page: warm.
- *
- * `thrashy` is the set of models on a backend that actually evicts. A backend
- * that keeps everything resident produces an unbroken bar edge to edge, which
- * is structurally incapable of showing the thrash this chart exists to show --
- * four such rows above the one that moves buried the signal. Those sort down
- * and draw dim.
- *
- * This was "Which model was loaded, over the window." until per-request
- * `calls` arrived; the residency band is still exactly that chart, the
- * segments are the new layer on top of it.
+ * Which model was in use over the window: one row per model, a band for residency and bright
+ * segments for requests, so a swap reads as a step. Non-evicting backends sort down and dim.
  */
 export function Lanes({
   hist, calls, thrashy, aliases, available,
@@ -268,11 +216,7 @@ export function Lanes({
   available?: string[];
 }) {
   const t = useTheme();
-  // The readout is drawn INSIDE the chart's own position:relative wrapper, at the
-  // pointer. `x`/`y` are pointer offsets from that wrapper, taken on every move,
-  // so the box follows the segment the pointer is on and never anchors to the
-  // viewport or to the page: a `position: fixed` box at (20, 20) is how the first
-  // version of this appeared over the Models table, four sections away.
+  // The readout is positioned inside the chart's own wrapper, at the pointer.
   const [hover, setHover] = useState<{ type: "call" | "track"; data: Call | { model: string; time: number; loaded: boolean; active: boolean; index: number }; x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const at = (e: { clientX: number; clientY: number }) => {
@@ -295,10 +239,7 @@ export function Lanes({
     .sort((a, b) => (canThrash(b) ? 1 : 0) - (canThrash(a) ? 1 : 0));
   const nowWarm = new Set(foldedResidents[foldedResidents.length - 1]!);
 
-  // A swap is any change in the warm set, which on a multi-backend node means
-  // "one of the backends swapped", not necessarily the GPU.
-  // Swaps between variants of the same parent are not counted (they are the
-  // same weights).
+  // A swap is any change in the warm set, not counting swaps between variants of one parent.
   const swaps = foldedResidents.filter((r, i) =>
     i > 0 && r.join("") !== foldedResidents[i - 1]!.join("")).length;
 
@@ -346,12 +287,7 @@ export function Lanes({
 
   // One SVG per lane, each with width 100% so it fills its cell.
   const laneSvg = (m: string) => {
-    // A lane on a backend that never evicts used to draw in the divider colour:
-    // it cannot show thrash, so it was demoted to context. Now that the caption
-    // says "track = loaded", a dim track reads as "not loaded", which for an
-    // ollama model kept resident is the opposite of the truth. Loaded is green
-    // everywhere; the non-evicting lanes still sort down and stay a shade
-    // quieter, and the swap count still ignores them.
+    // Loaded is green everywhere; non-evicting lanes are a shade quieter and never count as swaps.
     const bar = !canThrash(m) ? alpha(t.palette.success.main, 0.45)
       : nowWarm.has(m) ? t.palette.success.main : t.palette.text.secondary;
     const laneCalls = callsByModel[m] ?? [];
@@ -536,13 +472,7 @@ export function Lanes({
   );
 }
 
-/**
- * The same window as a table, for anyone the SVG does not serve.
- *
- * Collapses runs of identical samples into one row with a time range and
- * sample count, so a 10-minute window of steady state is one row, not 120.
- * Loaded ids are folded through aliases the same way as the lanes chart.
- */
+/** The same window as a table, runs of identical samples collapsed into one row. */
 export function HistTable({ hist, aliases, available }: { hist: Sample[]; aliases?: Record<string, string>; available?: string[] }) {
   if (!hist || !hist.length) {
     return (
@@ -624,10 +554,7 @@ export function HistTable({ hist, aliases, available }: { hist: Sample[]; aliase
   );
 }
 
-/**
- * A table of every finished call that ended inside the window, newest first.
- * Collapsed by default with its own toggle, separate from the samples table.
- */
+/** Every call that ended in the window, newest first, collapsed by default. */
 export function CallsTable({ calls, aliases, available }: { calls?: Call[]; aliases?: Record<string, string>; available?: string[] }) {
   const [open, setOpen] = useState(false);
   if (!calls || !calls.length) return null;

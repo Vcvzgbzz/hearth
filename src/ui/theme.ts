@@ -1,20 +1,6 @@
 /**
- * The palette, unchanged, expressed as a MUI theme.
- *
- * Colour is instrument semantics here, not decoration:
- *
- *   phosphor green  resident · live · ready     -> success
- *   signal amber    working · hot               -> warning
- *   fault red       broken                      -> error
- *
- * Only the five swatches and the two type faces are kept. NOT a panelled
- * look: this page is a dense table and stays one, so the overrides below flatten
- * MUI's default radii, shadows and 44px-tall controls back down.
- *
- * `fontFamily` is set explicitly because MUI's default is Roboto loaded from
- * Google's CDN. This page is served on loopback behind an SSH tunnel and is
- * routinely opened with no route to the internet at all, so the default would
- * silently fall back to a serif.
+ * The palette as a MUI theme. Colour is state: green live/ready, amber working, red broken.
+ * Flattened MUI defaults keep the page a dense table; system fonts, since it is often offline.
  */
 import { createTheme, type Theme } from "@mui/material/styles";
 
@@ -30,15 +16,7 @@ declare module "@mui/material/styles" {
     line: string;
     /** A healthy peer machine — the one hue that is not a state. */
     peer: { main: string };
-    /**
-     * A model coming off the disk.
-     *
-     * Its own hue because the existing three are already spoken for and none
-     * of them is true here: green says hearth scheduled it, amber says hearth
-     * is only forwarding it, red says something is wrong. A cold load is none
-     * of those — it is work that has started and will take a minute, and the
-     * one thing you want to know at a glance is that waiting is expected.
-     */
+    /** A model loading off the disk: started, expected to take a while, not a fault. */
     cold: { main: string };
   }
   interface PaletteOptions {
@@ -50,25 +28,8 @@ declare module "@mui/material/styles" {
 }
 
 /**
- * Design system palette.
- *
- * Both schemes share the same semantic roles:
- *   success (live/resident/ready)   = phosphor green
- *   warning (working/hot/busy)      = signal amber
- *   error   (fault/down/not answering) = fault red
- *
- * Dark: charcoal surfaces, warm ink, subtle contrast between surfaces.
- * Light: warm paper, its own ink, hairline dividers.
- *
- * The two schemes share ROLES, not hues. A hue is picked for the ground it
- * lands on, so the same role is a phosphor green on charcoal and a deeper
- * green on paper — mirroring one scheme into the other puts a colour at 1.5:1
- * and loses the state it was carrying.
- *
- * Every colour here clears 4.5:1 against BOTH surfaces it can land on
- * (background.default and background.paper). All of them are used as text
- * somewhere, and most at 10-11px, so the small-text threshold is the one that
- * applies. `line` and `hair` are the exception: they are rules, not text.
+ * Both schemes share roles, not hues: each hue is picked for its ground, and every text
+ * colour clears 4.5:1 on both surfaces it lands on. `line` and `hair` are rules, not text.
  */
 const swatches = {
   dark: {

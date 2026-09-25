@@ -1,12 +1,4 @@
-/**
- * The handful of primitives every section of the page is built from.
- *
- * These lived in App.tsx while the page was one file. They moved out when the
- * hardware section arrived and needed the same three of them, which is the only
- * reason this file exists — it is not a component library and should not grow
- * into one. Anything used in exactly one place belongs beside that place;
- * anything both views draw belongs here, in one copy, so they cannot disagree.
- */
+/** Primitives both views draw, in one copy so they cannot disagree. Not a component library. */
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Stack from "@mui/material/Stack";
@@ -18,13 +10,7 @@ import { useState } from "react";
 import { MONO } from "./theme.js";
 import type { UiData } from "./types.js";
 
-/**
- * A horizontal Stack with the two system props this page uses.
- *
- * MUI removed system props (alignItems, flexWrap) from its components in v6 --
- * they live in `sx` now. A dozen call sites here want the same two, so they
- * fold in once rather than at each one.
- */
+/** A horizontal Stack with the two layout props this page uses, now that MUI moved them to `sx`. */
 export function Row({ align = "baseline", wrap, component, spacing = 1.5, sx, children }: {
   align?: "baseline" | "center";
   wrap?: boolean;
@@ -49,28 +35,12 @@ export function Row({ align = "baseline", wrap, component, spacing = 1.5, sx, ch
 
 export const mono = { fontFamily: MONO, fontSize: 12.5 } as const;
 
-/**
- * Push everything after this to the right.
- *
- * `ml: "auto"` on the child is the obvious way and it silently does nothing
- * here: Stack spaces its children with a `& > :not(style) ~ :not(style)`
- * margin rule, whose specificity beats the plain emotion class `sx` generates,
- * so the auto margin is overwritten by the gap every time. Every "right-hand
- * numbers" group on this page was quietly left-aligned because of it. A
- * growing element is not subject to that and needs no !important.
- */
+/** Push what follows to the right. `ml: "auto"` loses to Stack's gap rule, a growing element does not. */
 export function Spacer() {
   return <Box component="span" sx={{ flexGrow: 1 }} />;
 }
 
-/**
- * The status marker, everywhere.
- *
- * A small dot and a WORD, never a pill. Pills everywhere is the look this page
- * was deliberately built away from, and colour on this page means one of
- * exactly three things — live, working, broken — so the dot carries the state
- * and the word carries the detail.
- */
+/** The status marker: a dot for the state and a word for the detail, never a pill. */
 export function Dot({ color = "faint" }: { color?: string }) {
   return (
     <Box component="span" aria-hidden
@@ -78,13 +48,7 @@ export function Dot({ color = "faint" }: { color?: string }) {
   );
 }
 
-/**
- * A quiet mono tag: a backend's kind, a card name, a lane.
- *
- * Deliberately not a coloured chip. Colour on this page is instrument
- * semantics — live, working, broken — and a tag is none of those, it is a
- * label. Painting them would spend the palette on nouns.
- */
+/** A quiet mono label (kind, card, lane), uncoloured: colour here means state, not nouns. */
 export function Tag({ title, color = "faint", children }: {
   title?: string;
   color?: string;
@@ -141,13 +105,7 @@ export function Why({ children }: { children: React.ReactNode }) {
   return <Typography variant="caption" sx={{ color: "faint", display: "block", mt: 0.6 }}>{children}</Typography>;
 }
 
-/**
- * A heading, a count beside it, and optionally a control group at the far right.
- *
- * `note` sits next to the title because it is a subtitle — "3 of 12 loaded"
- * belongs to the word above it, not to the other end of a 900px rule. `right`
- * is for the controls that do.
- */
+/** A heading with a count beside it and optional controls at the far right. */
 export function Section({ title, note, right, children, card }: {
   title: string;
   note?: React.ReactNode;
@@ -184,23 +142,10 @@ export function Section({ title, note, right, children, card }: {
   );
 }
 
-/**
- * One vital, and whether it is worth looking at.
- *
- * `hot` paints the number amber — "working", the middle state in the palette's
- * three. Everything quiet stays quiet, so the one number that has changed is
- * findable without reading the row.
- *
- * StatTile replaced Vital (a bare bold number) with a labelled box so each
- * vital is legible on its own, not just by position in a list.
- */
+/** One labelled vital; `hot` paints it amber so the number that changed stands out. */
 export function StatTile({ label, value, hot, title, size = "lg" }: {
   label: string;
-  /**
-   * A string or a number, not any node: this is also the tile's accessible
-   * name, and a tile that reads its own explanation instead of its value is
-   * the one thing it must not do.
-   */
+  /** A string or number, not a node: it is also the tile's accessible name. */
   value: string | number;
   hot?: boolean;
   title: string;
@@ -238,14 +183,7 @@ export function StatTile({ label, value, hot, title, size = "lg" }: {
   );
 }
 
-/**
- * The vitals, in one derivation and one set of tiles.
- *
- * The same six numbers answer "is this box busy" in the rail and at the top of
- * the dashboard. Both read them from here, so a tooltip written once is
- * available in both, and neither can quietly start counting a shared card as a
- * busy one.
- */
+/** The six vitals, derived once and shared by the rail and the dashboard. */
 export function Vitals({ d, size = "lg", columns }: {
   d: UiData;
   size?: "sm" | "lg";
@@ -285,14 +223,7 @@ export function Vitals({ d, size = "lg", columns }: {
   );
 }
 
-/**
- * What the colours mean, wherever the colours are.
- *
- * A key is only a key while it is on screen. This sits at the foot of the rail
- * and of the dashboard rather than in one panel's empty state, so the page can
- * always answer what a violet node or an amber edge is claiming. The words are
- * the glance; the tooltips carry the rest.
- */
+/** What the colours mean, at the foot of the rail and the dashboard. */
 export function Legend() {
   const items: [string, string, string][] = [
     ["success.main", "scheduled",
@@ -317,20 +248,7 @@ export function Legend() {
   );
 }
 
-/**
- * Who this is and whether the page is still hearing from it.
- *
- * Both views open with the same three things — the wordmark, the node's name
- * and the state of the connection — so they are one component and cannot drift
- * apart by a font size.
- *
- * The name survives a bad connection. Losing contact is a fact about the
- * socket, not about which box you are looking at, and replacing the name with
- * "unreachable" takes away the one label that says whose console this is at
- * exactly the moment somebody is checking. The dot and the word carry the
- * state; the transport names itself, since a stream that dropped and a poll
- * that 404s want different things done about them.
- */
+/** Wordmark, node name and connection state. The name stays visible when the connection drops. */
 export function Identity({ name, dead, live, size = "lg" }: {
   name: string | undefined;
   dead: boolean;

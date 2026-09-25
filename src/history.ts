@@ -1,16 +1,6 @@
 /**
- * A rolling window of what the scheduler has been doing.
- *
- * hearth keeps no time series and this does not change that. It is a fixed
- * ring of samples in memory, the same as the queue itself, and it dies with
- * the process. That is the honest trade: a graph worth looking at costs about
- * 120 small objects, and anything that survives a restart means picking a
- * storage engine, which is a much bigger decision than "draw me a line".
- *
- * The one thing worth reading off it is the resident model over time. A GPU
- * that flips between two models is paying the load tax over and over, and that
- * is exactly the thrash the scheduler exists to prevent — but you cannot see it
- * in an instantaneous reading, only in a window.
+ * A rolling in-memory window of scheduler readings, gone on restart. Its main use is the
+ * resident model over time, which shows a GPU thrashing between two models.
  */
 
 /** One backend's share of a reading. */
@@ -21,35 +11,18 @@ export interface BackendSample {
   resident: string | null;
 }
 
-/**
- * One reading.
- *
- * `residents` is a list, not one name: a node fronting several backends has
- * several models warm at the same time, and collapsing that to one would draw a
- * thrash pattern that never happened.
- */
+/** One reading. `residents` is a list: a node fronting several backends has several models warm. */
 export interface Sample {
   t: number;
   /** Across every backend. Per-backend depth is in `backends`. */
   queued: number;
   residents: string[];
-  /**
-   * Models with a job RUNNING on a local backend at the instant of the reading.
-   * Residency says what is loaded; this says what is being used. A model can
-   * sit warm for an hour and never appear here.
-   */
+  /** Models with a job running at the instant of the reading, as opposed to merely loaded. */
   active: string[];
   backends: BackendSample[];
 }
 
-/**
- * One request that ran on a local backend, recorded when it ENDED.
- *
- * The samples above cannot see a call that starts and finishes between two
- * readings, and cannot place a boundary more finely than 5s. This can: it is
- * the same record llama-swap's activity page keeps, made here so it exists for
- * every backend kind and for exactly the traffic that went through the queue.
- */
+/** One request that ran on a local backend, recorded when it ended; catches calls shorter than a sample. */
 export interface Call {
   /** When it finished. Start is `t - ms`. */
   t: number;

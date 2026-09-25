@@ -1,31 +1,7 @@
 /**
- * The node graph: what this box is made of, and what is moving through it.
- *
- * The page used to be four stacked tables, and the thing they could not show is
- * the thing hearth exists to manage — that a request goes to a backend, that a
- * backend stands on a card, and that another backend is waiting for the same
- * card. Those are edges, and a table has no edges.
- *
- * Structure, three tiers, top to bottom:
- *
- *   self and its peers   who we are, who we can borrow from
- *   backends             the admission domains
- *   cards                the silicon they take turns on
- *
- * A tier wraps onto more than one row when it runs out of width — see
- * layout.ts, which is the whole of the geometry and the only part of this page
- * that can be checked without a browser.
- *
- * Nodes are ordinary HTML positioned absolutely; only the edges and the things
- * travelling along them are SVG. Text in SVG cannot wrap, cannot use the theme's
- * type scale without restating it, and cannot be a focusable control without
- * hand-rolling one — and every node here is a control. So the SVG layer is
- * strictly lines, and sits behind.
- *
- * Nothing here is decorative motion. A particle on an edge is a job that is
- * really in flight (`q.jobs`) or a request that really just finished (`calls`),
- * and an edge with no traffic is drawn still. A dashboard that animates when
- * nothing is happening teaches you to ignore it.
+ * The node graph: self and peers, backends, then the cards they share, with an edge for each
+ * relation. Nodes are HTML, edges SVG behind them; geometry lives in layout.ts. Motion only
+ * ever means a real job in flight or one that just finished.
  */
 import Box from "@mui/material/Box";
 import GlobalStyles from "@mui/material/GlobalStyles";
@@ -44,15 +20,10 @@ import {
 } from "./layout.js";
 import type { Call, Job, Resource, UiData } from "./types.js";
 
-/** What the inspector is currently showing. Null is the overview. */
-/** The synthetic card that stands for "not the card".
- *
- *  Named for the SIDE, not the medium. It was "host memory" until a
- *  measurement said otherwise: those weights are mmap'd from the model file,
- *  so whether they are served from RAM or read off the disk depends on whether
- *  the model fits in RAM. */
+/** The synthetic node for weights off the card: the host side, not a claim about RAM or disk. */
 const HOST = "host";
 
+/** What the inspector is currently showing. Null is the overview. */
 export type Sel =
   | { kind: "self" }
   | { kind: "peer"; id: string }
@@ -64,13 +35,7 @@ export type Sel =
 
 /* --------------------------------------------------------------- traffic */
 
-/**
- * Which edge a job travels on, or null if we cannot place it.
- *
- * A job we accepted FROM a peer takes the return leg — and then also runs on one
- * of our backends, so it legitimately appears on two edges. That is what is
- * happening: it arrived from over there, and it is running down here.
- */
+/** Which edge a job travels on, or null. A job accepted from a peer is on two: the return leg and our backend. */
 function edgeOf(j: Job, peerNames: Set<string>): string | null {
   if (j.offbox) return j.peer ? `self>peer:${j.peer}` : null;
   if (peerNames.has(j.caller)) return `peer:${j.caller}>self`;
@@ -86,18 +51,7 @@ function edgesOf(j: Job, peerNames: Set<string>): string[] {
   return out;
 }
 
-/**
- * How long a dot takes to cover a path, at one speed everywhere.
- *
- * A fixed duration per edge made the dot's SPEED a function of how long the
- * edge happened to be, so the same request looked hurried on a short hop and
- * becalmed on a long one — and once a journey is stitched out of two legs, a
- * fixed duration would have it sprint the whole way rather than carry on at the
- * pace it was going.
- *
- * Bounded at both ends: a very short hop still takes long enough to see, and a
- * very long one does not become a crawl.
- */
+/** Dots travel at one speed everywhere, with a floor and ceiling on each trip's duration. */
 const PX_PER_MS = 1 / 3;
 const pace = (len: number): number =>
   Math.round(Math.min(4200, Math.max(1200, len / PX_PER_MS)));
@@ -126,15 +80,7 @@ function NodeBox({ p, tone, icon, selected, peer, dim, onSelect, onHover, title,
   tone: "live" | "work" | "fault" | "cold" | "idle";
   icon: IconKind;
   selected: boolean;
-  /**
-   * What this node IS, in a few words, for anyone not reading the picture.
-   *
-   * Stated rather than derived from the tooltip: a tooltip on a MUI control
-   * becomes the control's accessible NAME unless something else claims it, so
-   * without this every node announces itself as its own paragraph of
-   * explanation and never says which node it is. The paragraph is still
-   * carried, as the description.
-   */
+  /** What this node is, in a few words: its accessible name, with the tooltip as its description. */
   label: string;
   /** A peer machine: a live peer takes the peer hue, self takes the success green. */
   peer?: boolean;
@@ -172,10 +118,7 @@ function NodeBox({ p, tone, icon, selected, peer, dim, onSelect, onHover, title,
           opacity: dim ? 0.35 : 1,
           boxSizing: "border-box", px: 1, py: 0.75, cursor: "pointer",
           display: "flex", alignItems: "center", gap: 1.25,
-          // No border and no fill at rest. The mark is the node now; a box
-          // around every one of them was the thing making a GPU and a peer look
-          // like the same object. The surface comes back on hover and selection,
-          // where it is doing a job — saying which one you are about to act on.
+          // No border or fill at rest; the surface returns on hover and selection.
           borderRadius: 2.5,
           border: "1px solid",
           borderColor: selected ? "success.main" : "transparent",
@@ -223,15 +166,7 @@ const Sub = ({ children, color = "faint", sx }: {
   }}>{children}</Typography>
 );
 
-/**
- * The last ten minutes of finished requests on one backend, as bars.
- *
- * The graph is honest about live traffic and therefore still most of the time —
- * at a light duty cycle a visit usually lands between requests, and a page
- * that is correct and blank is a page you stop opening. `calls` is the record
- * of what has actually been used, so the node can say "busy all morning" while
- * nothing is in flight this second.
- */
+/** The last ten minutes of finished requests on one backend, as bars, so an idle moment still shows use. */
 function Sparks({ calls, now }: { calls: Call[]; now: number }) {
   const BUCKETS = 20;
   const WINDOW = 10 * 60_000;
@@ -313,15 +248,7 @@ export function Graph({ d, sel, onSelect }: {
   const self = d.net.nodes.find((n) => n.self);
   const peers = d.net.nodes.filter((n) => !n.self);
   const backends = self?.backends ?? [];
-  // The host side, as a node, when and only when something is living there. Synthesised rather than declared: it is not hardware the operator
-  // configured, it is the place weights go when they do not fit on the card
-  // they were meant for — so it appears with the model that spilled and goes
-  // when that model does.
-  //
-  // Modelled as a Resource on purpose. Cards already sit under the backends
-  // that use them, already draw an edge per user, and already wrap and spread
-  // with everything else in their tier; the host behaves the same way in every
-  // one of those respects, and saying so costs nothing but this comment.
+  // The host node, synthesised only while some model has weights there, and placed like a card.
   const declared = d.net.resources ?? [];
   const spilling = backends
     .map((b) => ({
@@ -354,10 +281,7 @@ export function Graph({ d, sel, onSelect }: {
   const resources = hostNode ? [...declared, hostNode] : declared;
 
   const scene = useMemo(
-    // Ordered by the hardware they use rather than by the order they were
-    // declared in, so the wires down to the cards do not have to cross each
-    // other. Only the LAYOUT is reordered — every node is drawn by name from
-    // the scene, so nothing else on the page cares.
+    // Laid out in hardware order so the wires to the cards do not cross; nodes are drawn by name.
     () => layout(box.w, box.h, peers, orderBackends(backends, resources), resources),
     // The identity of these arrays changes every poll; their SHAPE is what the
     // layout depends on, and re-running it on unchanged shape would recompute
@@ -398,18 +322,8 @@ export function Graph({ d, sel, onSelect }: {
     }
 
     /**
-     * Hardware edges light for the backend USING the hardware.
-     *
-     * Which is not the same question as who the arbiter gave it to, and keying
-     * off `holder` was wrong in a way that only showed once hardware could be
-     * shared: a shared resource has no holder by design — nobody holds it,
-     * several things use it — so guard→cpu stayed dark the entire time guard
-     * was running. The work reached the backend and then apparently stopped
-     * there, which is the same contradiction forwarded work used to draw.
-     *
-     * Scheduled work is green even on shared hardware. hearth admitted it; it
-     * simply is not excluding anyone, and that is a fact about the hardware
-     * rather than about the job.
+     * Hardware edges light for the backend using the hardware, not for the arbiter's holder:
+     * shared hardware has no holder. Scheduled work is green even on shared hardware.
      */
     for (const b of backends) {
       const running = jobs.some((j) => !j.offbox && j.backend === b.name);
@@ -454,20 +368,6 @@ export function Graph({ d, sel, onSelect }: {
   }, [hover, scene]);
   const dimmed = (id: string) => !!near && !near.has(id);
 
-  /**
-   * The whole journey a request makes, as one path.
-   *
-   * A job on a local backend does not stop when it reaches the backend — that
-   * is where it starts costing something. It holds a slot, and it holds the
-   * card underneath. Drawing the dot only as far as the backend said the
-   * request arrived and then nothing, while the card below it sat lit with no
-   * traffic on it.
-   *
-   * So the legs are stitched into a single path and one dot rides the lot,
-   * disappearing behind the backend's own box on the way through. A backend
-   * spanning two cards gets one dot per card: they sit exactly on top of each
-   * other down the shared leg and separate where the work does.
-   */
   /** One edge on its own, paced the same way. */
   const one = (id: string): { d: string; ms: number }[] => {
     const e = scene.edges.find((x) => x.id === id);
@@ -475,6 +375,10 @@ export function Graph({ d, sel, onSelect }: {
   };
 
 
+  /**
+   * A request's whole journey as one stitched path, through the backend and down to its card.
+   * A backend spanning two cards gets one dot per card.
+   */
   const runs = (backend: string): { d: string; ms: number }[] => {
     const first = scene.edges.find((e) => e.id === `self>backend:${backend}`);
     if (!first) return [];
@@ -511,16 +415,8 @@ export function Graph({ d, sel, onSelect }: {
               const hot = n !== undefined;
               const loose = traffic.loose.has(e.id);
               const off = !!near && !near.has(e.from) && !near.has(e.to);
-              // Literal colours, not theme keys: MUI's `sx` maps `color` and
-              // `bgcolor` onto the palette but NOT `stroke`, so `stroke:
-              // "success.main"` emits that string as CSS, the browser drops the
-              // declaration, and every edge on the page draws with no stroke at
-              // all. Which is exactly how this shipped the first time.
-              // The one edge that is a standing condition rather than traffic:
-              // weights on the host are not a request passing through, they are
-              // where part of a model LIVES. So it is drawn lit and still —
-              // no dashes, nothing travelling — because nothing about it is
-              // going to finish.
+              // Literal colours: `sx` does not map `stroke` onto the palette.
+              // Weights on the host are a standing condition, so that edge is lit and still.
               const spill = e.to === `resource:${HOST}`;
               return (
                 <path key={e.id} d={e.d} fill="none"
@@ -556,11 +452,7 @@ export function Graph({ d, sel, onSelect }: {
               re-render every edge under it. */}
           <Box aria-hidden sx={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
             {jobs.flatMap((j, i) => {
-              // Off-box work runs on somebody else's hardware, so its dot ends
-              // at the peer: there is no card of ours under it to carry on to.
-              // Work we accepted FROM a peer travels twice over, and honestly
-              // so: it came in over the return leg, and it is running down here
-              // on our own card.
+              // Off-box work ends at the peer; work accepted from a peer also runs down to our card.
               const legs = j.offbox
                 ? one(edgeOf(j, peerNames) ?? "")
                 : [
@@ -596,10 +488,7 @@ export function Graph({ d, sel, onSelect }: {
               )),
             ))}
             {sparks.flatMap((s) =>
-              // The same journey a running job makes, once, quickly. At a
-              // light duty cycle most requests begin and end between two
-              // readings, so these are what the graph actually shows moving —
-              // stopping them at the backend hid the half that costs the card.
+              // A finished request's journey, replayed once.
               runs(s.backend).map((leg, k) => (
                 <Box key={`${s.key}:${k}`} sx={{
                   position: "absolute", width: 5, height: 5, borderRadius: "50%",
@@ -671,12 +560,7 @@ export function Graph({ d, sel, onSelect }: {
             if (!p) return null;
             const slots = b.slots ?? 0;
             const q = b.queued ?? queuedFor(b.name);
-            // What is RUNNING here, not what admission would refuse.
-            //
-            // `free` goes to 0 the moment another backend takes the card, which
-            // is correct for "may I start something" and wrong for a meter: an
-            // idle video sidecar drew a full slot because the image backend was
-            // busy, claiming work that did not exist.
+            // What is running here, not what admission would refuse.
             const used = jobs.filter((j) => !j.offbox && j.backend === b.name).length;
             const held = blockers(b, resources);
             // Blocked means WAITING, not merely unlucky. A backend with nothing
@@ -687,21 +571,11 @@ export function Graph({ d, sel, onSelect }: {
             const loading = (b.loading ?? []).map((m) => displayId(m, d.aliases, d.net.available));
             const split = (b.offload ?? []).filter((o) => o.cpuLayers !== null || o.cpuExpertsAll);
             const proxied = b.proxying ?? [];
-            // A backend's own busy signal off a declared activity path. Running
-            // lights it amber like forwarded work — hearth is watching, not
-            // scheduling. A read that never came back (ok false) is unknown, not
-            // idle; a confirmed empty queue is idle.
+            // A declared activity path: running is amber like forwarded work; an unread value is unknown, not idle.
             const active = b.activity?.ok === true && b.activity.running > 0;
-            // Queued-but-not-running is work too, and drawing it "idle" is the
-            // same lie as drawing a failed read idle — here the count was read,
-            // it just is not on the card yet. Its own tone, the one hearth's own
-            // queue already uses: waiting, not working.
+            // Queued in the backend's own queue: waiting, not idle.
             const waiting = b.activity?.ok === true && (b.activity.queued ?? 0) > 0;
-            // Silence from a backend we are actually watching. Only ever
-            // `false` for the backends whose event stream we hold open, so it
-            // is a reading rather than an absence of one — and it outranks
-            // everything below, because every other state here describes work
-            // that this backend may no longer be doing.
+            // Silence from a backend whose event stream we hold; outranks every other state.
             const mute = b.answering === false;
             // A load outranks a running job for the node's own colour: the job IS
             // the load, and "running" is the least useful of the two things to
@@ -755,10 +629,7 @@ export function Graph({ d, sel, onSelect }: {
                     : b.knowsWarm === false ? "warmth unknown" : "nothing loaded"}
                 </Sub>
                 {split.length > 0 && (
-                  // Said on the backend as well as on the host node, because
-                  // this is the line you read when you are asking why THIS
-                  // backend is slow, and the node is the one you read when you
-                  // are asking what is on the host.
+                  // Repeated here so it shows where you look when asking why this backend is slow.
                   <Sub color="cold.main">
                     {/* The model is named on the line above; repeating it here
                         only bought a truncated ellipsis, the same way it did

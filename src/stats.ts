@@ -1,31 +1,9 @@
 /**
- * What a model can take, and what a request needs.
- *
- * Borrowing made this necessary. Everything on this box is something you chose
- * and can go look up; a model on someone else's machine is a black box with a
- * name, and the first thing you find out the hard way is its context window —
- * usually as a 400 from a stranger's llama.cpp, halfway through an agent loop,
- * after the prompt has already crossed the network.
- *
- * So: learn the few facts that decide whether a request can run at all, carry
- * them over the peer protocol, and compare before dispatching rather than
- * after. Everything here is OPTIONAL on both sides. A backend that reports
- * nothing, a peer speaking an older protocol, a model that has never been
- * loaded — all of them come back with no claim, and no claim means no
- * objection. Refusing what we cannot measure would break every backend that
- * does not answer /props, which includes every one of them until the first
- * load lands.
+ * What a model can take and what a request needs, compared before dispatch. Every field is
+ * optional on both sides: no claim means no objection.
  */
 
-/**
- * The facts about a model that change what you can send it.
- *
- * Deliberately small. Everything here is (a) free — one /props call already on
- * the warm path answers all of it, (b) STABLE for the life of the loaded
- * process, so it can be cached, and (c) actionable: each field can refuse a
- * request or move it to another node. Token rates and load times are neither
- * stable nor free, and they belong in the call history, which already has them.
- */
+/** The stable, cacheable facts about a loaded model that can refuse a request or move it. */
 export interface ModelStats {
   /** Tokens the process was launched with (-c), NOT what the weights support. */
   context?: number;
@@ -33,37 +11,16 @@ export interface ModelStats {
   vision?: boolean;
   /** Its chat template can express tool calls. */
   tools?: boolean;
-  /**
-   * It reasons before it answers. Only ever observed as true: no sign of it is
-   * no claim, and `false` is something only an operator can declare.
-   */
+  /** It reasons before answering. Observed only as true; `false` is an operator's declaration. */
   thinking?: boolean;
-  /**
-   * Its chat template takes a `reasoning_effort`, so asking for more or less
-   * thinking reaches the model instead of being dropped.
-   *
-   * Separate from `thinking`: a model can reason with no dial to turn. A
-   * capability, not a setting: llama.cpp does not report the launch-time
-   * budget, so this says the lever EXISTS, never where it is set. Whether the
-   * model then obeys the level is a question about the model, and not one a
-   * status page should pretend to answer.
-   */
+  /** Its template takes `reasoning_effort`. Says the lever exists, not where it is set. */
   effort?: boolean;
   /** e.g. "Q5_K - Medium". Cosmetic, but it is the only quality signal you get
    *  about a model running on hardware you do not own. */
   quant?: string;
   /** The operator's own words on what the model is for and how to use it. */
   note?: string;
-  /**
-   * Where this came from. Not a stat — provenance, and it is load-bearing.
-   *
-   * "the operator says 32k" and "the process reports 32k" are different claims,
-   * and this codebase does not flatten that kind of difference anywhere else
-   * (knowsWarm, unknownWarm). A declared number is what lets a COLD model be
-   * checked at all, which is the whole reason declaration exists; it is also
-   * the one that can be wrong without anything noticing, so the page says which
-   * it is drawing.
-   */
+  /** Provenance: a declared value is unverified until the process reports its own. */
   from?: "declared" | "observed" | "both";
 }
 
@@ -97,7 +54,6 @@ export function statsFromProps(props: unknown): ModelStats {
   return out;
 }
 
-/** Anything at all learned? An empty object is not worth caching or sending. */
 /** vLLM /v1/models -> stats. One process serves one window, whatever names it answers to. */
 export function statsFromModels(body: unknown): ModelStats {
   const data = (body as { data?: unknown } | null)?.data;
@@ -109,6 +65,7 @@ export function statsFromModels(body: unknown): ModelStats {
   return {};
 }
 
+/** Anything at all learned? An empty object is not worth caching or sending. */
 export function known(s: ModelStats): boolean {
   return s.context !== undefined || s.vision !== undefined || s.tools !== undefined
     || s.thinking !== undefined || s.effort !== undefined || s.quant !== undefined
@@ -137,16 +94,7 @@ export function cleanStats(v: unknown): ModelStats | undefined {
   return out;
 }
 
-/**
- * The declared record under whatever the backend has actually reported.
- *
- * Per FIELD, not per record: you declare the context window for a model that
- * has never been loaded, and once it loads the process's own answer replaces it
- * while the fields it does not report (nothing else knows the quantization of
- * an ollama model) keep the declared value. Observed always wins, because a
- * running process is the only thing that can be right about itself — a
- * declaration is a prediction of how it WILL be launched.
- */
+/** Declared stats under observed ones, per field: the running process wins where it reports. */
 export function mergeStats(
   declared: ModelStats | null | undefined,
   observed: ModelStats | null | undefined,
@@ -171,35 +119,18 @@ export interface Need {
 }
 
 /**
- * ponytail: chars/3.5, not a tokenizer. Real tokenization means shipping a
- * vocab per model or asking the backend — which loads it — and both cost more
- * than this decision is worth. Measured under-counts dense text by roughly a
- * tenth, which is the safe direction: this only ever REFUSES, so reading low
- * errs toward letting a borderline request through to the backend that can
- * actually count. Upgrade path if that stops being good enough: /tokenize on
- * an already-warm model, cached per prompt prefix.
+ * ponytail: chars/3.5, not a tokenizer; reads dense text about a tenth low, the safe side for
+ * a check that only refuses. Upgrade: /tokenize on a warm model, cached per prefix.
  */
 const CHARS_PER_TOKEN = 3.5;
 /** A rough per-message framing cost (role, delimiters). */
 const PER_MESSAGE = 4;
-/**
- * One image, flat. Its base64 is tens of thousands of characters and costs
- * around a thousand tokens, so counting those characters would put every vision
- * request over every window — the check would refuse exactly the traffic it
- * exists to protect. Sized high on purpose: over-counting an image costs a
- * request one node, under-counting costs it the whole window.
- */
+/** One image, flat, sized high: counting its base64 would put every vision request over every window. */
 const TOKENS_PER_IMAGE = 1600;
 
 const chars = (v: unknown): number => (typeof v === "string" ? v.length : 0);
 
-/**
- * What this chat payload needs, without tokenizing anything.
- *
- * Output counts. `max_tokens` is reserved out of the same window as the prompt,
- * so a 30k prompt with 8k reserved does not fit a 32k model, and a check that
- * looked only at the prompt would have said it did.
- */
+/** What this chat payload needs, without tokenizing: prompt plus reserved `max_tokens`. */
 export function needsOf(payload: Record<string, unknown>): Need {
   let text = 0;
   let images = 0;
@@ -240,34 +171,14 @@ export function needsOf(payload: Record<string, unknown>): Need {
   };
 }
 
-/**
- * Why this model cannot take this request, or null if nothing says it can't.
- *
- * Null is the answer for an unknown model, and that is the whole design: we
- * refuse only on a fact somebody reported. The backend remains the authority —
- * this just moves the common refusals to the near side of the network, where
- * the message can name both numbers and where the request can still be sent
- * somewhere else instead.
- */
-/**
- * Note what is NOT here: thinking, or the effort dial.
- *
- * A `reasoning_effort` a template cannot express is ignored by the backend, and
- * the request runs and answers. Refusing it would break work that would have
- * succeeded, to protect nobody — the cost is a shallower answer, which is a
- * thing to SEE (the console shows which models take the lever) and not a thing
- * to fail. Everything in this function is a request that genuinely cannot run.
- */
-/** Smallest output worth shrinking `max_tokens` to; below it the request is refused so the client compacts. */
+/** Smallest output worth shrinking `max_tokens` to; below it the client is refused so it can compact. */
 const MIN_OUTPUT = 1024;
 /** Headroom for what a chat template adds around the messages. */
 const TEMPLATE_TOKENS = 256;
 
 /**
- * When only the reserved output overflows the window, lower the payload's
- * `max_tokens` to the room the prompt leaves and return the need that results.
- * The prompt is padded a tenth, since the estimate reads dense text low, plus
- * room for the chat template's own tokens.
+ * When only the reserved output overflows, lower `max_tokens` to the room the prompt leaves
+ * (prompt padded a tenth, plus template headroom) and return the resulting need.
  */
 export function fitOutput(stats: ModelStats | undefined | null, need: Need, payload: Record<string, unknown>): Need {
   const context = stats?.context;
@@ -279,6 +190,7 @@ export function fitOutput(stats: ModelStats | undefined | null, need: Need, payl
   return { ...need, tokens: need.tokens - output + room, output: room };
 }
 
+/** Why this model cannot take this request, or null. Refuses only on reported facts. */
 export function unfit(stats: ModelStats | undefined | null, need: Need): string | null {
   if (!stats) return null;
   if (need.images && stats.vision === false) return "does not accept images";
