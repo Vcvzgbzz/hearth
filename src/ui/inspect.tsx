@@ -1,18 +1,6 @@
 /**
- * The inspector: whatever you clicked, and everything you can do to it.
- *
- * The old page put each control beside the fact it changed, spread down four
- * tables — which meant the two switches that decide whether this box federates
- * at all lived in a section heading two screens down, and the button that
- * decides whether your edits survive a restart was inside a disclosure. Here
- * there is one place where actions happen, it is always in the same place, and
- * what it contains is whatever the graph has selected.
- *
- * Every control on this page writes to a live system with no confirm step, so
- * three things are non-negotiable and are why these are components rather than
- * plain buttons: a write says it is in flight, a refusal is shown ON the control
- * that was refused rather than swallowed, and nothing here silently no-ops on a
- * read-only surface — it says it is read-only and where to go instead.
+ * The inspector: the selected node and every action on it, in one place. Each write shows it
+ * is in flight, shows a refusal on its own control, and says so on a read-only surface.
  */
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -43,23 +31,10 @@ export interface Ctx {
 
 /* -------------------------------------------------------------- fittings */
 
-/** A label above a value, the unit this panel is built from. */
-/**
- * The rail's two vertical lines.
- *
- * Everything hangs off these: a label, a section heading and a list row all
- * start at the margin, and a value, the panel title and a model name all start
- * at the gutter. Before this there were five different left edges — the header
- * floated right of the labels, model names had an indent of their own, and the
- * value column lined up with nothing above or below it. Each piece looked fine
- * and the panel felt wrong, which is what a missing grid feels like.
- *
- * 64 because it clears the widest label ("in flight") and the 26px mark with
- * room to breathe, without opening the canyon the old 74-plus-a-gap left
- * between a short label and its value.
- */
+/** The rail's value column: clears the widest label ("in flight") and the 26px mark. */
 const GUTTER = 64;
 
+/** A label above a value, the unit this panel is built from. */
 export function Fact({ label, children, hint }: {
   label: string; children: React.ReactNode; hint?: string;
 }) {
@@ -75,17 +50,7 @@ export function Fact({ label, children, hint }: {
   return hint ? <Tooltip title={hint}><Box>{body}</Box></Tooltip> : body;
 }
 
-/**
- * A block of its own, for things that are a LIST rather than a value.
- *
- * Kept apart from Fact deliberately: a URL nobody reads must not carry the
- * same weight as what the backend is doing right now, and a column of one
- * shape reads as a form dump rather than a panel.
- *
- * Named for what it is, and not `Section`, which is the dashboard's bordered
- * card in bits.tsx. Two components with one name in one page is a wrong import
- * that typechecks.
- */
+/** A labelled block for list-shaped facts. Not `Section`, the dashboard card in bits.tsx. */
 export function FieldGroup({ label, count, note, children }: {
   label: string;
   /** A number, not a sentence — it sits on the heading's own baseline. */
@@ -116,14 +81,7 @@ export function FieldGroup({ label, count, note, children }: {
   );
 }
 
-/**
- * The panel's header: the same mark the graph draws, at the same colour.
- *
- * Clicking a node used to open a panel with nothing tying it to the node —
- * no mark, no colour, just a small caps heading — so the rail never told you at
- * a glance what kind of thing you were looking at, right after the graph had
- * gone to some trouble to say exactly that.
- */
+/** The panel header, with the same mark and colour the graph draws for the node. */
 export function PanelHead({ icon, tone, name, status, onBack }: {
   icon: IconKind;
   tone: "live" | "work" | "fault" | "idle";
@@ -169,13 +127,7 @@ const PanelTitle = ({ children }: { children: React.ReactNode }) => (
   }}>{children}</Typography>
 );
 
-/**
- * A write, with its own outcome attached to it.
- *
- * The message goes BESIDE the control, never into its label: a refusal is a
- * sentence and a button is a word, and putting one where the other was turns a
- * control into a paragraph and moves everything under it.
- */
+/** A write whose outcome is shown beside the control, never in its label. */
 export function Action({ label, title, path = "/control", body, ctx, tone = "normal", look = "command", on, after, full }: {
   label: string;
   title: string;
@@ -183,14 +135,7 @@ export function Action({ label, title, path = "/control", body, ctx, tone = "nor
   body: () => unknown;
   ctx: Ctx;
   tone?: "normal" | "primary";
-  /**
-   * What kind of thing this is, which was the clunkiest part of the panel.
-   *
-   * `lent/held` is a TOGGLE with a state you can read at rest; `load` is a
-   * fire-once command. They were the same bordered button at the same size, so
-   * a list of seven models was fourteen identical controls and nothing about
-   * their shape said which one changes a setting and which one does a thing.
-   */
+  /** `pill` for a toggle with a readable state, `command` for a fire-once action. */
   look?: "command" | "pill" | "quiet";
   /** For `pill`: whether the state it shows is on. */
   on?: boolean;
@@ -203,10 +148,7 @@ export function Action({ label, title, path = "/control", body, ctx, tone = "nor
 
   const click = () => {
     if (busy) return;
-    // Cleared on click, not on success: a refused write changes nothing on the
-    // server, so the next poll returns identical state and re-renders nothing.
-    // Without this the old error sits under the button through the retry that
-    // fixed it.
+    // Cleared on click: a refused write changes nothing, so no poll would clear it.
     setFail(null);
     setBusy(true);
     postWrite(path, body(), ctx.control)
@@ -249,14 +191,7 @@ export function Action({ label, title, path = "/control", body, ctx, tone = "nor
   );
 }
 
-/**
- * A switch that also works where it cannot be switched.
- *
- * A read-only surface used to render NOTHING for a direction that was on, which
- * is wrong in the case that matters most — the healthy one. Absence of a control
- * is indistinguishable from absence of the feature, and the operator whose only
- * dashboard is the standalone listener reads it as "the deploy did not land".
- */
+/** A switch that still shows its state on a read-only surface, where it cannot be flipped. */
 export function Toggle({ label, on, hint, offHint, ctx, body }: {
   label: string;
   on: boolean;
@@ -317,15 +252,8 @@ export function Toggle({ label, on, hint, offHint, ctx, body }: {
 /* ---------------------------------------------------------------- models */
 
 /**
- * Whether we lend a model, and the control to change it.
- *
- * Three facts flattened into one control, and keeping them apart is the whole
- * difficulty: INTENT (the config list, plus any runtime override), EFFECTIVE
- * (nothing goes out at all while lending is paused), and DRIFT (intent differs
- * from the file, so a change nobody remembers making is visible rather than
- * mysterious). Showing only effective makes every row read "held" during a
- * pause and loses the per-model settings you had; showing only intent claims we
- * are lending things while lending is off.
+ * Whether we lend a model: intent (config plus override), effective (nothing while lending
+ * is paused), and drift (intent differs from the file) shown together.
  */
 export function ShareToggle({ model, d, ctx }: { model: string; d: UiData; ctx: Ctx }) {
   if (!d.catalog.includes(model)) {
@@ -418,13 +346,7 @@ export function NoteEdit({ model, note, ctx }: { model: string; note: string | u
   );
 }
 
-/**
- * The load action.
- *
- * Reports in place rather than just refreshing: a decline and an already-warm
- * both return 200 and are worth reading rather than flattening into a silent
- * success.
- */
+/** Load a model, reporting a decline or already-warm in place rather than as silent success. */
 export function LoadAction({ model, peer, ctx }: { model: string; peer: string | null; ctx: Ctx }) {
   const [said, setSaid] = useState<string | null>(null);
   if (said) {
@@ -495,14 +417,7 @@ function mapSnippet(n: Node): string {
     + `# and to actually route to it, under the top-level models:\n${routes}`;
 }
 
-/**
- * How an id routes, in the words the config uses, with the caveat that matters.
- *
- * `policy` alone is half an answer: what a request does when the peer is busy
- * or down is `fallbackLocal`, and the difference is a slow request against a
- * 404. Both are stated, and never inferred from the mapping — a mapping only
- * says a request MAY leave.
- */
+/** How an id routes, stating both `policy` and `fallbackLocal`; a mapping only says it MAY leave. */
 const POLICY_HINT: Record<Routing["policy"], string> = {
   local: "served here. The mapping exists but nothing routes over it.",
   peer: "always sent to a peer.",
@@ -533,15 +448,7 @@ function RouteLine({ r, peer }: { r: Routing | undefined; peer: string }) {
   );
 }
 
-/**
- * A peer's model map, and the two edits you can make to it.
- *
- * `peers[].models` IS the allowlist deciding which of your prompts may leave
- * this machine, so the second thought this used to buy with a paste-the-YAML
- * disclosure is worth keeping — it is just not worth buying with an ssh session
- * and a restart. The edit is live and temporary, and the pending block on the
- * self panel hands you the YAML to make it stick.
- */
+/** A peer's model map, the allowlist for what leaves this machine. Edits are live until restart. */
 function MapEditor({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
   const pairs = Object.entries(n.map ?? {}).sort((a, b) => a[0].localeCompare(b[0]));
   const unmapped = [...(n.unmapped ?? [])].sort();
@@ -647,14 +554,7 @@ function MapEditor({ n, d, ctx }: { n: Node; d: UiData; ctx: Ctx }) {
 
 /* --------------------------------------------------------------- pending */
 
-/**
- * Runtime changes that are not in the config file.
- *
- * The counterweight to making all of this clickable. Every edit here is live
- * and temporary, which is a fine default and a terrible surprise — six weeks
- * on, a model is being lent that `share:` does not list and the only
- * explanation is a click nobody remembers.
- */
+/** Runtime changes not in the config file, with the YAML to make them stick. */
 function Pending({ d, ctx }: { d: UiData; ctx: Ctx }) {
   const [show, setShow] = useState(false);
   const ov = d.overrides;
@@ -966,15 +866,7 @@ function Overview({ d, ctx }: { d: UiData; ctx: Ctx }) {
 
 /* ------------------------------------------------------------- the panel */
 
-/**
- * The header for whatever is selected, in the graph's own terms.
- *
- * A component rather than a closure inside the rail, because the dashboard
- * draws the same panels as cards and needs the same heading on each. Deriving
- * the mark, the colour and the status line twice is exactly the drift this
- * whole arrangement exists to avoid — the rail and a card must not disagree
- * about whether a backend is blocked.
- */
+/** The selected node's header, shared by the rail and the dashboard cards so they cannot disagree. */
 export function PanelHeadFor({ d, sel, onBack }: {
   d: UiData; sel: Sel; onBack?: () => void;
 }) {

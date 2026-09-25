@@ -3,10 +3,8 @@
  * hearth serve [--config path] [--check]
  * hearth init  [--config path]
  *
- * `init` pokes the ports a local inference server usually sits on and writes a
- * config you can run as-is. `serve --check` validates and exits, which is what
- * you want in ExecStartPre so a bad edit fails the deploy instead of the next
- * request.
+ * `init` probes the usual local server ports and writes a runnable config; `serve --check`
+ * validates and exits, for ExecStartPre.
  */
 import { existsSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -204,12 +202,8 @@ async function main(): Promise<void> {
             ? "no apiKeys: loopback is trusted, everything else needs a peer token"
             : "apiKeys required off loopback",
         peersAccepted: Object.keys(cfg.peerTokens),
-        // The sentence above is only true while nothing rewrites the source
-        // address. Anything that proxies to this port — `tailscale serve`,
-        // userspace-mode tailscaled, nginx, a container port-forward — makes
-        // every request look like loopback, and with no apiKeys that promotes
-        // an anonymous caller to a trusted local one. Said here because the
-        // process cannot detect it and the operator can.
+        // A proxy on this port (tailscale serve, nginx, a port-forward) makes every caller look
+        // like loopback, which without apiKeys means trusted.
         ...(cfg.apiKeys.length === 0
           ? { warning: "anything proxying to this port makes its callers look like loopback, which is trusted here — do not front this with `tailscale serve` or userspace networking" }
           : {}),
@@ -236,10 +230,7 @@ async function main(): Promise<void> {
     });
   }
 
-  // A second signal means it. Somebody watching a deploy hang wants the next
-  // ^C to work, and a service manager that follows SIGTERM with another one is
-  // saying the same thing -- waiting the full grace out twice is not a drain,
-  // it is a hang with a nice name.
+  // A second signal stops immediately instead of waiting out the grace again.
   let stopping = false;
   const shutdown = (sig: string) => {
     if (stopping) {

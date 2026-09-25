@@ -1,15 +1,6 @@
 /**
- * The HTTP surface. Two faces on one port:
- *
- *   /v1/*      OpenAI-compatible, so existing clients change a base url and
- *              nothing else. That's the whole adoption story. No SDK, no
- *              bespoke protocol, no rewriting what you already use.
- *   /peer/*    the small protocol hearth nodes speak to each other.
- *
- * Bodies stream through byte-for-byte. We parse just enough to find the model
- * id and whether someone asked for streaming, and leave the rest to the
- * backend. That's what keeps tool calls, vision parts, and whatever gets
- * invented next month working without touching this file.
+ * The HTTP surface: OpenAI-compatible `/v1/*` (clients change only a base url) and the `/peer/*`
+ * protocol. Bodies stream through untouched; only the model id and stream flag are read.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
@@ -33,18 +24,7 @@ import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js
 import { UI_HTML } from "./ui.js";
 import { send, type UpstreamResponse } from "./upstream.js";
 
-/**
- * Constant-time compare over digests. No length leak, no throw on mismatch.
- *
- * The digests are the point, and both halves of that sentence are load-bearing.
- * timingSafeEqual THROWS on unequal lengths, so a raw-byte compare has to guard
- * with an early `length !==` return — and that return is a length oracle: an
- * attacker sweeps the length of their own input and watches for the one that
- * stops returning immediately. Hashing first removes the choice. Both sides
- * become 32 bytes, so there is nothing to guard against and nothing to learn:
- * hashing the attacker's input costs time proportional to input they already
- * know, and hashing the fixed secret costs the same on every request.
- */
+/** Constant-time compare over sha256 digests, so neither length nor content leaks. */
 function secretEq(a: string, b: string): boolean {
   return timingSafeEqual(
     createHash("sha256").update(a).digest(),
@@ -107,11 +87,7 @@ function readBody(req: IncomingMessage, limitBytes: number): Promise<Buffer> {
   });
 }
 
-/**
- * Headers describing this connection rather than the message. They can't be
- * copied across a proxy hop. Content-Length is in here for a different reason:
- * the body may get re-framed, so we let the runtime set it.
- */
+/** Connection-level headers that cannot cross a proxy hop; Content-Length is left to the runtime. */
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
@@ -140,35 +116,13 @@ export interface HearthNode {
   server: Server;
   /** The local backends and their queues. One entry unless `backends:` is used. */
   pool: BackendPool;
-  /**
-   * The status page on its own socket, when `uiListen` is configured.
-   *
-   * A separate listener rather than a relaxed check on the main one, because
-   * the thing being widened has to be only the page. This server answers `/ui`
-   * and `/ui/data` and 404s everything else, so pointing it at a tailnet
-   * address cannot expose `/v1`, the passthrough, or the peer protocol however
-   * badly the bind is chosen.
-   */
+  /** The status page on its own socket when `uiListen` is set; it answers only the page paths. */
   uiServer: Server | null;
   peers: PeerRegistry;
   history: History;
-  /**
-   * Start watching the backend and polling peers. Call it before listen().
-   *
-   * Skipping it doesn't fail, which is the problem. The node serves requests,
-   * never learns what's loaded, never marks a peer up, and routes everything
-   * locally, and that looks exactly like working. Nasty thing for an embedder
-   * to debug, so it's one call instead of three.
-   */
+  /** Start watching backends and polling peers. Call before listen(); without it the node silently routes everything locally. */
   start: () => void;
-  /**
-   * Stop, optionally letting requests already in flight finish first.
-   *
-   * `graceMs` defaults to 0, which destroys them where they stand -- the old
-   * behaviour, kept as the default because a test that just wants the socket
-   * back should not wait on a request it deliberately left hanging. The
-   * service passes `shutdownGraceMs`.
-   */
+  /** Stop, letting in-flight requests finish for up to `graceMs` (default 0 destroys them). */
   close: (graceMs?: number) => Promise<void>;
 }
 
@@ -203,14 +157,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
   const peers = new PeerRegistry(cfg, log, controls);
 
-  /**
-   * What we are lending RIGHT NOW — `share:` while lending is on, nothing while
-   * it is paused.
-   *
-   * Every share gate calls this instead of reading cfg.share, which is what
-   * makes one switch cover all of them: the peer chat gate, the peer warm gate,
-   * what /peer/state advertises, and the peer view of /v1/models.
-   */
+  /** What we lend right now: `share:` while lending is on, nothing while paused. Every share gate reads this. */
   const shared = (): readonly string[] => controls.share(cfg.share);
 
   const history = new History(() => {
@@ -234,21 +181,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     };
   });
 
-  /**
-   * Two separate per-peer hourly budgets, on purpose.
-   *
-   * Inference and capacity checks aren't the same thing. A peer polls
-   * /peer/state on a timer, four times a minute by default, and if that shares
-   * a budget with real work then a perfectly healthy peer burns through it
-   * asking whether you're busy. Being refused doesn't stop the poller either,
-   * so the lockout feeds itself: their polling keeps the window full and every
-   * real request queues up behind a refusal. Two of my nodes managed this
-   * within thirteen minutes of meeting each other.
-   *
-   * So the control plane gets its own, much bigger allowance. It's cheap to
-   * serve and the poll interval bounds it anyway. The number is there to stop a
-   * broken peer spinning, not to ration a healthy one.
-   */
+  /** Separate hourly budgets per peer for inference and the control plane, so polling never starves real work. */
   const peerHits = new Map<string, number[]>();
   const controlHits = new Map<string, number[]>();
   const CONTROL_LIMIT_PER_HOUR = 2_000;
@@ -280,31 +213,14 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
 
   const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
-  /**
-   * On this machine, whatever the config says.
-   *
-   * The status page is gated on this alone and never on apiKeys. A browser
-   * loading a page cannot present a bearer token, and the alternatives are all
-   * worse: a key in the query string lands in history and logs, and baking one
-   * into the HTML puts a live credential in a response body. Loopback-only
-   * needs no credential at all, and an SSH tunnel still looks like loopback, so
-   * remote access costs a `-L` and no new auth surface.
-   */
+  /** On this machine, whatever the config says. The status page is gated on this alone, since a browser cannot send a bearer token. */
   const isLoopback = (req: IncomingMessage) =>
     LOOPBACK.has(req.socket.remoteAddress ?? "");
 
-  /**
-   * A local client, by api key.
-   *
-   * With no keys configured we trust loopback and nothing else. The first
-   * version trusted everything in that case, so a node with no keys would treat
-   * a wrong peer token as a friendly local caller and just run the request.
-   * Backwards for a box that's lending its GPU out. Anyone off-machine needs a
-   * key now, whatever the config says.
-   */
   /** A local identity, and what it may run: null is everything. */
   type Local = { caller: string; models: string[] | null };
 
+  /** A local caller by api key; with no keys configured, loopback and nothing else. */
   function localCaller(req: IncomingMessage): Local | null {
     const given = bearer(req);
     if (cfg.apiKeys.length === 0) {
@@ -312,11 +228,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       return LOOPBACK.has(req.socket.remoteAddress ?? "") ? { caller: "local", models: null } : null;
     }
     if (given === "") return null;
-    // A labeled key shows the operator's own name; an unlabeled one keeps the
-    // hash prefix, not the key's own first characters. This id lands in every
-    // request log line and in /queue, and a label is never key material, while
-    // six characters of a live credential is six an attacker doesn't have to
-    // guess — so the fallback stays the hash, never the key.
+    // An unlabeled key is identified by its hash prefix, never by characters of the key itself.
     let i = 0;
     for (const k of cfg.apiKeys) {
       if (secretEq(given, k)) {
@@ -327,13 +239,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return null;
   }
 
-  /**
-   * One line per finished request, at info.
-   *
-   * `waitedMs` is the number that matters. It's the only thing that tells you
-   * whether admission control is doing anything or whether you've added a hop
-   * for nothing, and "did it actually queue?" is the first question anyone asks.
-   */
+  /** Per-request timing for the one-line request log; `waitedMs` shows whether admission queued it. */
   interface Timing {
     enqueuedAt: number;
     startedAt: number;
@@ -363,28 +269,6 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     });
   }
 
-  /**
-   * Forward a streamed response to the client, verbatim.
-   *
-   * All the upstream's headers, not just content-type. Forwarding that one
-   * alone was fine for /v1/*, but the catch-all passthrough exists so an app
-   * already using /unload or /upstream/<model>/... keeps working, and quietly
-   * dropping Location, ETag, Content-Disposition or Retry-After isn't that.
-   *
-   * Use `pipeline` here, not a hand-rolled write/drain loop. Awaiting 'drain'
-   * is correct right up until the client disconnects while a write is
-   * backpressured, at which point 'drain' never fires. The loop is suspended on
-   * that promise rather than on the body iterator, so destroying the upstream
-   * doesn't help either. run() never settles, the scheduler slot never comes
-   * back, and at the default concurrency of 1 one badly-timed disconnect wedges
-   * the entire node until restart with nothing in the log to say why. pipeline
-   * settles either way and destroys the body for us.
-   */
-  /** Relays the upstream answer and hands back the status it relayed, so a
-   *  caller can record what actually happened. A backend's own 4xx is passed
-   *  to the client untouched — it is a better error than anything we could
-   *  invent — but it is NOT a success, and the request log and the console's
-   *  call history used to record it as one. */
   /** Sends a chat completion to a local backend, emulating another server's answers if the route asks. */
   async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal } & ReturnType<typeof backendDeadline>): Promise<number> {
     const emulate = cfg.models[model]?.emulate ?? null;
@@ -394,6 +278,10 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return emulate ? relayEmulated(up, res, forwardable(up.headers), sentAt) : pipeThrough(up, res);
   }
 
+  /**
+   * Relay an upstream answer verbatim, all headers included, and return its status: a backend's 4xx
+   * reaches the client but is not a success. `pipeline` settles even if the client disconnects.
+   */
   async function pipeThrough(up: UpstreamResponse, res: ServerResponse): Promise<number> {
     res.writeHead(up.status, {
       ...forwardable(up.headers),
@@ -406,14 +294,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return up.status;
   }
 
-  /**
-   * Run one completion, wherever it belongs.
-   *
-   * The failover is the bit a dumb TCP forwarder can't do. We're in the request
-   * path, so a peer that dies before any bytes reach the client can be retried
-   * locally without the client ever knowing. After the first byte it can't be:
-   * they already have half an answer and replaying would corrupt it.
-   */
+  /** Run one completion where it belongs. A peer that fails before the first byte is retried locally. */
   async function dispatch(
     payload: Record<string, unknown>,
     model: string,
@@ -422,10 +303,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     res: ServerResponse,
     signal: AbortSignal,
   ): Promise<void> {
-    // Ask the network before deciding, rather than on a timer. Routing is the
-    // only consumer of peer state, so we fetch it when a decision needs it:
-    // bounded by peerFreshMs, coalesced per peer, skipped for a peer we know is
-    // down. A model nobody routes away costs nothing here at all.
+    // Refresh peer state only when a decision needs it, and only for models that may leave.
     if (cfg.models[model] && cfg.models[model].policy !== "local") {
       await peers.ensureFresh();
     }
@@ -456,10 +334,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     let localStatus = 0;
     const runLocal = async (): Promise<void> => {
       await local.state.ensureFresh();
-      // Our id out, the backend's id in — the same rewrite the peer path below
-      // does with theirModel, just for a local backend — plus the route's
-      // `params` stamped over the client's. Identity unless the model sets
-      // one of them, so the common payload is untouched.
+    // Our id and the route's params on the way to the backend; untouched when neither is set.
       localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg) });
     };
 
@@ -481,15 +356,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     }
 
     if (decision.target === "local") {
-      // Too big (or too rich) for the model that would run it here. Refused
-      // now, with both numbers, rather than after a queue wait and a swap — and
-      // only on something the backend actually told us, so a model we have
-      // never loaded is never refused on a guess. The backend stays the
-      // authority on its own limits: this catches the clear cases early and
-      // does not replace its check. The peer-failed fallback below does not
-      // repeat it, so a request that fitted the peer but not the local model
-      // still reaches the backend and is refused there — one rare path with
-      // an uglier error, not a wrong answer.
+    // Refused here only on reported limits, before queueing or evicting; the backend stays the authority.
       const fitted = fitOutput(pool.statsFor(model), need, payload);
       const tooMuch = unfit(pool.statsFor(model), fitted);
       if (tooMuch !== null) {
@@ -538,12 +405,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       },
       async () => {
         t.startedAt = Date.now();
-        // Their id, not ours. The far side might be another hearth, or a
-        // llama-swap routing on this field, and a name it doesn't know is a 404.
-        // The route's `params` still ride along: the id the user picked meant
-        // the same thing wherever the job lands, and dropping them here made a
-        // `-low` request come back at full effort whenever it spilled over —
-        // silently, and differently again if fallbackLocal brought it home.
+        // The peer's id, with the route's params still applied.
         const body = pool.outboundBody(model, payload, decision.theirModel);
         try {
           const up = await send(`${peer.url}/v1/chat/completions`, {
@@ -572,32 +434,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           });
           fellBack = true;
           lastTarget = "local";
-          // Back through admission control, because this is local GPU work now.
-          // Running it inline would inherit the off-box job's exemption from the
-          // queue, so a peer that's up but failing would turn every request into
-          // an unscheduled local generation. That's the exact thrash this whole
-          // thing exists to prevent. Nesting a submit inside a running off-box
-          // job is fine, since off-box jobs hold no slot.
-          //
-          // No maxPerCaller here. The caller already passed the cap on the way
-          // in and its off-box job still counts against it, so applying it again
-          // would reject its own retry.
+          // A local retry goes back through admission, without re-applying the caller cap.
           await local.scheduler.submit({ lane, model, caller, signal, tokens: pool.poolTokens(model, need) }, runLocal);
         }
       },
     );
     } catch (e) {
-      // The local path logged its failures and this one didn't, so a peer
-      // failure or a full queue returned 502/429 with nothing at info. On a
-      // service whose one-line-per-request is a selling point. lastTarget
-      // reflects the *actual* last target, even when a local retry after a
-      // peer failure also failed — the log should not pretend the peer won.
-      //
-      // `target` is not only a label: logRequest gates the call ring on it, so
-      // saying "local" here also enrols a failed fallback as a local use. That
-      // is right — the weights were busy either way — but only with `backend`
-      // alongside it, or the record lands with an empty backend name and is
-      // invisible to everything that groups by one.
+      // Log the actual last target, local fallback included, with its backend so the call ring counts it.
       logRequest(t, { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name }, false, e);
       throw e;
     }
@@ -612,26 +455,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     );
   }
 
-  /**
-   * Requests being served right now, for the drain in `close()`.
-   *
-   * Counted here rather than from `pool.jobs()` because a job is only the
-   * queued half: a passthrough render holds no job at all, and neither does a
-   * peer relay. What must not be destroyed mid-flight is a REQUEST, so that is
-   * what is counted.
-   */
+  /** Requests being served now, for the drain in `close()`; counts requests, not queued jobs. */
   let inFlight = 0;
   let drained: (() => void) | null = null;
   /** Responses that are open but are not work — the event stream. */
   const parked = new WeakSet<ServerResponse>();
 
-  /**
-   * Stop counting this response as work in flight.
-   *
-   * For a long-lived stream: it is open for as long as somebody has a tab
-   * open, so counting it would make every shutdown sit out the full drain
-   * waiting for a page that is never going to finish.
-   */
+  /** Stop counting a long-lived stream as in-flight work, so shutdown does not wait on an open page. */
   function notWork(res: ServerResponse): void {
     if (parked.has(res)) return;
     parked.add(res);
@@ -655,25 +485,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   });
 
   /**
-   * Refuse a write that a browser made on some other site's behalf.
-   *
-   * Loopback is this node's whole notion of local trust, and a browser tab is
-   * on loopback. So any page you happen to be visiting could POST here — no
-   * preflight needed, since a form-shaped fetch is a CORS "simple request", and
-   * the attacker not being able to READ the reply does not matter when the
-   * damage is the request itself. The README's own advice makes it worse rather
-   * than better: `ssh -L 4141:127.0.0.1:4141` puts this on the loopback of the
-   * laptop you browse the web on.
-   *
-   * What that buys an attacker, with no credential at all: switch off lending,
-   * unlink every peer mapping, save it into the config file, or hold the GPU in
-   * a warm loop. Not theoretical — the routes are one POST each.
-   *
-   * The check is the presence of a foreign `Origin`, which is exactly the
-   * signal a browser adds and nothing else does. curl, the peer protocol and
-   * the app upstream all send none and are unaffected. Nor does this break a
-   * legitimate browser client on another origin, because there is not one:
-   * without CORS headers such a client could never read a reply anyway.
+   * Refuse a write carrying a foreign `Origin`: any web page can POST to loopback, and loopback is
+   * trusted. curl, peers and apps send no Origin and are unaffected.
    */
   function crossOriginWrite(req: IncomingMessage): boolean {
     if (req.method === "GET" || req.method === "HEAD") return false;
@@ -695,13 +508,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return out;
   }
 
-  /**
-   * One request, with its caller already established.
-   *
-   * `peer` and `caller` are resolved by the table below and handed in, so a
-   * handler never re-asks who is calling — which is what let one route's answer
-   * differ from another's.
-   */
+  /** One request with its caller already resolved by the route table. */
   interface Call {
     req: IncomingMessage;
     res: ServerResponse;
@@ -716,25 +523,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     models: string[] | null;
   }
 
-  /**
-   * Who a route lets in.
-   *
-   * Declared once per path instead of re-derived inside each handler. The
-   * routes here differ in ways that are easy to get subtly wrong by hand — one
-   * is deliberately open, one is decided by address rather than credential, and
-   * three accept either a peer or a local caller — and the way that goes wrong
-   * is a route that quietly accepts more than it meant to.
-   */
+  /** Who a route lets in, declared per path rather than re-derived in each handler. */
   type Auth =
     /** No credential at all. Only /healthz, which is built to say nothing. */
     | "open"
-    /**
-     * By ADDRESS, never by credential.
-     *
-     * The status page's own gate. EventSource cannot send an Authorization
-     * header, so deciding these sockets by address is what lets the stream and
-     * the poll share one story about auth instead of needing two.
-     */
+    /** By address, never credential: the status page's gate, since EventSource cannot send headers. */
     | "loopback"
     /** A peer's token, and nothing else. */
     | "peer"
@@ -743,23 +536,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     /** Either — work a peer may send us, and we may ask for ourselves. */
     | "either";
 
-  /**
-   * The refusal's shape, because clients parse it.
-   *
-   * The /v1 surface answers in OpenAI's error envelope because that is what an
-   * OpenAI client reads; the control and peer surfaces answer in the plain
-   * `{error}` shape they always have. Stated per route so the pairing is a
-   * decision rather than a coincidence of which helper was nearest.
-   */
+  /** The refusal's shape: OpenAI's envelope on /v1, plain `{error}` elsewhere. */
   type Envelope = "plain" | "openai";
 
   interface Route {
     path: string | string[];
-    /**
-     * Methods this route claims. Anything else FALLS THROUGH to the
-     * passthrough, which is how a `GET /v1/chat/completions` has always
-     * reached the backend untouched.
-     */
+    /** Methods this route claims; anything else falls through to the passthrough. */
     methods?: string[];
     auth: Auth;
     envelope?: Envelope;
@@ -774,13 +556,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     else json(res, status, { error: msg });
   };
 
-  /**
-   * Resolve the caller for a route, or answer the refusal and return null.
-   *
-   * The single place a credential is turned into an identity. A handler that
-   * wants to know who is calling reads it off `Call`; there is nowhere else to
-   * ask.
-   */
+  /** Resolve a route's caller or answer the refusal; the one place a credential becomes an identity. */
   function authorize(r: Route, req: IncomingMessage, res: ServerResponse): Call | null {
     const url = new URL(req.url ?? "/", "http://localhost");
     const base = { req, res, url, path: url.pathname };
@@ -820,16 +596,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return { ...base, peer: null, caller: asLocal!.caller, models: asLocal!.models };
   }
 
-  /**
-   * Every path this node answers, in the order they are tried.
-   *
-   * The point of the table is the `auth` column: it is the one property of a
-   * route that must never be got wrong, and having it beside the path makes a
-   * new route's policy a thing you choose rather than a thing you remember to
-   * copy. The passthrough is last and claims everything left, which is what
-   * makes pointing an app at hearth instead of its backend change nothing the
-   * app can see.
-   */
+  /** Every path this node answers, in order, with its `auth` beside it. The passthrough is last and takes the rest. */
   const ROUTES: Route[] = [
     // Unauthenticated on purpose, and on a port that may be bound wide, so it
     // answers in counts and never in names.
@@ -837,10 +604,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
 
     { path: ["/peer/hello", "/peer/state"], auth: "peer", handler: routePeer },
 
-    // Local only. /control is the one route here that CHANGES anything, so a
-    // peer must never reach it: switching off our lending is a denial of
-    // service against ourselves, and switching it back on after we paused it
-    // is worse.
+    // Local only: /control changes state, so a peer must never reach it.
     { path: "/network", auth: "local", handler: routeNetwork },
     { path: "/control", auth: "local", handler: routeControl },
     { path: "/queue", auth: "local", handler: routeQueue },
@@ -893,33 +657,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
   /**
-   * Whether this node can serve, for an external probe.
-   *
-   * It used to answer `{ok: true}` unconditionally, which made it a check
-   * that the socket accepts connections and nothing more -- every backend
-   * dead and every peer gone still read healthy, so the one thing monitoring
-   * it could tell you was the one thing you already knew from the fact that
-   * it answered.
-   *
-   * The honest signal is the event stream. Where we hold one open, a backend
-   * going away drops it within a reconnect; that is real, it is continuously
-   * maintained, and it costs nothing to read. What it is NOT built on is
-   * `answering()`, which means "something came back from this lately" -- on a
-   * quiet box nothing does, so every backend reads silent while all of them
-   * are fine, even one with a model resident.
-   *
-   * So: 503 only when we are watching backends and have lost every one of
-   * them. A config we cannot watch reports `watched: 0` and stays ok, because
-   * hearth does not probe backends it is not using and will not invent a
-   * verdict it has no evidence for -- and a probe that cried wolf on an idle
-   * box would be worse than the unconditional true it replaced.
-   *
-   * Peers never affect `ok`. A peer being down is a routing input, not this
-   * node's health, and every model that matters has a local fallback.
-   *
-   * UNAUTHENTICATED, and on a port that may be bound wide -- so counts, never
-   * names. What is loaded, who is calling and which models exist stay behind
-   * the page's gate.
+   * Whether this node can serve, for an external probe: 503 only when every backend we hold an
+   * event stream to is gone. Peers never affect it. Unauthenticated, so counts only, never names.
    */
   async function routeHealthz(c: Call): Promise<void> {
     const { res } = c;
@@ -958,35 +697,18 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         protocol: 2,
         models: shared(),
         lanes: Object.keys(cfg.scheduler.lanes),
-        // Additive rather than a protocol bump: an older peer ignores an
-        // unknown field, and a newer one can tell "supports warming" from
-        // "will 404" without probing for it. peers.ts already warns on a
-        // protocol number it does not recognise, so bumping would have made
-        // every existing peer log a warning to gain one boolean.
+        // Additive, so older peers ignore it and newer ones need not probe.
         capabilities: ["warm"],
       });
       return;
     }
-    // loaded/serves ride along with capacity so one probe answers both "can
-    // you take work" and "what's warm over there".
-    //
-    // Both filtered to what we share. `resident` needed that too and didn't
-    // have it, so a peer got told which model we had warm even when it was one
-    // they can't ask for. Nothing breaks, but it's our business rather than
-    // theirs, and it looked like a contradiction next to an empty `loaded`.
+    // Loaded and served models ride with capacity, both filtered to what we share.
     const warmAndShared = pool.loaded().filter((m) => shared().includes(m));
     const agg = pool.aggregate();
-    // Protocol 2: what each shared model would actually cost, which is the
-    // capacity of the backend that serves it. The aggregate rides along
-    // unchanged so a protocol-1 borrower keeps scoring us the old way instead
-    // of seeing an unrecognisable answer and marking us down.
+    // Protocol 2: capacity per shared model, beside the aggregate protocol-1 peers still read.
     const models: Record<string, unknown> = {};
     for (const m of shared()) {
-      // Capacity says whether they can start now; stats say whether their
-      // request can run at all. Both are per model, both are things a
-      // borrower has no other way of finding out, and they ride the same
-      // poll. Absent when we have never loaded it — silence is not a claim
-      // that there is no limit, see unfit().
+      // Per-model stats, absent until loaded; silence is not a claim of no limit.
       const stats = pool.statsFor(m);
       models[m] = { ...pool.capacityFor(m), ...(stats ? { stats } : {}) };
     }
@@ -1011,27 +733,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
   /**
-   * Turn either direction of federation on or off, without a restart.
-   *
-   * LOCAL ONLY, like /queue and /network — and this one matters more than
-   * those, because it is the only route here that CHANGES anything. A peer
-   * must never be able to switch off our lending (a denial of service against
-   * ourselves) or, worse, switch it back on after we paused it.
-   *
-   * GET reads, POST writes. A POST body may carry any of the fields or all of
-   * them; omitted fields are left alone so changing one thing cannot clobber
-   * another with a stale value.
-   *
-   *   lending / borrowing   the master switches
-   *   share                 {model: true|false|null} — null hands it back to
-   *                         the config, which is why it is not two lists
-   *   link / unlink         {peer, mine, theirs?} — a peer's model map and
-   *                         the route that makes it do anything, together
-   *
-   * One route rather than four because the status page posts here already and
-   * `uiListen.control: key` allows exactly two paths — a new path would have
-   * to be added to that allowlist as well, and an allowlist you have to
-   * remember to extend is one that eventually gets forgotten.
+   * Read (GET) or change (POST) federation at runtime: `lending`, `borrowing`, per-model `share`
+   * (null defers to config), `link`/`unlink`, and `save`. Local only; omitted fields are left alone.
    */
   async function routeControl(c: Call): Promise<void> {
     const { req, res } = c;
@@ -1071,10 +774,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
     }
 
-    // Per-model sharing. Validated against the local catalog before anything
-    // is stored: lending a model we cannot serve advertises it to peers and
-    // then 404s every request for it, and the peer's operator has no way to
-    // tell that from a broken link.
+    // Share only models we can serve, or peers are advertised a model that 404s.
     if (body.share !== undefined) {
       if (typeof body.share !== "object" || body.share === null || Array.isArray(body.share)) {
         apiError(res, 400, "share must be an object of model -> true, false or null");
@@ -1114,10 +814,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
     }
 
-    // Mapping edits, and both blocks are ordered so a POST carrying share AND
-    // a link either lands whole or changes nothing: everything above only
-    // VALIDATES, link() validates before it mutates, and the share values are
-    // written last, once nothing is left that can refuse.
+    // Everything validates before anything mutates, so a combined POST lands whole or not at all.
     if (body.link !== undefined && body.unlink !== undefined) {
       // Silently preferring one is how you end up having removed a mapping
       // you thought you were adding.
@@ -1142,12 +839,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           log.info("control.unlink", { peer: peerName, model: mine });
         } else {
           const theirs = typeof edit.theirs === "string" && edit.theirs !== "" ? edit.theirs : mine;
-          // The default depends on whether we serve it too, and getting this
-          // wrong is the whole difficulty of the feature. Serving it here
-          // means both sides can run it, so `fastest` picks whichever starts
-          // sooner and home is a safe fallback. Not serving it means home is
-          // a backend that has never heard of the id, so falling back there
-          // turns a busy peer into a 404 rather than a wait.
+          // If we serve it too, `fastest` with local fallback; if not, peer only, since home would 404.
           const local = pool.catalog().includes(mine);
           const policy = (edit.policy as RoutePolicy | undefined) ?? (local ? "fastest" : "peer");
           if (!["local", "peer", "spillover", "fastest"].includes(policy)) {
@@ -1187,10 +879,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // something moved.
     if (Object.keys(changed).length > 0) log.info("control.changed", changed);
 
-    // Saving is LAST, and deliberately a separate verb rather than something
-    // every write does on its way out. Trying a link on a hunch should not
-    // outlive the hunch; only what somebody pressed Save on does. Being last
-    // also means one POST can change something and keep it in a single call.
+    // Save is its own verb and runs last, so a tried link does not outlive the session unless saved.
     if (body.save === true) {
       const to = savesTo();
       if (to === null) {
@@ -1251,29 +940,15 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     const { res } = c;
     json(res, 200, {
       jobs: pool.jobs(),
-      // Narrowed to what the loaded model can hold, not the backend's flat
-      // number: a seat whose resident model declares fewer slots would
-      // otherwise report free slots next to jobs that can never use them,
-      // which reads as a stuck queue rather than a cap doing its job.
+      // Narrowed to what the loaded model can hold.
       capacity: pool.loadedAggregate(),
       backends: pool.all().map((b) => ({ name: b.name, ...pool.loadedCapacity(b) })),
     });
     return;
   }
 
-  // Ask a model to be resident, without generating anything.
-  //
-  // THROUGH THE SCHEDULER, deliberately. A warm on a llama-swap backend is an
-  // EVICTION of whatever is loaded, so letting it jump the queue would mean a
-  // button that steals the GPU from a turn already in flight. As a job it
-  // cannot preempt (a running job always finishes), it waits its turn, and it
-  // holds a slot while loading so nothing dispatches into a half-loaded
-  // backend. It also does not earn the warm bonus — its model is cold by
-  // definition — so it sorts behind work for whatever is already resident.
-  //
-  // Nothing RESERVES warmth. The next request for another model evicts it
-  // again. This is best-effort and the response says so rather than implying
-  // a guarantee it cannot make.
+  // Ask a model to be resident without generating. Queued like any job, since loading one evicts
+  // another; best-effort, and nothing reserves it.
   async function routeWarm(c: Call): Promise<void> {
     const { req, res } = c;
     const fromPeer = c.peer;
@@ -1325,15 +1000,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           loaded: slotFor.state.loaded(),
         });
 
-    // THE DECLINE. A peer may ask; it may not make us wait.
-    //
-    // A local warm queues happily — it is your box and your call, and the
-    // queue is what stops it stealing a slot. A peer is different in two
-    // ways: it would hold a connection open across our queue for speculative
-    // work, and honouring it evicts OUR resident model at a moment we did not
-    // choose. So it is taken only if it can start about now, and refused
-    // plainly otherwise. A peer that must obey is a peer who can thrash your
-    // GPU from across the tailnet.
+    // A peer's warm is taken only if it can start now; it may never make us wait or evict on its schedule.
     if (fromPeer !== null && capFor.free <= 0) {
       json(res, 503, {
         model, warmed: false, declined: true,
@@ -1349,10 +1016,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         apiError(res, 502, `no route to ${decision.peer} for ${model}`, "server_error");
         return;
       }
-      // ASK, do not guess. Measured against a real older peer: it answers
-      // 401, not 404, because /v1/warm is unknown to it and falls through to
-      // a passthrough that only trusts local callers. A status-code heuristic
-      // would have reported "bad credentials" for "feature not present".
+      // Ask the peer whether it supports warming; its status codes cannot tell us.
       if (!peers.supports(decision.peer, "warm")) {
         apiError(res, 501,
           `peer ${decision.peer} does not advertise warm support`,
@@ -1423,12 +1087,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         },
         async () => {
           startedAt = Date.now();
-          // A health probe on the model's own upstream. llama-swap starts the
-          // server to answer it, which loads the model without generating a
-          // token — cheaper and more honest than a one-token completion.
-          // Bounded by the same deadline every other backend call uses: a
-          // warm that hangs holds this backend's slot and wedges everything
-          // queued behind it.
+          // A health probe on the model's upstream loads it without generating, within the backend deadline.
           const up = await send(`${slot.cfg.url}/upstream/${encodeURIComponent(wire)}/health`, {
             method: "GET",
             signal: ctrl.signal,
@@ -1442,10 +1101,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         },
       );
     } catch (e) {
-      // A full lane is the caller's cue to back off, not a broken server.
-      // Reported as 502 it looks like the backend failed, and a client that
-      // retries on 429 but not 502 would give up on a queue that just needed
-      // a moment.
+      // A full lane is 429, the caller's cue to back off, not a 502.
       if (e instanceof QueueFullError) {
         apiError(res, 429, e.message, "rate_limit_error");
         return;
@@ -1475,20 +1131,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // than only whatever the first backend happens to list. Freshened first
       // so a model added since startup shows up.
       await Promise.all(pool.all().map((b) => b.state.ensureFresh()));
-      // Carry warm state, the way llama-swap does on this route. Pointing an
-      // app at us instead of its backend is supposed to change nothing it can
-      // see, and a client that loses this field loses any idea of which model
-      // answers now and which one costs a load first.
+      // Carry warm state, as llama-swap does on this route.
       const warm = new Set(pool.loaded());
       type Entry = { id: string; status?: { value: string }; context_length?: number; description?: string };
       const upstream: { data?: Entry[] } = {
         data: pool.catalog().map((id) => {
-          // A backend that cannot report warm state must not be flattened
-          // into cold. "We cannot see" and "nothing is loaded" are different
-          // claims and only one of them would be honest, so such a model
-          // carries no status at all rather than a made-up one.
-          // Same principle for context_length: absent when unknown, not null,
-          // because we cannot see is not the same claim as a value.
+          // Unknown warmth or window is omitted, never reported as cold or null.
           const entry: Entry = { id };
           const note = pool.statsFor(id)?.note;
           if (note) entry.description = note;
@@ -1499,12 +1147,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           return entry;
         }),
       };
-      // Models only a peer serves. A client asks for them by OUR id, so that
-      // is what gets listed, with the window and warmth the peer reported for
-      // THEIR id on its last poll. Nothing reported (peer down, protocol 1,
-      // never loaded) is silence, not cold and not unlimited, as above. A
-      // model we also serve locally keeps the local reading: that is where a
-      // request lands when the peer is not chosen.
+          // Peer-only models under our ids, with what the peer last reported; a local reading wins.
       const seen = new Set(upstream.data!.map((m) => m.id));
       for (const p of peers.all()) {
         for (const [mine, theirs] of Object.entries(peers.config(p.name)?.models ?? {})) {
@@ -1518,12 +1161,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
           upstream.data!.push(entry);
         }
       }
-      // A peer only sees what it may use. This used to hand the whole backend
-      // catalogue to anyone with a peer token. Unusable, since every other
-      // route enforces the share list, but a full inventory of what someone
-      // runs isn't theirs to have. Model names alone can be personal.
-      // The context_length field travels with the entry, so a peer can size
-      // its own client limit from the shared subset.
+      // A peer sees only what we share.
       if (modelsPeer !== null) {
         upstream.data = (upstream.data ?? []).filter((m) => shared().includes(m.id));
       }
@@ -1591,12 +1229,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       apiError(res, 403, `this key may not run "${model}"`, "permission_error");
       return;
     }
-    // Refused before it is queued, and only where it cannot be wrong. An id
-    // nothing serves used to fall through to the first backend, wait its
-    // turn, possibly evict whatever was resident, and then 404 — so a typo
-    // cost a slot on the GPU. It still routes to a peer if one maps it, even
-    // a peer that is currently down: that is a routing question, and the
-    // policies below already answer it.
+    // An id nothing here can serve is refused before queueing, unless a peer maps it.
     if (pool.certainlyUnknown(model)
         && !peers.all().some((p) => peers.theirModelId(p.name, model) !== undefined)) {
       apiError(
@@ -1607,11 +1240,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       return;
     }
     if (fromPeer !== null) {
-      // A borrower who ignored our advertised stats, or whose estimate came
-      // in low, gets the same answer the local path gives — before the work
-      // is queued and before it evicts anything. 4xx on purpose: their
-      // request is wrong, and PeerStatusError.isRefusal means they hand that
-      // verdict to their caller instead of retrying it at us.
+      // A borrower's oversized request gets the local path's 4xx before it is queued.
       const why = unfit(pool.statsFor(model), fitOutput(pool.statsFor(model), needsOf(payload), payload));
       if (why !== null) {
         apiError(res, 400, `${model} ${why}`, "invalid_request_error");
@@ -1619,10 +1248,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       }
     }
 
-    // Peers don't choose our lane, see cfg.peerLane. Local callers can, with
-    // a non-standard `lane` field, which we strip before forwarding so it
-    // never reaches an OpenAI backend that would reject it. A lane on the
-    // model route beats the client's: the operator ranked that id.
+    // Peers get cfg.peerLane; local callers may send a `lane` (stripped before forwarding); a route's lane wins.
     const lane =
       fromPeer !== null
         ? cfg.peerLane
@@ -1646,30 +1272,17 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         let lentStatus = 0;
         try {
           await serving.scheduler.submit(
-            // peerMaxConcurrent rather than maxPerCaller. A peer is always a
-            // caller we can tell apart, so it gets capped whether or not
-            // apiKeys are set. Otherwise a borrower is bounded only by an
-            // hourly rate no serialized GPU could ever retire, and their retry
-            // loop parks in front of the host's own work.
-            //
-            // Capped per backend, so a borrower filling the GPU queue does not
-            // also lock itself out of the embedder.
+            // Peers are capped by peerMaxConcurrent per backend, whether or not apiKeys are set.
             { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal, tokens: pool.poolTokens(model, needsOf(payload)) },
             async () => {
               t.startedAt = Date.now();
               await serving.state.ensureFresh();
-              // A peer asked in OUR vocabulary, so the same rewrite and the same
-              // stamped params apply on the way to the backend as for a local
-              // caller. (Before, a lent `as` model reached the backend under
-              // the advertised id and 404'd.)
+              // A lent request gets the same id rewrite and params as a local one.
               lentStatus = await sendLocal(serving.cfg.url, model, payload, res, { signal: ctrl.signal, ...backendDeadline(serving.cfg) });
             },
           );
         } catch (e) {
-          // Both halves, same as the local path. This logged successes only,
-          // so a refused borrower or a failed lent generation left nothing at
-          // info. That's the one kind of traffic you most want to account for
-          // afterwards.
+          // Log lent failures too.
           logRequest(t, { model, lane, target: "local", forPeer: fromPeer }, false, e);
           throw e;
         }
@@ -1693,12 +1306,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         apiError(res, 429, e.message, "rate_limit_error");
         return;
       }
-      // A peer's REFUSAL is passed through with its own status. 502 would say
-      // "the far side broke", which is a different fact and provokes the
-      // opposite client behaviour: 5xx is retryable and 4xx is not, so
-      // laundering their 429 into our 502 is what turns their rate limit into
-      // our retry storm. Their 5xx still becomes our 502 — that genuinely is
-      // an upstream failure from where our caller sits.
+      // A peer's refusal keeps its 4xx status; only its 5xx becomes our 502.
       if (e instanceof PeerStatusError && e.isRefusal) {
         apiError(
           res,
@@ -1715,10 +1323,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
 
   async function routeUi(c: Call): Promise<void> {
     const { req, res, path } = c;
-    // Same gate, same data, different transport. EventSource cannot send an
-    // Authorization header, which is exactly why the page's sockets are
-    // decided by ADDRESS and not by credential — so the stream needs no
-    // separate story about auth, and gets none.
+    // The event stream shares the page's address-based gate.
     if (path === "/ui/events") {
       await serveUiEvents(req, res, true);
       return;
@@ -1730,25 +1335,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   /** Everything not claimed above, proxied to a backend as-is. */
   async function routePassthrough(c: Call): Promise<void> {
     const { req, res, url, path } = c;
-    // ---- everything else: straight through, unqueued ----
-    //
-    // A real backend is more than /v1. llama-swap alone serves /unload,
-    // /running and /upstream/<model>/<anything>, and an app already using those
-    // would break the moment it pointed at us. That's the opposite of "change
-    // one base url", so anything not claimed above gets proxied as-is: method,
-    // body, the lot.
-    //
-    // Not queued by default, on purpose. These are control-plane calls and
-    // non-chat generation endpoints whose shapes we don't know, and scheduling
-    // work you can't identify is guesswork. Anything sending them almost
-    // certainly has its own admission control. Queueing here would also
-    // deadlock a caller that's holding its own slot while it waits on us.
-    //
-    // `backends[].routes` is how an operator says otherwise for a specific
-    // path. That resolves the objection rather than ignoring it: a named path
-    // IS identified, and naming it is a statement that hearth is the admission
-    // control for it — which also means whatever used to queue it must stop.
-    // Resolved by the table rather than re-derived here.
+    // Everything else is proxied as-is and unqueued (llama-swap's /unload, /running, /upstream/...),
+    // unless `backends[].routes` names the path, in which case hearth is its admission control.
     const who = c.caller;
     let body: Buffer | undefined;
     try {
@@ -1768,11 +1356,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // statement here the operator actually made.
     const routed = pool.forPath(url.pathname);
 
-    // Which backend? These paths are not chat, so there is no route table to
-    // consult, but most of them still name a model somewhere: /v1/embeddings
-    // and friends carry it in the body, and llama-swap's /upstream/<model>/...
-    // puts it in the path. Peek at both, and fall back to the first backend,
-    // which is exactly where a single-backend node always sent them.
+    // The model from the /upstream/<model>/ path or the JSON body, else the first backend.
     const viaPath = /^\/upstream\/([^/]+)\//.exec(path)?.[1];
     let viaBody: string | undefined;
     if (body && body.length > 0) {
@@ -1783,10 +1367,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         // Not JSON, or not ours to understand. The fallback covers it.
       }
     }
-    // What the CALLER asked for, kept apart from `named` below. The two used to
-    // be one value, which quietly meant a declared route could not also be an
-    // aliased model: `named` picks the backend, a route has already picked one,
-    // so it had to be undefined here — and that also switched off the rewrite.
+    // What the caller asked for, kept apart from the backend `named` picks.
     const asked = viaPath ?? viaBody;
     const named = routed ? undefined : asked;
     const target = routed ? routed.slot : named ? pool.for(named) : pool.first();
@@ -1794,25 +1375,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       log.debug("passthrough.resolved", { path, model: named, backend: target.name });
     }
 
-    // THE ONE EXCEPTION to this path's verbatim promise, and it is deliberate.
-    //
-    // Everything else here is forwarded byte for byte, headers included, because
-    // trimming it has broken things before. But an aliased id is a name the
-    // backend has never heard of: forwarding it faithfully guarantees a 404.
-    // /v1/embeddings is the case that matters — it carries `model` in the body
-    // and never touches the chat dispatch above, so without this the alias
-    // works for chat and fails for embeddings, which is worse than not having it.
-    //
-    // A DECLARED route needs the same rewrite, for the same reason. Queueing a
-    // path does not change what the backend calls the model, so `routes:` and
-    // `as:` used to be mutually exclusive in a way nothing said out loud: the
-    // route matched, the request was scheduled, and the backend was then handed
-    // an id it had never heard of.
-    //
-    // Scoped as tightly as possible: only when the id actually differs, only for
-    // a JSON body that already parsed, and only the `model` field. The path
-    // form (/upstream/<model>/...) is rewritten too, since llama-swap routes on
-    // that segment.
+    // The one exception to verbatim forwarding: an aliased `model` field (or /upstream path segment)
+    // is rewritten, or the backend 404s the advertised id.
     let outBody = body;
     let outPath = path;
     if (asked) {
@@ -1840,16 +1404,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       const up = await send(`${target.cfg.url}${outPath}${url.search}`, {
         method: req.method ?? "GET",
         ...(outBody && outBody.length > 0 ? { raw: outBody } : {}),
-        // Client's headers minus hop-by-hop. Cutting this down to Content-Type
-        // dropped Accept, Range, and any Authorization the backend itself wants,
-        // on the one path whose whole promise is "verbatim".
-        //
-        // Except OUR key, if that is what it is. A caller who authenticated to
-        // hearth handed us a hearth credential, and passing it on puts it in
-        // the backend's logs and its request history — a place it has no reason
-        // to be, and one the operator has no idea it reached. A credential the
-        // backend actually wants is one that did NOT match ours, and that is
-        // still forwarded untouched.
+        // Client headers minus hop-by-hop, and minus our own key if that is what it carries.
         headers: stripOurKey(req) as Record<string, string>,
         signal: ctrl.signal,
         ...backendDeadline(target.cfg),
@@ -1859,24 +1414,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     };
 
     try {
-      // A route declared `queue: false` — a progress endpoint, a job list —
-      // goes straight through. Those are what the caller polls WHILE the work
-      // it is asking about holds the slot, so queueing them behind it would
-      // make a progress bar that only moves once there is nothing left to
-      // report.
+      // `queue: false` routes (progress, job lists) go straight through.
       if (routed?.rule.queue) {
         const { lane } = routed.rule;
         // Two models can share one routed path; each queues as itself.
         const model = pool.routedModel(routed.slot, routed.rule, asked);
-        // Recorded like any other local use, because that is what it is.
-        //
-        // A declared route already went through the scheduler — it waited its
-        // turn and held a slot — but it left no trace in the history ring, so it
-        // drew no spark and no bar and never reached "last 10 minutes". Video
-        // renders have been queueing invisibly this whole time for that reason,
-        // and a sidecar call is worse: they finish in under a second, so the
-        // running-job particle is gone before the next 3s poll and the history
-        // was the only place they could ever have shown up.
+        // Recorded in history like any local use.
         const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
         try {
           await target.scheduler.submit(
@@ -1925,88 +1468,34 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
 
-  /** The page and its data. The only two things either listener will serve. */
   /**
-   * `canWarm` says whether POST /v1/warm is reachable FROM THIS PAGE.
-   *
-   * The page is served on both listeners, but the ui-only one answers /ui and
-   * /ui/data and 404s everything else — deliberately, so widening that bind
-   * cannot widen anything but the page. A warm button there would be a control
-   * that always fails. Rather than relax that listener, the page is told
-   * whether the action exists and hides it when it does not.
-   */
-  /**
-   * How the page may write, from the socket it was served on.
-   *
-   *   "off"  — read-only. It renders state and offers no controls.
-   *   "open" — writes need no credential: apiKeys is empty, so localCaller
-   *            trusts loopback and the browser IS on loopback.
-   *   "key"  — writes need a bearer apiKey, so the page asks for one and keeps
-   *            it client-side.
-   *
-   * The "key" case is not only about the status listener. It fixes the main
-   * listener too, which had a quiet mismatch: /ui is gated by isLoopback while
-   * /v1/warm is gated by localCaller, and once apiKeys is set localCaller wants
-   * a credential EVEN FROM LOOPBACK. So on any keyed deployment the warm
-   * buttons on the main page already answered 401 — invisible to us, because
-   * our own node runs with apiKeys empty.
+   * How the page may write: "open" when apiKeys is empty (loopback is trusted), "key" when writes
+   * need a bearer key, which the page asks for.
    */
   const writeMode = (): "open" | "key" => (cfg.apiKeys.length === 0 ? "open" : "key");
 
-  /**
-   * The first-byte deadline for a call to a local backend.
-   *
-   * A helper rather than a literal at each call site, because the failure it
-   * guards against is invisible until it happens and the cost of forgetting it
-   * at one site is the whole node: a backend that accepts the connection and
-   * never answers holds a scheduler slot for as long as the process lives, and
-   * with `resources` declared it holds the card too.
-   *
-   * Takes the backend, because the plausible wait is a property of what is
-   * behind the port. A sidecar that renders a clip before it answers at all is
-   * not misbehaving when it takes half an hour, and a node-wide number sized
-   * for a chat server would cut its honest work off mid-render.
-   */
+  /** The first-byte deadline for a local backend: its own `firstByteMs`, else the node default. */
   const backendDeadline = (b: BackendConfig): { headersTimeoutMs?: number } => {
     const ms = b.firstByteMs ?? cfg.backendFirstByteMs;
     return ms > 0 ? { headersTimeoutMs: ms } : {};
   };
 
   /**
-   * Everything the page draws, in one object.
-   *
-   * Extracted from `serveUi` so the poll and the event stream cannot drift:
-   * `/ui/data` is one of these serialised, and a stream frame is the diff
-   * between two of them. A field added here reaches both by construction.
-   *
-   * ensureFresh, not probeAll: this is built every second while a page is
-   * open, and a forced round trip to every peer each time would turn a status
-   * page into a load generator.
+   * Everything the page draws, shared by /ui/data and the event stream. `canWarm` is whether this
+   * socket can perform actions. Uses ensureFresh, never probeAll.
    */
   async function uiPayload(canWarm: boolean): Promise<Record<string, unknown>> {
     await peers.ensureFresh();
-    // Page-driven, exactly like ensureFresh above: a backend's declared activity
-    // path is read only while a page is assembling its data — a broadcast tick,
-    // the first snapshot, or the /ui/data poll fallback — never on a background
-    // timer, so hearth still makes no unbidden poll of a backend. Fire-and-forget
-    // and rate-limited inside: this frame draws the last reading, the next draws
-    // this one.
+    // Declared activity paths are read only while a page is building data, never on a timer.
     for (const b of pool.all()) if (b.cfg.activity) void b.state.sampleActivity(b.cfg.activity);
     return {
       canWarm,
       // How this page must authenticate its writes, decided per socket rather
       // than assumed. "off" when the socket serves no write routes at all.
       control: canWarm ? writeMode() : "off",
-      // Shown on both sockets, since knowing you are paused matters most when
-      // you are looking at a page that says nothing is being served. The
-      // BUTTONS are gated on canWarm, which is really "is this the socket that
-      // can perform actions" — the standalone UI listener answers three paths
-      // and /control is not one of them, so a switch there would always fail.
+      // Pause state shows on both sockets; the buttons only where canWarm.
       controls: controls.state(),
-      // Everything the sharing and mapping controls need to render: what we
-      // could lend, what the file says we lend, what we lend right now, and
-      // what differs. Sent even to the read-only listener, which renders the
-      // same facts without the buttons.
+      // What the sharing and mapping controls need, sent to the read-only listener too.
       share: shared(),
       configuredShare: cfg.share,
       catalog: pool.catalog(),
@@ -2018,20 +1507,9 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         }
         return out;
       })(),
-      // Which advertised ids are one seat under another name. `models.<id>.as`
-      // rewrites the id on the way to a local backend, so an id whose `as` is
-      // itself an advertised model is a VARIANT of that model: the same weights
-      // answering to a second id, usually with different `params`. The page
-      // folds those under their parent instead of drawing sixteen rows for
-      // eleven models. An `as` that names a backend-only wire id (nomic-embed
-      // -> nomic-embed-text-v2-moe:latest) is a rename, not a variant; the page
-      // can tell the two apart because it also has the catalog, so both are
-      // sent as they are.
+      // Advertised id -> `as`: the page folds variants under their parent and shows renames as-is.
       aliases: aliasView(),
-      // Where a request for each id is allowed to go, and what happens when it
-      // cannot go there. This is the decision hearth exists to make, so the
-      // console has to be able to state it: a mapping alone only says a request
-      // MAY leave, and the policy beside it says whether it will.
+      // Where each id may go, and whether it falls back home.
       routing: routingView(),
       overrides: overrideView(),
       net: networkView(),
@@ -2054,48 +1532,22 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
   /**
-   * The page, pushed instead of polled.
-   *
-   * The poll was 95KB every 3 seconds per open tab, and 93% of it was `hist` --
-   * 120 samples of which the client already had 119. So the stream sends one
-   * snapshot on connect and then only what changed, with new history samples
-   * appended one at a time. An idle box goes from ~31KB/s to nothing at all.
-   *
-   * Frames are diffs of the SAME object `/ui/data` serves, so there is one
-   * payload builder and the two transports cannot drift. `/ui/data` stays
-   * exactly as it was: it is the fallback when EventSource cannot connect, and
-   * it is what every test reads.
-   *
-   * One baseline is shared by every subscriber, which is why `canWarm` and
-   * `control` are stamped per connection at snapshot time and never appear in a
-   * patch -- they describe the SOCKET, not the node, and they never change for
-   * the life of one.
+   * The page pushed over SSE: one snapshot, then diffs of the same object /ui/data serves, with
+   * history appended. `canWarm` and `control` are per socket and never in a patch.
    */
   const streams = new Set<ServerResponse>();
   let lastSent: Record<string, unknown> | null = null;
   let uiTimer: ReturnType<typeof setInterval> | null = null;
   let lastFlushAt = 0;
 
-  /** 1s, against the page's old 3s. Cheap now that a quiet tick sends nothing,
-   *  and it is the difference between a graph that animates and one that
-   *  lurches. Not configurable: a knob here would only ever be turned down to
-   *  save traffic that no longer exists. */
+  /** 1s: a quiet tick sends nothing. */
   const UI_TICK_MS = 1_000;
   /** Comment frames keep an idle connection alive through anything that times
    *  out a quiet socket. Nothing should be between us and the browser, but a
    *  stream that dies silently after 60s is a bad way to find out otherwise. */
   const UI_PING_MS = 15_000;
 
-  /**
-   * Everything after `prev`'s last element, when `next` is `prev` with items
-   * appended (and possibly some dropped off the front, which is what a ring
-   * does). Null when it cannot be expressed that way and the array must be
-   * sent whole.
-   *
-   * By value rather than by index: a fixed-size ring gives no stable position,
-   * and by timestamp would drop the second of two samples that share a
-   * millisecond -- the same trap that made the queue table lose rows.
-   */
+  /** Items appended to `prev` (a ring may drop from the front), compared by value; null if not an append. */
   function appendedTail(prev: unknown[], next: unknown[]): unknown[] | null {
     if (prev.length === 0) return null;
     const last = JSON.stringify(prev[prev.length - 1]);
@@ -2130,33 +1582,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
   function writeFrame(res: ServerResponse, event: string, data: unknown): void {
-    // Backpressure is ignored on purpose. Every frame is derived from a
-    // snapshot the client can re-request, so a slow reader falling behind
-    // costs it freshness and nothing else -- and the alternative, buffering
-    // per client, is how a status page starts holding memory.
+    // Backpressure ignored: a slow reader loses freshness, never buffers memory.
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
-  /**
-   * The baseline, built at most once at a time.
-   *
-   * `uiPayload` awaits `peers.ensureFresh()`, which can outlast the tick
-   * exactly when a peer is timing out — which is exactly when somebody is
-   * watching. Two overlapping builds both diff against the same `lastSent`,
-   * and whichever finishes LAST wins the baseline: if that is the older
-   * snapshot, the newer one's changes are never sent again, because the next
-   * diff is taken against a payload that already contained them.
-   *
-   * Both producers go through here — the tick and a page connecting — because
-   * they race each other as readily as the tick races itself. A subscriber that
-   * built its own snapshot while a broadcast was building the next one would be
-   * handed a baseline the server then forgot, and every field that differed
-   * between the two would stay wrong on that page until it changed again.
-   *
-   * Callers that find a build already running join it rather than starting a
-   * second. The page's own poll fallback carries the same guard for the same
-   * reason.
-   */
+  /** The baseline, built at most once at a time: overlapping builds join, so the diff baseline never regresses. */
   let inBuild: Promise<Record<string, unknown>> | null = null;
 
   function build(): Promise<Record<string, unknown>> {
@@ -2224,6 +1654,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     req.on("aborted", drop);
   }
 
+  /** The page and its data, the only things either listener serves to the page. */
   async function serveUi(path: string, res: ServerResponse, canWarm = false): Promise<void> {
     if (path === "/ui/data") {
       // One payload rather than three fetches. It also means /network and
@@ -2241,61 +1672,16 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     res.end(UI_HTML);
   }
 
-  /**
-   * The status-page listener.
-   *
-   * Deliberately NOT the main handler with a looser gate. This one knows about
-   * a short, explicit list of paths and answers 404 to everything else, so
-   * however wide the bind, nothing else is on this socket. No passthrough to
-   * the backend, no peer protocol, no /healthz, and above all no peer routes —
-   * peerCaller is never consulted here, so a peer token is worth nothing on
-   * this port however valid it is elsewhere.
-   *
-   * With `uiListen.control: key` the list gains the two WRITE routes, and they
-   * are handled by the very same functions the main listener uses, gated by the
-   * very same localCaller. That gate already accepts a valid apiKey from any
-   * address, so this adds a socket, not an authority. Unauthenticated, this
-   * port still serves exactly the page.
-   */
-  /**
-   * Requests we are proxying right now, unqueued.
-   *
-   * The passthrough below is deliberately not scheduled, which is a statement
-   * about ADMISSION and was silently also a statement about visibility: an
-   * image render arrives on /upstream/<model>/generate, never becomes a job,
-   * and so the console drew an idle backend and a free card while the GPU was
-   * flat out. The queue was right and the picture was wrong.
-   *
-   * Counting is not queueing. Nothing here decides whether a request runs, in
-   * what order, or waits for anything — the bytes are already in our hands on
-   * their way through, and this notes that they are. The arbiter still does not
-   * know about this work, and the card is still reported as unheld, because
-   * that remains the truth: we were never asked to admit it and cannot make it
-   * wait for anything.
-   */
+  /** Requests proxied right now without queueing, counted for the console only; admission is unchanged. */
   let proxySeq = 0;
   const proxying = new Set<{ id: string; backend: string; model: string | null }>();
 
   const uiWritable = cfg.uiListen?.control === "key";
-  /**
-   * What the standalone listener serves, and nothing else.
-   *
-   * A separate question from the auth table above: that decides who may call a
-   * path, this decides which paths exist on a socket that may be bound wide.
-   * Both are allowlists and they sit together so that adding a route somewhere
-   * else does not quietly appear here — the point of this port is that it is a
-   * status page and a shorter attack surface, not a second front door.
-   */
+  /** The only paths the standalone listener serves. */
   const UI_PATHS = new Set(["/ui", "/ui/", "/ui/data", "/ui/events", "/"]);
-  /**
-   * The only writes this port will pass through, and only when `uiListen`
-   * allows writes at all.
-   *
-   * Kept as a named set rather than an inline comparison because it is the
-   * half that gets forgotten: a new control path added to the main table is
-   * NOT reachable here until it is named here too, and that is deliberate.
-   */
+  /** The writes the standalone listener passes through when `uiListen.control` allows; new controls must be added here. */
   const UI_WRITE_PATHS = new Set(["/control", "/v1/warm"]);
+  // The status listener: only UI_PATHS (plus UI_WRITE_PATHS behind localCaller), 404 for the rest.
   const uiServer = cfg.uiListen
     ? createServer((req, res) => {
         const path = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -2330,32 +1716,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       })
     : null;
 
-  /**
-   * Who has what, and what's warm.
-   *
-   * Peer ids get translated into our namespace wherever a mapping exists, since
-   * that's the only name a caller here can actually ask for. Models a peer
-   * offers that we haven't mapped are reported separately rather than hidden.
-   * "They have capacity you can't reach yet" is worth knowing, and it turns this
-   * endpoint into a config diagnostic.
-   */
-  /**
-   * What is set at runtime and not in the file, in one shape.
-   *
-   * On /control and /ui/data both, because the two ways of driving this — a
-   * curl and the page — must not disagree about whether there is anything
-   * pending. It carries the ready-to-paste YAML rather than making the page
-   * build it: rendering config is exactly the job that belongs on the side that
-   * owns the config types.
-   */
-  /**
-   * Where a Save would go, or null for nowhere.
-   *
-   * The config file wins whenever it can be written, because that is the one
-   * place a change should end up. The sidecar exists for the case where it
-   * cannot be — a read-only bind mount in a container is the usual one — and
-   * the page names the destination rather than leaving it to be discovered.
-   */
+  /** Where a Save goes: the config file when writable, else the sidecar, else nowhere. */
   function savesTo(): "config" | "state" | null {
     if (cfg.configPath) {
       try {
@@ -2368,6 +1729,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return cfg.stateFile ? "state" : null;
   }
 
+  /** Runtime changes not in the file, with the YAML to paste; shared by /control and /ui/data. */
   function overrideView() {
     const changes = overrides.changes();
     const dirty =
@@ -2378,10 +1740,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return {
       changes,
       dirty,
-      // Two separate questions, and collapsing them would lose the one that
-      // matters: `dirty` is "not in hearth.yaml", `unsaved` is "will not
-      // survive a restart". A saved change is still not in the config file, and
-      // the page still offers the YAML for it.
+      // `dirty` is not in hearth.yaml; `unsaved` will not survive a restart.
       canSave: savesTo() !== null,
       savesTo: savesTo(),
       // Named, not left to be discovered. "Saved" is a claim about a specific
@@ -2395,12 +1754,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     };
   }
 
-  /**
-   * Advertised id -> how it routes.
-   *
-   * Effective, so a runtime link shows the policy it was linked with rather
-   * than the one the file was last written with.
-   */
+  /** Advertised id -> how it routes, including runtime links. */
   function routingView(): Record<string, {
     policy: RoutePolicy; peers: string[]; fallbackLocal: boolean; spilloverAt: number;
   }> {
@@ -2425,6 +1779,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return out;
   }
   
+  /** Who serves what, in our ids; peer models we have not mapped are listed separately. */
   function networkView() {
     const cap = pool.loadedAggregate();
     // How many of our jobs each peer is running right now, so an edge can show
@@ -2434,18 +1789,9 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       if (j.offbox && j.peer) sendingTo.set(j.peer, (sendingTo.get(j.peer) ?? 0) + 1);
     }
 
-    // What each model can take, per node rather than merged into one map. Two
-    // nodes can serve the same id with different windows — a 262k local coder
-    // and a peer running the same weights at 32k — and a union would have to
-    // pick one of those numbers and get it wrong for somebody.
+    // Stats per node, since two nodes can serve one id with different windows.
     const selfStats: Record<string, ModelStats> = {};
-    // Route models as well as the catalogue. A `kind: none` backend is in no
-    // catalogue and can never answer /props, so a declaration is the ONLY thing
-    // that will ever be known about it — and leaving it out of the payload
-    // would mean the one model whose stats can only be declared is the one the
-    // page cannot show. Nothing is enforced for these: their requests arrive on
-    // a declared path with a body we do not read, so there is nothing to
-    // measure. Reported, not checked.
+    // Route models too: for a `kind: none` backend a declaration is all that is known. Reported, not enforced.
     const named = new Set(pool.catalog());
     for (const b of pool.all()) {
       for (const r of b.cfg.routes) if (r.model !== "") named.add(r.model);
@@ -2478,22 +1824,9 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             // backend that cannot see is not the same claim as one from a
             // backend that looked, and the page must not render it as such.
             knowsWarm: b.state.knowsWarm(),
-            // Whether anything has come back from it lately, and ONLY for the
-            // backends where silence means something — the ones whose event
-            // stream we hold open. A polled or `none` backend is never
-            // contacted unless something is being asked of it, so hearing
-            // nothing from one is not evidence of anything, and sending `false`
-            // there had the page draw a red "nothing back in a minute" against
-            // every CPU sidecar on a perfectly healthy box.
-            //
-            // Omitted rather than sent as `false`, so the distinction lives on
-            // the wire instead of in a rule the page has to remember. Same
-            // reasoning as `knowsWarm` above: not knowing is its own answer.
+            // Only where we hold an event stream; omitted elsewhere, since silence there means nothing.
             ...(b.state.watched() ? { answering: b.state.answering() } : {}),
-            // A backend's own busy signal, for one hearth forwards to but does
-            // not schedule. Sent whenever the path is declared — INCLUDING when
-            // it could not be read (ok:false), which the page draws as unknown
-            // rather than idle, so omitting it there would be the wrong silence.
+            // Sent whenever declared, including unread (ok:false), which the page shows as unknown.
             ...(b.cfg.activity ? { activity: b.state.activity() } : {}),
             // Only llama-swap evicts. An ollama backend keeps its set resident
             // and serves them together, so there is no thrash to warn about.
@@ -2501,30 +1834,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             slots: c.slots,
             free: c.free,
             queued: Object.values(c.queued).reduce((a, x) => a + x, 0),
-            // Only what is ACTUALLY resident, mapped back into advertised ids.
-            //
-            // This used to return the whole `serves` list the moment ANYTHING
-            // was loaded, which made a seven-model image backend report all
-            // seven as warm while llama-swap held exactly one. The console then
-            // drew six cold models as warm — and "will this cost me a load" is
-            // the entire question that indicator exists to answer. The reason
-            // for the shortcut was that state.loaded() speaks WIRE ids; the fix
-            // is to translate them rather than to give up on them.
+            // Only what is actually resident, mapped back into advertised ids.
             loaded: b.cfg.serves.length
               ? [...b.cfg.serves].filter((m) => b.state.isWarm(pool.outboundId(m)))
               : b.state.loaded(),
-            // Being read off the disk right now. The longest thing that happens
-            // on this box, and until now the only one the page could not name:
-            // a cold load drew as "nothing loaded" with a job running on it,
-            // which is true twice and explains nothing. Same translation as
-            // `loaded` above, for the same reason.
-            //
-            // Empty for a backend that cannot tell us, which is not a claim
-            // that nothing is loading — so the page draws this only when there
-            // IS something in it, and draws no absence.
-            // Where a resident model's weights actually are, when the launch
-            // command says something worth reporting. Permanent, unlike a
-            // load: every token crosses the boundary, not just the first.
+            // Models loading off the disk, and where resident weights sit; both advertised ids.
             offload: [...b.state.placement()].map(([wire, p]) => ({
               model: pool.advertised(wire),
               cpuLayers: p.cpuLayers,
@@ -2544,10 +1858,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
             // competes for nothing, which is every backend in a config that
             // never declared any.
             resources: [...b.cfg.resources],
-            // A backend fronting a non-OpenAI service has an EMPTY serves list,
-            // so without this it draws as a bare name with nothing beside it
-            // forever — the one row on the page that could never say what it
-            // does. Its work is addressed by path, so the path is the answer.
+            // A non-OpenAI backend has no serves list, so its routes say what it does.
             routes: b.cfg.routes.map((r) => ({
               path: r.path,
               model: r.model,
@@ -2595,21 +1906,9 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         serves: mappedServes,
         loaded: mappedLoaded,
         unmapped,
-        // What the CONFIG says we may send here, in my ids — independent of
-        // whether the peer is reachable. `serves` above comes from their live
-        // /peer/state, so an unreachable peer reports an EMPTY one and the page
-        // had nothing to draw: the node survived but its models vanished, which
-        // reads as "this peer offers nothing" rather than "we cannot see it".
-        //
-        // Deliberately a SEPARATE field, not a fallback merged into `serves`.
-        // `serves` is a verified claim about what a peer is actually offering
-        // right now; `configured` is only our own intent. Collapsing them would
-        // let a peer that has been down for a week look like it is serving.
+        // What the config lets us send here, in our ids, even while the peer is unreachable.
         configured: Object.keys(theirs.models).sort(),
-        // The mapping itself, my id -> theirs, because an editor needs the
-        // pairs and `configured` is only the left-hand side. Effective, not
-        // what the file said: a runtime link has to show up here or the row you
-        // just added would be missing from the table you added it in.
+        // The effective mapping, my id -> theirs, runtime links included.
         map: { ...theirs.models },
         // Keyed by OUR id, like everything else about a peer on this payload,
         // so the page never has to know their vocabulary. Empty for a peer
@@ -2672,11 +1971,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       // and a browser holding one open would otherwise pace the whole drain.
       uiServer?.close();
       uiServer?.closeAllConnections?.();
-      // Event streams go first and explicitly. They are already excluded from
-      // the in-flight count, so they would not HOLD the drain — but leaving
-      // them open means a page keeps its connection to a node that is going
-      // away, and reconnects to nothing. Ending them lets EventSource start
-      // retrying immediately.
+      // End event streams first, so pages start reconnecting at once.
       for (const res of streams) res.end();
       streams.clear();
 

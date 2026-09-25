@@ -1,19 +1,6 @@
 /**
- * Peer health and capacity.
- *
- * Two rules, both learned the expensive way.
- *
- * First: poll. Never infer health from an open socket. A TCP forwarder happily
- * keeps listening after the far end dies and just closes each connection, which
- * looks perfectly healthy to anything that only checks whether it can connect.
- * Ask a question, require an answer.
- *
- * Second: fail closed. Unknown, stale and unreachable all mean unavailable. The
- * cheap mistake is running something locally that could have gone to a peer.
- * The expensive one is handing work to a box that can't take it.
- *
- * Two strikes before we call a peer down, so one dropped packet or a restart on
- * their side doesn't bounce every job home and back again.
+ * Peer health and capacity. Health is polled, never inferred from an open socket; unknown,
+ * stale and unreachable all mean unavailable; a peer is down after two failed polls.
  */
 import type { HearthConfig, PeerConfig } from "./config.js";
 import { Controls } from "./controls.js";
@@ -21,26 +8,9 @@ import type { Logger } from "./log.js";
 import { cleanStats, type ModelStats } from "./stats.js";
 import { UpstreamError, getJson } from "./upstream.js";
 
-/** What a peer says about itself: Scheduler.capacity(), plus what it has loaded
- *  and what it'll serve. All of it rides on /peer/state so one probe answers
- *  both "can you take work" and "what's warm over there". That leaves
- *  /peer/hello as a pure handshake, nothing the hot path needs. */
 /**
- * A peer answered, and answered with a refusal.
- *
- * Carries the status rather than folding it into a message, because the STATUS
- * CLASS is the part a caller acts on and a 4xx and a 5xx call for opposite
- * behaviour. Flattening both to 502 is not a cosmetic loss:
- *
- * A borrowing client retries 5xx on purpose — that is how a turn survives a
- * model swap — and does not retry 4xx. Report a peer's 429 as a 502 and every
- * client politely backing off instead turns a rate limit into a retry storm
- * aimed at someone else's GPU. Observed exactly that on 2026-08-15: three
- * subagents hit a peer's batch-lane cap, and the 502 mapping turned three
- * rejections into six requests.
- *
- * Same lesson the warm route already learned about QueueFullError, one path
- * over. If a third path ever forwards to a peer, it uses this too.
+ * A peer's refusal, with its status kept: callers retry a 5xx and must not retry a 4xx, so a
+ * peer's 429 reported as 502 turns a rate limit into a retry storm.
  */
 export class PeerStatusError extends Error {
   constructor(
@@ -60,6 +30,7 @@ export class PeerStatusError extends Error {
   }
 }
 
+/** What a peer reports on /peer/state: its capacity, what it has loaded and what it serves. */
 export interface PeerCapacity {
   slots: number;
   free: number;
@@ -71,19 +42,7 @@ export interface PeerCapacity {
   loaded?: string[];
   /** Everything they offer, in their ids. */
   serves?: string[];
-  /**
-   * Protocol 2: capacity per shared model, in their ids.
-   *
-   * The fields above describe a whole node, which was a complete answer only
-   * while a node meant one backend and one queue. A node fronting several
-   * backends has several independent queues, and "is the node busy" stops
-   * predicting whether YOUR model can start — the embedder can be idle while
-   * the GPU is four deep.
-   *
-   * Absent from a protocol-1 peer, in which case the aggregate is all there is
-   * and routing falls back to it. Both are sent, so an old borrower keeps
-   * working against a new host.
-   */
+  /** Protocol 2: capacity per shared model, in their ids. Absent from a protocol-1 peer. */
   models?: Record<string, {
     slots: number; free: number; queued: number; warm: boolean;
     /** What that model can take. Absent from a peer that has never loaded it,
@@ -125,14 +84,7 @@ const POLL_HEADERS_TIMEOUT_MS = 5_000;
 const PROBE_HEADERS_TIMEOUT_MS = 1_500;
 const STRIKES_BEFORE_DOWN = 2;
 
-/**
- * How long to leave a peer alone after it tells us we're asking too often.
- *
- * Without this the poller just carries on at its usual rate, burning a budget
- * it already exhausted and getting refused every time. The lockout then feeds
- * itself for as long as both sides stay up. Backing off is what lets their
- * hourly window actually drain.
- */
+/** How long to leave a peer alone after it rate-limits our polling. */
 const RATE_CAP_BACKOFF_MS = 5 * 60_000;
 
 export class PeerRegistry {
@@ -181,25 +133,14 @@ export class PeerRegistry {
     return s ? { ...s, up: this.isUp(name) } : undefined;
   }
 
-  /**
-   * Usable right now?
-   *
-   * Staleness gets checked here and not just in the poller, so a wedged poll
-   * loop can't leave a peer looking healthy forever.
-   */
+  /** Usable right now? Staleness is checked here too, so a wedged poller cannot leave a peer up. */
   isUp(name: string): boolean {
     const s = this.status.get(name);
     if (!s || !s.up || s.lastOkAt === null) return false;
     return Date.now() - s.lastOkAt <= this.cfg.peerStaleMs;
   }
 
-  /**
-   * What one model would cost on a peer, in their terms.
-   *
-   * Prefers the protocol-2 per-model reading and falls back to the node-level
-   * one, so an old peer is scored exactly as it was before rather than being
-   * dropped for speaking the old protocol.
-   */
+  /** What one model would cost on a peer: its per-model reading, else the node-level one. */
   loadFor(peer: string, theirModel: string): PeerModelLoad | null {
     const cap = this.status.get(peer)?.capacity;
     if (!cap) return null;
@@ -213,15 +154,7 @@ export class PeerRegistry {
     };
   }
 
-  /**
-   * What a peer says one of their models can take, or null if they have not
-   * said.
-   *
-   * Only the per-model reading answers this: the node-level fallback describes
-   * a whole box and there is no such thing as a box's context window. A
-   * protocol-1 peer therefore reports nothing here, which is correct — we know
-   * nothing about their limits and must not invent any.
-   */
+  /** What a peer says one of its models can take, or null; only per-model readings answer this. */
   statsFor(peer: string, theirModel: string): ModelStats | null {
     return this.status.get(peer)?.capacity?.models?.[theirModel]?.stats ?? null;
   }
@@ -233,10 +166,7 @@ export class PeerRegistry {
 
   /** Peers that are up and map this model, in preference order. */
   candidates(model: string, preferred: string[]): string[] {
-    // Borrowing paused: nobody is a candidate. Done here rather than in decide()
-    // because every policy path already handles an empty candidate list —
-    // including honouring fallbackLocal, which is the case that matters and the
-    // one a new branch would most likely get wrong.
+    // Borrowing paused: no candidates, and every policy path already handles that.
     if (!this.controls.borrowingOn) return [];
     const order = preferred.length > 0 ? preferred : [...this.byName.keys()];
     return order.filter((n) => this.theirModelId(n, model) !== undefined && this.isUp(n));
@@ -255,11 +185,7 @@ export class PeerRegistry {
         headers: { Authorization: `Bearer ${peer.token}` },
         headersTimeoutMs: timeoutMs,
       });
-      // Any 2xx JSON used to be enough to mark a peer up. A port typo pointing
-      // at some other service then left routing reading fields that weren't
-      // there, and `fastest` 502'd the end user on Object.values(undefined).
-      // An answer we don't recognise is unknown, and unknown means unavailable.
-      // Throwing puts it through the normal strikes path.
+      // An answer we do not recognise is unknown, which means unavailable.
       if (
         typeof cap?.free !== "number" ||
         typeof cap?.slots !== "number" ||
@@ -268,16 +194,7 @@ export class PeerRegistry {
       ) {
         throw new UpstreamError(`peer ${name} answered /peer/state with something that is not capacity`);
       }
-      // Past the three fields above, everything else a peer sends is taken on
-      // trust and used as the type it claims to be. `serves` arriving as a
-      // string meant `theirServes.map is not a function` inside networkView,
-      // which is a 500 on /network AND /ui/data for as long as that peer is up
-      // — one peer taking out the whole status page.
-      //
-      // Coerced on ingest rather than guarded at each use: there are several
-      // uses, they are in different files, and the next one added would not
-      // know to guard. Anything unrecognisable becomes empty, which is what an
-      // answer we cannot read should mean.
+      // Everything else is coerced on ingest; anything unrecognisable becomes empty.
       const strings = (v: unknown): string[] =>
         Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
       cap.serves = strings(cap.serves);
@@ -336,24 +253,9 @@ export class PeerRegistry {
   }
 
   /**
-   * Make sure every peer's reading is current enough to route on, asking only
-   * where it isn't.
-   *
-   * This is the real mechanism now, and the timer is just a floor under it.
-   * Routing is the only thing that consumes peer state, and something needed
-   * only when asked should be fetched when asked. A timer spends requests
-   * whether or not anyone's using it, and still hands the decision a reading up
-   * to a whole interval old.
-   *
-   * Three guards stop this being worse than the timer it replaced:
-   *
-   *   fresh    a good reading inside peerFreshMs gets reused as-is
-   *   failed   a bad one is remembered for peerDownMs, so an outage doesn't
-   *            make every local request pay the probe timeout
-   *   single   concurrent callers join one in-flight probe per peer, so cost
-   *            tracks the window and not traffic. Without it an agent loop at
-   *            50 requests a minute blows the control-plane budget and gets
-   *            itself rate-limited out.
+   * Make every peer's reading fresh enough to route on, probing only where needed: a good
+   * reading is reused for peerFreshMs, a failure for peerDownMs, and concurrent callers share
+   * one probe per peer.
    */
   async ensureFresh(): Promise<void> {
     const now = Date.now();
@@ -380,32 +282,17 @@ export class PeerRegistry {
     return p;
   }
 
-  /**
-   * Ask everyone right now, in parallel, and don't wait long.
-   *
-   * For questions someone is sitting there waiting on. A cache can't go stale if
-   * you don't use one, and the cost is a single round trip, which over an
-   * overlay network is tens of milliseconds.
-   */
+  /** Probe every peer now, in parallel, with a short deadline. */
   async probeAll(): Promise<void> {
     await Promise.all([...this.byName.keys()].map((n) => this.probe(n)));
   }
 
-  /**
-   * Identity handshake, once, at startup.
-   *
-   * There's really only one reason to call this: checking that the models you
-   * mapped are ones they actually offer. A mapping that points at nothing is a
-   * typo, and otherwise it surfaces as a 404 from someone else's machine at
-   * whatever hour it first gets used.
-   */
-  /** Does this peer advertise a capability? False until a hello has landed,
-   *  which is the safe answer: we would rather not offer a feature than send a
-   *  request that fails in a way we have to guess about. */
+  /** Does this peer advertise a capability? False until a hello has landed. */
   supports(name: string, cap: string): boolean {
     return this.caps.get(name)?.has(cap) === true;
   }
 
+  /** Handshake at startup; mainly checks that the models we map are ones they offer. */
   async helloOnce(name: string): Promise<void> {
     const peer = this.byName.get(name);
     if (!peer) return;
@@ -436,12 +323,7 @@ export class PeerRegistry {
       if (hi.protocol !== undefined && hi.protocol !== 1 && hi.protocol !== 2) {
         this.log.warn("peer.protocol", { peer: name, theirs: hi.protocol, ours: 2 });
       }
-      // What this peer can do beyond serving chat. Absent on an older node,
-      // which is the whole point: capability is ASKED FOR, not inferred from
-      // how a missing route happens to fail. In the field an older peer answers
-      // 401 rather than 404 — the unknown path falls through to a passthrough
-      // that only trusts local callers — so a status-code heuristic would have
-      // read "no such feature" as "bad credentials".
+      // Capabilities are asked for, never inferred from how a missing route fails.
       this.caps.set(name, new Set(hi.capabilities ?? []));
     } catch {
       // Not fatal. A peer that's down at startup gets checked again when it next

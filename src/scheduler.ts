@@ -1,37 +1,10 @@
 /**
- * Admission control in front of one inference backend.
+ * Admission control in front of one backend. Order is one score, lowest first: lane
+ * priority, minus a warm bonus, minus aging. No preemption: a running job always finishes.
  *
- * A GPU fits one model at a time, so unserialized requests thrash: each evicts
- * the other's weights and pays the load tax again. This runs work N at a time,
- * N=1 unless you've got memory to spare, and favours interactive lanes without
- * starving the slow ones.
- *
- * One priority score decides order, lowest first, folding together:
- *
- *   - lane priority     a chat turn beats a batch render
- *   - warm preference   drain the loaded model before swapping
- *   - aging             a second of waiting buys a point of priority
- *
- * No preemption. A running job always finishes, and priority only matters at
- * dispatch. Killing a half-done render to start a chat throws away every
- * GPU-second already spent on it.
- *
- * How many jobs one model may hold is the model's own number when it declares
- * one, and the backend's `concurrency` when it does not — in EITHER direction.
- * vLLM behind llama-swap serves 32 sequences at once and says 32; a llama.cpp
- * entry on the same seat started with `--parallel 2` says 2, and gets 2 even
- * where the backend's number is higher. One port, one GPU, different real
- * ceilings depending on what is loaded.
- *
- * Above `concurrency` the raise applies only to the SAME model: extra jobs go
- * to what is already resident, never to a second model. That is the whole
- * safety property — batching is free once weights are loaded, and a swap is
- * exactly as expensive as it always was.
- *
- * `offbox` jobs dispatch immediately and never hold a slot, since they run on
- * someone else's hardware and the local GPU isn't what they're waiting for.
- * They still count against the caller's cap, otherwise sending work to a peer
- * would be a free way around it.
+ * A model's declared slot count overrides the backend's `concurrency` either way; a raise
+ * above it only admits more of the model already running, so a swap stays serialized.
+ * `offbox` jobs hold no slot but still count against the caller's cap.
  */
 import { randomUUID } from "node:crypto";
 
@@ -60,78 +33,22 @@ export interface SchedulerOptions {
   /** What's loaded right now, for display in capacity(). Return null if you
    *  don't know. */
   resident?: () => string | null;
-  /**
-   * Is this model warm? Defaults to comparing against `resident`.
-   *
-   * A predicate because "the one resident model" is a llama-swap idea. Ollama
-   * keeps a set resident under keep_alive and serves them together, so there is
-   * no single name to compare against and every member deserves the bonus.
-   */
+  /** Is this model warm? A predicate, since ollama keeps a whole set resident. */
   warm?: (model: string) => boolean;
-  /**
-   * Jobs this ONE model may hold at once — its real slot count, whether that is
-   * above the backend's `concurrency` or below it.
-   *
-   * Above: vLLM through llama-swap answers 32 requests in about the time it
-   * takes to answer one, so serializing them wastes the reason it is there.
-   * Below: llama.cpp entries on one swapping seat get their own `--parallel`,
-   * and a model with 2 slots behind a backend that says 4 has the extra two
-   * queue INSIDE llama.cpp, where this scheduler counts them as running.
-   *
-   * null (the default) means "the backend's concurrency", which is every model
-   * that has not been told otherwise.
-   */
+  /** Jobs this one model may hold at once, above or below the backend's `concurrency`; null defers to it. */
   slots?: (model: string) => number | null;
   /** Tokens this model's running jobs may hold between them (summed `tokens`), or null for no limit. */
   pool?: (model: string) => number | null;
-  /**
-   * The id a model actually occupies the backend under, for the ONE question
-   * this scheduler asks about model identity: would running these two together
-   * force a swap?
-   *
-   * Identity by default, and identity is right for every id that means its own
-   * model. It is wrong for several advertised ids fronting one resident model
-   * (`as`/`params`), where a job on `seat-low` and a job on `seat-off` are the
-   * same weights and can batch — read as different models they never do, and
-   * the model's own slot count above `concurrency` is unreachable.
-   */
+  /** The id a model occupies the backend under, so aliases of one resident model batch together. */
   wire?: (model: string) => string;
-  /**
-   * The backend serves several resident models side by side (ollama), so a
-   * model's ceiling counts only its own jobs. Off, it counts everything running.
-   */
+  /** Several models run side by side (ollama), so a model's ceiling counts only its own jobs. */
   coresident?: boolean;
   /** Fires whenever the job list changes, for status surfaces. */
   onChange?: (jobs: JobView[]) => void;
-  /**
-   * Hardware this backend consumes, and the arbiter it competes in.
-   *
-   * Both or neither. With them, a job is admitted only once every named
-   * resource is free of OTHER backends, and they are held until this backend
-   * has nothing running. Without them — the default, and every config that
-   * predates the feature — admission is exactly what it was.
-   *
-   * Note the grain: the holder is the backend, not the job. `concurrency`
-   * already says how much work may run here at once, and a second job must not
-   * have to re-acquire what the first is already holding.
-   */
+  /** Hardware this backend consumes and the arbiter it competes in; both or neither. Held per backend, not per job. */
   resources?: readonly string[];
   arbiter?: ResourceArbiter;
-  /**
-   * Make the resources actually usable, once acquired and before the first job
-   * runs.
-   *
-   * Winning the arbitration means no other backend is RUNNING on this hardware.
-   * It does not mean the hardware is free: a swapping backend that finished a
-   * minute ago still has its weights resident, and on a card sized for one
-   * model that is the whole of it. So something has to tell the neighbours to
-   * let go, and only the caller knows how to ask.
-   *
-   * Awaited, so eviction happens before the load rather than racing it. Costly
-   * — an unload plus the next cold load — which is exactly why it is gated on
-   * winning the arbitration rather than done speculatively. If it rejects, the
-   * job fails instead of running on hardware that was never actually freed.
-   */
+  /** Clear neighbours' weights off the hardware once acquired, before the first job runs. A rejection fails the job. */
   evict?: () => Promise<void>;
 }
 
@@ -242,23 +159,9 @@ export class Scheduler {
   private readonly queued: Job[] = [];
   private readonly running = new Set<Job>();
   private readonly offbox = new Set<Job>();
-  /**
-   * Whether we are currently holding our declared hardware.
-   *
-   * Kept ACROSS the gaps between our own jobs. Releasing on every idle moment
-   * and re-taking it on the next job is what let a busy backend re-acquire
-   * before a waiting neighbour was ever considered, and it also meant paying
-   * the eviction dance again for work that was already ours.
-   */
+  /** Whether we hold our declared hardware, kept across gaps between our own jobs. */
   private holding = false;
-  /**
-   * The eviction for the turn we are in, or null when there is nothing to wait
-   * for.
-   *
-   * One promise per HOLD rather than per job. Clearing the neighbours off a
-   * card is a property of taking the card, and every job admitted during that
-   * turn has to wait for it — not just the one that happened to trigger it.
-   */
+  /** The eviction for the current hold, which every job admitted in that hold awaits. */
   private preparing: Promise<void> | null = null;
 
   constructor(opts: SchedulerOptions) {
@@ -274,17 +177,11 @@ export class Scheduler {
     this.wireOf = opts.wire ?? ((m) => m);
     this.coresident = opts.coresident ?? false;
     this.onChange = opts.onChange;
-    // Only arbitrate when there is both something to hold and somewhere to hold
-    // it. Half of the pair is a config that meant to exclude and silently does
-    // not, so treat it as neither and let config validation be the place that
-    // complains.
+    // Arbitrate only with both resources and an arbiter; config validation catches half a pair.
     this.resources = opts.arbiter ? (opts.resources ?? []) : [];
     this.arbiter = this.resources.length > 0 ? opts.arbiter : undefined;
     this.evict = opts.evict;
-    // A queue blocked on hardware someone else holds has nothing of its own to
-    // finish, so its usual triggers — a submission, a completion — never fire.
-    // Subscribing here rather than leaving it to whoever built us means the
-    // wake-up cannot be forgotten at a call site.
+    // A queue blocked on someone else's hardware wakes when it is released.
     this.arbiter?.onRelease(() => this.pump());
   }
 
@@ -354,12 +251,7 @@ export class Scheduler {
     return out;
   }
 
-  /**
-   * The ceiling for one model: the slot count it declares, else the backend's
-   * own concurrency. A declared number wins in both directions — that is the
-   * point of it, since the backend's number cannot be right for every model on
-   * a seat whose entries were started with different `--parallel`.
-   */
+  /** A model's ceiling: its declared slot count, else the backend's concurrency. */
   private limitFor(model: string): number {
     return this.slotsOf(model) ?? this.concurrency;
   }
@@ -373,41 +265,15 @@ export class Scheduler {
     return n;
   }
 
-  /**
-   * May this job start right now?
-   *
-   * The model's own ceiling is checked FIRST, because it can be lower than
-   * `concurrency`: asking "below the backend's number?" first would wave
-   * through a third job for a model that only has two slots. Under both
-   * numbers it always may, which is the old rule untouched. Above
-   * `concurrency`, only a batching model may go, and only alongside its own
-   * kind: one foreign job running means the next admission would force a swap,
-   * and a swap under load is the thrash this queue exists to prevent.
-   */
-  /**
-   * Could this backend take work at all right now, hardware included?
-   *
-   * False only while ANOTHER backend holds a resource this one declared. What
-   * we hold ourselves does not block us — that is what `concurrency` is for.
-   */
+  /** False only while ANOTHER backend holds a resource this one declared. */
   private hardwareFree(): boolean {
     if (!this.arbiter) return true;
-    // Already ours: our own concurrency governs how much runs on it, not the
-    // arbiter — except once our turn is up and a neighbour is waiting, when we
-    // stop admitting so the jobs in flight can finish and hand the card over.
-    // Without that a saturated backend never reaches an idle moment and never
-    // yields, which is the starvation this policy exists to bound.
+    // Once our turn is up and a neighbour waits, stop admitting so the card can be handed over.
     if (this.holding) return !this.arbiter.owed(this.resources, this);
     return this.arbiter.mayTake(this.resources, this);
   }
 
-  /**
-   * Publish what we are blocked on, so the arbiter can order the waiters.
-   *
-   * The claim is our oldest queued job's enqueue time, which is the same clock
-   * the aging in `score` uses. Cleared the moment we hold the hardware or have
-   * nothing waiting for it, so a claim can never outlive the work behind it.
-   */
+  /** Publish our oldest blocked job's enqueue time as our claim, or clear it. */
   private updateClaim(): void {
     if (!this.arbiter) return;
     if (this.holding || this.queued.length === 0) {
@@ -427,23 +293,13 @@ export class Scheduler {
     this.arbiter?.release(this);
   }
 
-  /**
-   * Nothing is running here any more. Keep the card, or hand it on?
-   *
-   * Keeping it while we still have work is the whole of the locality: the next
-   * job goes onto hardware already cleared for us, with our weights still on
-   * it. We give it up when we have nothing left to run, or when our turn is up
-   * and somebody has been waiting.
-   */
+  /** Nothing is running: keep the hardware while we have work, unless our turn is up and someone waits. */
   private settleHold(): void {
     if (!this.arbiter || !this.holding) return;
     if (this.queued.length === 0 || this.arbiter.owed(this.resources, this)) this.dropHold();
   }
 
-  /**
-   * Would this job overflow the context its model shares between running jobs?
-   * A job alone always fits: whether one request fits the window is unfit()'s call.
-   */
+  /** Would this job overflow its model's shared pool? A job alone always fits. */
   private overPool(job: Job): boolean {
     const pool = this.poolOf(job.model);
     if (pool === null) return false;
@@ -458,11 +314,12 @@ export class Scheduler {
     return sharing && used + job.tokens > pool;
   }
 
+  /**
+   * May this job start now? Its model's ceiling first, then the backend's; above
+   * `concurrency` only alongside jobs of the same model.
+   */
   private canAdmit(job: Job): boolean {
-    // Before this backend's own ceilings, because they are about how much work
-    // it may run and this is about whether it may run at all. `available`
-    // ignores what we already hold, so a backend with a job in flight is not
-    // blocked by itself.
+    // Hardware first; our own hold never blocks us.
     if (!this.hardwareFree()) return false;
     if (this.heldBy(job.model) >= this.limitFor(job.model)) return false;
     if (this.overPool(job)) return false;
@@ -473,28 +330,15 @@ export class Scheduler {
   }
 
   /**
-   * Capacity as it applies to ONE model, which is what a peer scoring its own
-   * copy actually asked. Identical to `capacity()` for anything unbatched.
-   *
-   * A batching model reports its own ceiling, but only while the backend is
-   * idle or already busy with that same model. With something else running, the
-   * honest answer is the backend's plain concurrency: this job cannot batch
-   * with what is loaded, it has to wait for it.
-   *
-   * A model whose ceiling is LOWER reports it unconditionally. There is no
-   * arrangement of the backend that gives it more slots than it has, so the
-   * peer asking must never be told the backend's larger number — that is the
-   * over-commit this exists to stop.
+   * Capacity for one model, as a peer asks it. A raised ceiling applies only while the backend
+   * is idle or busy with that same model; a lower one always applies.
    */
   capacityFor(model: string): ReturnType<Scheduler["capacity"]> {
     const cap = this.slotCapacityFor(model);
     return cap.free > 0 && this.poolFull(model) ? { ...cap, free: 0 } : cap;
   }
 
-  /**
-   * Is less than an even share of this model's pool left? A caller's job size is
-   * unknown here, so free slots behind a nearly full pool would only queue.
-   */
+  /** Is less than an even share of this model's pool left? Free slots behind it would only queue. */
   private poolFull(model: string): boolean {
     const pool = this.poolOf(model);
     if (pool === null) return false;
@@ -543,12 +387,7 @@ export class Scheduler {
     const queued: Record<string, number> = {};
     for (const lane of Object.keys(this.lanes)) queued[lane] = 0;
     for (const j of this.queued) queued[j.lane] = (queued[j.lane] ?? 0) + 1;
-    // A backend waiting on hardware someone else holds has NO free slots, and
-    // saying otherwise is not a display quirk — this number is what a peer
-    // scores us on. Reporting 16 free while the card is held sends us work that
-    // then sits in the queue, which is the over-commit the whole thing exists to
-    // prevent. `slots` still says what this backend is, `free` says what it can
-    // do this second.
+    // No free slots while another backend holds our hardware: peers score us on this number.
     const free = this.hardwareFree() ? Math.max(0, this.concurrency - this.running.size) : 0;
     return {
       // Never fewer slots than there are jobs holding them. A batching model
@@ -587,20 +426,9 @@ export class Scheduler {
     if (i >= 0) this.queued.splice(i, 1);
   }
 
-  /**
-   * Run a job, settle its caller.
-   *
-   * Release comes before resolve, so a caller that turns around and schedules
-   * again sees an accurate count. The other order leaves a finished job counting
-   * against its own caller for a microtask. Invisible over a network, very
-   * visible in a test.
-   */
+  /** Run a job and settle its caller; release comes before resolve, so the caller's count is accurate. */
   private execute(job: Job, release: () => void): void {
-    // The eviction for the turn this job was admitted into, captured here
-    // while we are still synchronous with `pump`. Every job of a turn takes
-    // the same promise, so one admitted alongside the job that triggered the
-    // eviction waits for it too — and reading the field later would miss it,
-    // since a failed eviction clears it on the very next microtask.
+    // Captured synchronously: every job of a hold awaits that hold's eviction.
     const prepared = this.preparing;
     void Promise.resolve()
       .then(() => prepared ?? undefined)
@@ -622,10 +450,8 @@ export class Scheduler {
   }
 
   /**
-   * The job to start now, or null. Strictly the best-scoring job: letting a
-   * lower-ranked one batch ahead would invert priority. One exception on a
-   * coresident backend: a job blocked only by its own model's ceiling is passed
-   * over, since it is not waiting for the backend. Any other block stops the search.
+   * The best-scoring job if it can start, else null. On a coresident backend a job blocked
+   * only by its own model's ceiling is passed over.
    */
   private next(): Job | null {
     const now = Date.now();
@@ -664,11 +490,7 @@ export class Scheduler {
       // TURN, not once per job: a backend that already holds its resources had
       // them cleared when it took them.
       if (this.arbiter !== undefined && !this.holding) {
-        // Checked, not assumed. `canAdmit` proved the hardware was ours to take
-        // and nothing awaits between there and here, so this cannot be false
-        // today — but a false means we would be running on hardware somebody
-        // else holds, which is the one outcome `resources` exists to prevent.
-        // Better to leave the job queued and try again on the next release.
+        // canAdmit proved this free; if acquire still fails, leave the job queued.
         if (!this.arbiter.acquire(this.resources, this)) {
           // Put it back exactly as it was. It has not been added to `running`
           // yet, so restoring the queue and the two fields is the whole undo.
@@ -694,18 +516,8 @@ export class Scheduler {
   }
 
   /**
-   * Clear the neighbours off the hardware we have just taken.
-   *
-   * Winning the arbitration means nobody else is RUNNING on it; it does not
-   * mean the hardware is free, because whatever ran last still has its weights
-   * there. The promise is stored rather than awaited here so `pump` stays
-   * synchronous — every job dispatched during this turn awaits it in
-   * `execute`.
-   *
-   * A failure means the card was never actually cleared, so the hold is given
-   * up rather than kept: the jobs that awaited this promise fail (they never
-   * reached the backend), and the next attempt starts a fresh turn and tries
-   * the eviction again.
+   * Clear neighbours off hardware we just took. Stored, not awaited, so `pump` stays sync;
+   * a failure drops the hold so the next attempt evicts again.
    */
   private beginPrepare(): void {
     if (!this.evict) {
@@ -720,12 +532,7 @@ export class Scheduler {
     });
   }
 
-  /**
-   * Admit a job, resolve with `run`'s result once it's had its turn.
-   *
-   * `run` is the caller's upstream call as-is, and it only gets invoked when
-   * scheduled, so nothing reaches the backend out of turn.
-   */
+  /** Admit a job; `run` is invoked only when it is scheduled. */
   submit<T>(spec: JobSpec, run: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const job: Job<T> = {
@@ -782,12 +589,7 @@ export class Scheduler {
       }
 
       if (job.offbox) {
-        // Off-box work needs a ceiling too. It holds no slot and skipped the
-        // check below, so with maxPerCaller off (the default when there are no
-        // apiKeys) outstanding peer requests were unbounded and a caller could
-        // just keep opening sockets. Count only off-box jobs here, so a peer
-        // failing over to runLocal never gets refused by the depth its own
-        // off-box job added.
+        // Off-box jobs are capped per lane too, counting only off-box work.
         let offboxDepth = 0;
         for (const j of this.offbox) if (j.lane === job.lane) offboxDepth++;
         if (offboxDepth >= this.maxPerLane) {

@@ -1,14 +1,4 @@
-/**
- * The shape of `/ui/data`, written down.
- *
- * The old page was a string and nothing type-checked what it consumed, so a
- * renamed field on the server surfaced as a blank panel rather than a failure.
- * That is the whole reason these live here: `serveUi` builds the payload from
- * `networkView()`, `pool.jobs()` and `overrideView()`, and this file is the
- * contract between them and the page. Fields the server sends but nothing on
- * the page reads are deliberately omitted rather than typed as `unknown` —
- * adding one here should mean somebody is about to draw it.
- */
+/** The shape of `/ui/data`: the contract between the server's payload and the page. Only fields the page reads. */
 
 /** A declared path on a backend that fronts something that is not OpenAI-shaped. */
 export interface Route {
@@ -19,13 +9,7 @@ export interface Route {
   queue: boolean;
 }
 
-/**
- * What a model can take, learned from the backend running it.
- *
- * Every field optional and absent-when-unknown, which the page must render as
- * "not asked yet" rather than "no limit" — a model that has never been loaded
- * reports nothing at all, and drawing that as unlimited is the one wrong answer.
- */
+/** What a model can take. Absent means not asked yet, never "no limit". */
 export interface ModelStats {
   context?: number;
   vision?: boolean;
@@ -47,27 +31,11 @@ export interface Backend {
   url?: string;
   kind?: string;
   loaded?: string[];
-  /**
-   * Models being read off the disk right now.
-   *
-   * A cold load is tens of seconds — 48 of them for a 32k model here — and it
-   * is the reason a request that looks stuck is not stuck. Empty where the
-   * backend cannot report it, which is why the page draws it only when there
-   * is something in it.
-   */
+  /** Models being read off the disk right now; drawn only when the backend reports it. */
   loading?: string[];
   /**
-   * Resident models whose weights are not all on the card.
-   *
-   * A permanent condition rather than a startup cost: with experts on the CPU
-   * every token pays, not just the first. Invisible otherwise — the model is
-   * loaded, the card is busy, every number looks normal, and the thing is
-   * simply slow.
-   *
-   * Says WHERE they were assigned, not what medium serves them. Weights are
-   * mmap'd from the file, so a model too big for host RAM is read off the disk
-   * on every generation — which is a measurement on that machine, not something
-   * the launch command knows.
+   * Resident models with weights assigned off the card (e.g. experts on the CPU), which slows
+   * every token. Says where they were assigned, not which medium serves them.
    */
   offload?: {
     model: string;
@@ -83,14 +51,7 @@ export interface Backend {
   evicts?: boolean;
   /** False when it cannot report warm state at all, which is not the same as cold. */
   knowsWarm?: boolean;
-  /**
-   * False when nothing has come back from it in a minute. Not a health check.
-   *
-   * ABSENT where silence means nothing — a backend hearth does not hold an
-   * event stream to is never contacted unless something is being asked of it.
-   * So `undefined` is "we cannot tell", `false` is "we are watching and it has
-   * gone quiet", and only the second is worth drawing.
-   */
+  /** False when nothing has come back in a minute; absent where hearth cannot tell. Not a health check. */
   answering?: boolean;
   slots?: number;
   free?: number;
@@ -99,58 +60,23 @@ export interface Backend {
   resources?: string[];
   /** Non-OpenAI endpoints it fronts. A route backend has these and no `serves`. */
   routes?: Route[];
-  /**
-   * Requests being proxied through us right now WITHOUT being queued.
-   *
-   * Image generation arrives on `/upstream/<model>/generate`, which hearth
-   * forwards verbatim and deliberately does not schedule. That is a decision
-   * about admission, and it used to be an accidental decision about visibility
-   * too: the backend drew idle and its card drew free while the GPU was flat
-   * out. These are real in-flight requests with no job behind them, so they
-   * light an edge but never claim a slot, a queue position or a card.
-   */
+  /** Requests proxied through us unqueued (e.g. image generation): they light an edge but hold no slot or card. */
   proxying?: { id: string; model: string | null }[];
   /**
-   * A backend's OWN busy state, read from a declared `activity:` path — for one
-   * hearth forwards to but does not schedule (ComfyUI's `/queue`). Present only
-   * when the path was declared.
-   *
-   * `ok: false` is "we could not read it" — an unreachable backend, a missing
-   * field — and the page draws it as unknown, NEVER as idle: a failed reading is
-   * not evidence the thing is quiet. `running > 0` lights the node and its card
-   * edge amber, exactly like forwarded work, and never claims the card: this is
-   * work the arbiter cannot see, so it must not draw a holder for it. `queued`
-   * is nested here on purpose, away from the backend's own `queued` above, which
-   * means hearth's admission queue and would be misread as the same number.
+   * A backend's own busy state from a declared `activity:` path. `ok: false` is unknown, never
+   * idle; `running > 0` lights it amber without claiming the card.
    */
   activity?: { running: number; queued?: number; ok: boolean };
 }
 
-/**
- * One piece of hardware, and the backends that take turns on it.
- *
- * `holder` is who is RUNNING on it, not whose weights are resident: the arbiter
- * frees a card the moment the last job on it finishes, so free-and-still-loaded
- * is the normal resting state and the page must not draw it as busy.
- */
+/** One piece of hardware. `holder` is who is running on it, not whose weights are resident. */
 export interface Resource {
   name: string;
-  /**
-   * Synthesised by the page, not sent by the server: the host's own memory,
-   * standing in for "not the card". It exists only while some resident model
-   * has weights over there, and it is the one node here that is not hardware
-   * the operator declared.
-   */
+  /** Synthesised by the page: host memory holding some resident model's weights. */
   host?: { detail: string; cards: string[] };
   /** What to draw it as. Never reaches admission. */
   kind?: "gpu" | "cpu" | "other";
-  /**
-   * Several backends may use it at once, so it is not arbitrated at all.
-   *
-   * `holder` is therefore always null for one of these — correctly: nobody is
-   * holding it, several things are using it. Drawing that as "free" would be
-   * the same lie the console used to tell about forwarded work.
-   */
+  /** Used by several backends at once and not arbitrated, so `holder` is always null. */
   shared?: boolean;
   holder: string | null;
   backends: string[];
@@ -207,16 +133,7 @@ export interface Net {
 }
 
 export interface Job {
-  /**
-   * Unique per job, and the only safe key for one.
-   *
-   * The obvious composite — model + caller + since — is NOT unique: two
-   * concurrent requests for the same model from the same caller, submitted in
-   * the same millisecond, collide. React then renders ONE of them and silently
-   * drops the rest, so the graph drew a single particle for a pair of jobs and
-   * the queue table was short a row, while the count beside them (taken from
-   * the array, not the rendered list) correctly said two.
-   */
+  /** Unique per job and the only safe React key; model + caller + since can collide. */
   id: string;
   lane: string;
   model: string;
@@ -242,22 +159,11 @@ export interface Sample {
   t: number;
   queued: number;
   residents?: string[];
-  /**
-   * Models with a job RUNNING on a local backend at the instant of the reading.
-   * Residency says what is loaded; this says what is being used. A model can
-   * sit warm for an hour and never appear here.
-   */
+  /** Models with a job running at the instant of the reading, as opposed to merely loaded. */
   active?: string[];
 }
 
-/**
- * One request that ran on a local backend, recorded when it ENDED.
- *
- * The samples above cannot see a call that starts and finishes between two
- * readings, and cannot place a boundary more finely than 5s. This can: it is
- * the same record llama-swap's activity page keeps, made here so it exists for
- * every backend kind and for exactly the traffic that went through the queue.
- */
+/** One request that ran on a local backend, recorded when it ended; catches calls shorter than a sample. */
 export interface Call {
   /** When it finished. Start is `t - ms`. */
   t: number;
@@ -281,14 +187,7 @@ export interface Overrides {
   yaml: string;
 }
 
-/**
- * Where a request for one id may go, and what happens when it cannot.
- *
- * A peer mapping says a request MAY leave this box; this says whether it will,
- * and whether home is still an option if the peer cannot take it. The two are
- * separate settings and the difference between them is the difference between
- * a slow request and a 404.
- */
+/** Where a request for one id may go, and whether it can fall back home if the peer cannot take it. */
 export interface Routing {
   policy: "local" | "peer" | "spillover" | "fastest";
   /** Who may serve it, in preference order. Empty means anyone that maps it. */
@@ -322,28 +221,12 @@ export interface UiData {
   net: Net;
   q: { jobs: Job[]; capacity: Capacity };
   hist: Sample[];
-  /**
-   * Advertised id -> the `as` it is sent to the backend under.
-   *
-   * Used to detect variants: if aliases[X] === P and P is itself in
-   * net.available, then X is a variant of P (same weights, different advertised
-   * name). An `as` naming something not in net.available is a rename, not a
-   * variant — those rows stand alone.
-   */
+  /** Advertised id -> its `as`. X is a variant of P when aliases[X] === P and P is advertised. */
   aliases?: Record<string, string>;
   /** Advertised id -> how it routes. Absent for a node that declares no models. */
   routing?: Record<string, Routing>;
-  /**
-   * Every request that ran on a local backend and ended inside the same
-   * 10-minute window as the samples, oldest first.
-   */
+  /** Every local request that ended inside the samples' 10-minute window, oldest first. */
   calls?: Call[];
-  /**
-   * How many samples the server's ring holds.
-   *
-   * The stream appends new samples one at a time, so without this the page
-   * would keep every sample it ever saw and slowly disagree with the server
-   * about what "the last ten minutes" means.
-   */
+  /** Samples the server's ring holds, so the streamed page trims to the same window. */
   histKeep?: number;
 }

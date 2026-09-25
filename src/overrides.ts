@@ -1,29 +1,7 @@
 /**
- * Runtime edits to who serves what: a peer's model map, and the route that
- * decides whether a request actually goes there.
- *
- * Those two are one feature and it took a while to admit it. `peers[].models`
- * is only an allowlist — adding an entry there says a request MAY leave the
- * machine, never that it will. Without a matching `models.<id>` route the
- * policy stays local and the mapping does nothing at all, which is exactly the
- * shape of bug where someone maps a friend's new model, watches every request
- * run at home, and concludes federation is broken. So both halves move together
- * or neither does.
- *
- * PERSISTED ONLY ON REQUEST, and only when `stateFile` is configured. An edit
- * is live immediately and gone on restart unless somebody presses Save, which
- * is the split that matters: a link tried on a hunch should not outlive the
- * hunch. `yaml()` is still here and still the better destination — a change you
- * want to keep for good belongs in the file that is in version control, not in
- * a sidecar that quietly diverges from it. The sidecar is for the ones you want
- * to survive a reboot before you have decided that.
- *
- * IT MUTATES THE LIVE CONFIG, and that is load-bearing. PeerRegistry keeps
- * references to the very PeerConfig objects in `cfg.peers`, and route decisions
- * read `cfg.models` on every request, so writing through the config is what
- * makes an edit take effect immediately with no cache to invalidate and no
- * second read path to keep in step. The price is that `cfg` no longer tells you
- * what the file said, which is why the baseline below is cloned first.
+ * Runtime edits to a peer's model map and the route that sends work there; both halves move
+ * together, since a mapping alone never routes. Edits mutate the live config (so they apply
+ * at once) and persist only when saved, to the sidecar or the config file.
  */
 import {
   closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync,
@@ -72,15 +50,7 @@ export interface SavedRoute {
   fallbackLocal: boolean;
 }
 
-/**
- * The sidecar, as it is written.
- *
- * Deltas rather than effective state, throughout: `null` means removed, and a
- * key that is absent means the config decides. Storing the full picture would
- * mean an edit to `hearth.yaml` silently doing nothing, because a file written
- * weeks ago would keep overriding it — the exact failure that makes people
- * distrust a second source of truth.
- */
+/** The sidecar: deltas only (`null` removed, absent = config decides), so later config edits still apply. */
 export interface SavedState {
   version: 1;
   savedAt: string;
@@ -90,15 +60,7 @@ export interface SavedState {
   notes?: Record<string, string | null>;
 }
 
-/**
- * Read the sidecar, or null for anything that isn't a usable one.
- *
- * A missing file is the normal first run. A CORRUPT one is louder but still not
- * fatal, deliberately: refusing to start because a convenience file got
- * truncated in a power cut would turn a lost preference into an outage, and the
- * config alone is always a valid way to run. It says so in the log rather than
- * pretending the file was empty.
- */
+/** Read the sidecar, or null. A corrupt one is logged, not fatal: the config alone always runs. */
 export function readState(path: string, log: Logger): SavedState | null {
   let text: string;
   try {
@@ -127,17 +89,7 @@ export function readState(path: string, log: Logger): SavedState | null {
   }
 }
 
-/**
- * Write it, or delete it when there is nothing left to say.
- *
- * Via a temp file and a rename, so a crash mid-write leaves the previous state
- * rather than half of this one — the file is read exactly once, at startup, and
- * that is the worst possible moment to find it truncated.
- *
- * An EMPTY state removes the file instead of writing `{}`. Reverting everything
- * and pressing Save should leave no trace: an empty sidecar sitting next to the
- * config is a thing someone finds later and has to reason about.
- */
+/** Write it atomically via a temp file, or delete it when the state is empty. */
 export function writeState(path: string, state: SavedState): void {
   const empty =
     Object.keys(state.share).length === 0 &&
@@ -182,24 +134,10 @@ export class Overrides {
   private readonly baseMaps: Map<string, Record<string, string>>;
   private readonly baseRoutes: Map<string, ModelRoute>;
 
-  /**
-   * JSON of the last state written or restored, for the unsaved check. A blob
-   * rather than a structure because the only question asked of it is "same?".
-   *
-   * Seeded with the EMPTY state rather than "", or a node with nothing
-   * overridden at all reports unsaved work — there is no sidecar and nothing to
-   * put in one, and offering to save that is offering to save nothing.
-   */
+  /** JSON of the last state written or restored, seeded empty, for the unsaved check. */
   private savedBlob: string;
 
-  /**
-   * The config file's mtime as we last saw it, for the clobber check.
-   *
-   * The one failure a config writer has that a sidecar does not: you are ssh'd
-   * into the box editing the file while somebody presses Save in a browser, and
-   * one of you silently loses. Comparing this before writing turns that into a
-   * refusal with an explanation.
-   */
+  /** The config file's mtime when we last read it, to refuse a Save over someone's edit. */
   private configMtimeMs = 0;
 
   constructor(private readonly cfg: HearthConfig) {
@@ -226,18 +164,7 @@ export class Overrides {
     else notes[model] = text.trim();
   }
 
-  /**
-   * Put a saved state back, after the baseline above has been taken.
-   *
-   * Order is the whole trick. The constructor snapshots what the FILE said, and
-   * this runs afterwards, so restored edits still read as differing from the
-   * config — the page keeps offering the YAML for them, and "saved" never
-   * quietly becomes "in the config".
-   *
-   * Applied directly rather than through link(), which merges and defaults. A
-   * restore has to reproduce what was saved, not re-derive it from rules that
-   * may have changed since.
-   */
+  /** Re-apply a saved state after the baseline is taken, so restored edits still show as differing. */
   restore(state: SavedState, log: Logger): void {
     for (const [name, entries] of Object.entries(state.maps)) {
       const p = this.cfg.peers.find((x) => x.name === name);
@@ -262,14 +189,7 @@ export class Overrides {
     this.markSaved(state);
   }
 
-  /**
-   * Everything overridden right now, in the shape it is stored.
-   *
-   * Share lives in Controls rather than here, so it is passed in — this class
-   * owns the config and knows nothing about lending, and wiring it to Controls
-   * to save one argument would give two objects a reason to know about each
-   * other for no gain.
-   */
+  /** Everything overridden right now, as stored. Share overrides come from Controls. */
   pending(share: Record<string, boolean>): SavedState {
     const c = this.changes();
     const maps: Record<string, Record<string, string | null>> = {};
@@ -285,22 +205,9 @@ export class Overrides {
   }
 
   /**
-   * Write the runtime changes into the config file itself.
-   *
-   * This is where a saved change belongs, and the reason is the same one that
-   * made a sidecar look reasonable and then wrong: there should be ONE record
-   * of what this node does. A second file holding half the answer means the
-   * page has to keep explaining the difference, which it did, in the form of a
-   * block that never stopped asking to be dealt with.
-   *
-   * Edited as a Document rather than re-serialised from the parsed config,
-   * which is the whole reason this is safe to do at all: the comments are the
-   * valuable part of a config someone maintains by hand, and round-tripping
-   * through parseConfig would return a file with every one of them gone.
-   *
-   * Four ways it refuses rather than writes, in order of how likely they are:
-   * somebody edited the file since we started, a peer would be left mapping
-   * nothing, the result would not load, or the file is not writable.
+   * Write the runtime changes into the config file, editing the YAML document so comments and
+   * styles survive. Refuses if the file changed since load, a peer would map nothing, the
+   * result would not load, or the file is not writable.
    */
   saveConfig(share: readonly string[]): void {
     const path = this.cfg.configPath;
@@ -319,10 +226,7 @@ export class Overrides {
     } catch (e) {
       throw new ConfigError(`cannot read ${path}: ${String(e)}`);
     }
-    // Not a lock, and it does not pretend to be. It catches the case that
-    // actually happens — an edit made hours ago in another window — rather than
-    // a genuine race, which would need the file locked for as long as somebody
-    // has an editor open.
+    // Catches an edit made elsewhere since we loaded, not a true race; this is not a lock.
     if (this.configMtimeMs !== 0 && mtime !== this.configMtimeMs) {
       throw new ConfigError(
         `${path} has changed on disk since hearth started — saving would overwrite that edit. ` +
@@ -333,21 +237,10 @@ export class Overrides {
     const doc = parseDocument(text);
     const changes = this.changes();
 
-    /**
-     * Replace a list, keeping whether it was written inline or as a block.
-     *
-     * doc.set() with a plain array builds a fresh node, and a fresh node has no
-     * opinion about style, so yaml renders it as a block. `share: [a, b]` came
-     * back as three lines — a diff on a line we did edit, but rewritten into a
-     * shape the author had deliberately not used.
-     */
+    /** Replace a list, keeping its flow or block style. */
     const setList = (path: string[], value: string[]) => {
       const before = doc.getIn(path, true) as { flow?: boolean } | undefined;
-      // createNode, not the plain array: assigning an array stores the array
-      // itself, so there is no node to carry the style and yaml falls back to a
-      // block. Reading it back gives you the Array, and setting .flow on that
-      // does exactly nothing — which is how the first attempt at this passed
-      // review and failed the test.
+      // createNode, so there is a node to carry `.flow`.
       const node = doc.createNode(value) as { flow?: boolean };
       if (before && typeof before.flow === "boolean") node.flow = before.flow;
       if (path.length === 1) doc.set(path[0]!, node);
@@ -355,10 +248,7 @@ export class Overrides {
     };
 
     if ([...share].sort().join(",") !== [...this.cfg.share].sort().join(",")) {
-      // The file's own order for everything still shared, then whatever is new.
-      // Sorting was deterministic and also reordered a list somebody had
-      // grouped on purpose — one more line changed by a save that did not mean
-      // to change it.
+      // Keep the file's order for existing entries, then append new ones.
       setList(["share"], [
         ...this.cfg.share.filter((m) => share.includes(m)),
         ...[...share].filter((m) => !this.cfg.share.includes(m)).sort(),
@@ -368,10 +258,7 @@ export class Overrides {
     for (const m of changes.maps) {
       const peers = doc.get("peers") as { items?: unknown[] } | undefined;
       const i = this.cfg.peers.findIndex((p) => p.name === m.peer);
-      // Not skipped quietly. A `peers:` written as an anchor or an alias rather
-      // than a literal sequence would drop every mapping edit here, and rebase()
-      // would then mark it all saved — the page reporting success over a file
-      // that never changed, which is the worst outcome this code has.
+      // Refuse rather than skip: an anchored `peers:` would drop the edit and still report saved.
       if (i < 0 || !peers?.items?.[i]) {
         throw new ConfigError(
           `cannot find peer "${m.peer}" as a plain entry under peers: in ${path} — ` +
@@ -400,15 +287,7 @@ export class Overrides {
     }
     if (changes.notes.length && Object.keys(this.cfg.notes ?? {}).length === 0) doc.delete("notes");
 
-    // Match the file's own flow spacing rather than impose a house style. This
-    // is rendered whole, so whichever setting is wrong for the file rewrites
-    // every line using the other one — `[a, b]` becoming `[ a, b ]`, or the
-    // reverse — and those are lines nobody edited, in a config that is probably
-    // in a repo. Both directions have now happened to the same file.
-    //
-    // A file mixing the two still churns the minority style once and is then
-    // consistent, which is the best a whole-document render can do without
-    // diffing its own output.
+    // Match the file's own flow-collection spacing so untouched lines do not churn.
     const out = doc.toString({ flowCollectionPadding: /[[{] \S/.test(text) });
     // The last gate, and the one worth having: our edit has to produce a config
     // that actually loads. A file that parses as YAML and then fails validation
@@ -424,30 +303,12 @@ export class Overrides {
       );
     }
 
-    // Temp file and rename where the DIRECTORY allows it, because a crash
-    // half way through writing a config is a node that will not start.
-    //
-    // It often does not allow it. `ReadWritePaths=/etc/hearth.yaml` under
-    // ProtectSystem=strict makes exactly that file writable and leaves /etc
-    // read-only, so creating a sibling fails with EROFS while the file itself
-    // is perfectly writable — which is the normal case on a hardened unit, not
-    // an edge one. Falling back to writing in place gives up atomicity for a
-    // window measured in microseconds on a file of a few KB, and the
-    // alternative is refusing to save at all on the configuration the README
-    // recommends.
+    // Temp file and rename where the directory is writable; in place where only the file is
+    // (ReadWritePaths under ProtectSystem=strict).
     const tmp = `${path}.hearth-tmp`;
     let staged = false;
     try {
-      // The tmp file's mode becomes the config's mode after the rename, and
-      // writeFileSync defaults to 0666 minus the umask — so a config kept at
-      // 0600 came out world-readable, silently, the first time anyone pressed
-      // Save. This file holds peer tokens and api keys whenever they are
-      // written literally rather than as `env:` references.
-      // Written, flushed to the platter, and only then renamed. writeFileSync
-      // returns once the data is in the page cache, so a rename straight after
-      // it can be durable while the bytes it points at are not — which on a
-      // power loss leaves a zero-length config and a node that will not start.
-      // The whole point of staging is to make that impossible.
+      // Keep the config's mode (it may hold secrets), and fsync before the rename.
       const fd = openSync(tmp, "w", mode & 0o7777);
       try {
         writeFileSync(fd, out);
@@ -473,13 +334,7 @@ export class Overrides {
     this.configMtimeMs = statSync(path).mtimeMs;
   }
 
-  /**
-   * Forget the difference, because the file now says it.
-   *
-   * Called only after a successful write. Without it the page would keep
-   * reporting everything as a runtime change against a baseline taken before
-   * the change was written — the exact nagging this replaced.
-   */
+  /** After a successful write, take the file as the new baseline. */
   rebase(share: readonly string[]): void {
     this.cfg.share = [...share];
     this.baseMaps.clear();
@@ -498,12 +353,7 @@ export class Overrides {
     this.savedBlob = this.blob(state);
   }
 
-  /**
-   * savedAt is excluded: it changes on every call and would make every state
-   * look unsaved a millisecond after it was written. Keys are sorted because
-   * JSON.stringify follows insertion order, and "unsaved" must not depend on
-   * the order somebody happened to click things in.
-   */
+  /** Stable JSON of a state: savedAt excluded, keys sorted. */
   private blob(state: SavedState): string {
     return JSON.stringify({ share: state.share, maps: state.maps, routes: state.routes, notes: state.notes ?? {} }, (_k, v) =>
       v && typeof v === "object" && !Array.isArray(v)
@@ -512,14 +362,7 @@ export class Overrides {
     );
   }
 
-  /**
-   * Point one of our model ids at a peer's, and route it there.
-   *
-   * `policy` and `fallbackLocal` are required rather than defaulted, because
-   * the right default depends on whether we serve the model ourselves — and
-   * that is a question about the backends, which this class does not know. The
-   * caller has the catalog and picks; see the /control route.
-   */
+  /** Map one of our ids to a peer's and route it there. The caller picks `policy` and `fallbackLocal`. */
   link(
     peer: string,
     mine: string,
@@ -540,44 +383,20 @@ export class Overrides {
 
     p.models[mine] = theirs;
 
-    // An empty `peers` list means "anyone who maps it", which is what a fresh
-    // route should say. But a route that NAMES its peers is an operator being
-    // specific, and silently widening it to everyone would route work to boxes
-    // they deliberately left out — so extend the list instead of clearing it.
+    // A route that names its peers gets this one added, never widened to everyone.
     const peers =
       prev && prev.peers.length > 0 && !prev.peers.includes(peer) ? [...prev.peers, peer] : (prev?.peers ?? []);
 
     this.cfg.models[mine] = { ...DEFAULT_ROUTE, ...prev, policy, peers, fallbackLocal };
   }
 
-  /**
-   * Take a mapping back, and the route with it once nothing maps the model.
-   *
-   * The route used to survive if it had come from the config file, on the
-   * reasoning that quietly rewriting the operator's stated intent was worse
-   * than leaving a route that no longer fires. That was wrong twice over.
-   *
-   * It is not a rewrite. Unlinking the last peer for a model IS the operator
-   * saying to stop sending it away, and leaving `policy: peer` behind with
-   * nothing mapped is not a preserved intention, it is a route that resolves to
-   * "no peer available" on every request forever.
-   *
-   * And it produced a state that could not be saved. parseConfig refuses a
-   * non-local policy that no peer maps — correctly, it can never fire — so the
-   * old behaviour let you reach a perfectly ordinary place in the UI from which
-   * writing the config was impossible, with an error about a line you never
-   * touched. Found by pressing Save on a real box.
-   */
+  /** Remove a mapping, and retire the route once nothing that it names still maps the model. */
   unlink(peer: string, mine: string): void {
     const p = this.cfg.peers.find((x) => x.name === peer);
     if (!p) throw new ConfigError(`"${peer}" is not a configured peer`);
     delete p.models[mine];
 
-    // Narrowed rather than left alone, because a route that NAMES its peers is
-    // still pointing at one we just unmapped. An emptied list is not an open
-    // one: `peers: []` means "anyone who maps it", which is WIDER than the list
-    // we started from, so emptying it would quietly let a different peer serve
-    // work the operator had pinned to this one. An emptied list is a dead route.
+    // Narrow a named peer list; an emptied list is a dead route, not an open one.
     const route = this.cfg.models[mine];
     if (route && route.peers.includes(peer)) {
       const rest = route.peers.filter((n) => n !== peer);
@@ -587,21 +406,7 @@ export class Overrides {
     this.pruneDeadRoutes();
   }
 
-  /**
-   * Stop a route sending work away, keeping anything local about it.
-   *
-   * The difference matters more than it looks. A route is not only a policy: it
-   * can carry `backend`, `as`, `concurrency` and declared `stats`, which are
-   * facts about YOUR machine and have nothing to do with the peer you just
-   * unlinked. Deleting the whole
-   * entry — which is what this used to do — silently threw away a vLLM batch
-   * size or a backend pin, and then the config writer deleted the key from the
-   * file along with whatever comments were on it. Irreversible, on an action
-   * that said nothing about any of it.
-   *
-   * So a route that is only a policy is deleted, and one carrying local
-   * settings is demoted to `local` and keeps them.
-   */
+  /** Stop a route sending work away: delete it if it is only a policy, else demote it to local and keep its settings. */
   private retireRoute(id: string): void {
     const r = this.cfg.models[id];
     if (!r) return;
@@ -612,22 +417,7 @@ export class Overrides {
     else this.cfg.models[id] = { ...r, policy: "local", peers: [] };
   }
 
-  /**
-   * Retire every non-local route that nothing can serve.
-   *
-   * The invariant parseConfig enforces at load, kept here at runtime, and it
-   * has to run on BOTH paths that can break it. Unlink is the obvious one. The
-   * other is restoring a sidecar, which applies saved deltas directly — so a
-   * file written before unlink learned this rule puts the dangling route
-   * straight back, and the node lands in a state it cannot save its way out of.
-   *
-   * Eligibility is read the way decide() reads it: a named `peers` list is the
-   * candidates, and only an empty one means everybody. Testing "does ANY peer
-   * map this" instead was wrong in the case with two peers — unlink a model
-   * from the one the route names, and the route survived because the OTHER peer
-   * happened to map it, then failed to save with an error about a line nobody
-   * had touched.
-   */
+  /** Retire every non-local route no eligible peer maps, after unlink and after restore. */
   private pruneDeadRoutes(): void {
     for (const [id, route] of Object.entries(this.cfg.models)) {
       if (route.policy === "local") continue;
@@ -684,14 +474,7 @@ export class Overrides {
     return c.maps.length > 0 || c.routes.length > 0 || c.notes.length > 0;
   }
 
-  /**
-   * The pending changes as config, ready to paste.
-   *
-   * Effective state rather than a patch: what `share:`, this peer's `models:`
-   * and these routes should read once you are done. A diff would be shorter and
-   * far easier to apply wrongly — YAML has no merge syntax, so a patch is only
-   * ever a set of instructions a person has to carry out by hand.
-   */
+  /** The pending changes as the config they should become, ready to paste. */
   yaml(share: readonly string[], configuredShare: readonly string[]): string {
     const out: string[] = [];
     const changes = this.changes();
