@@ -260,17 +260,20 @@ export function needsOf(payload: Record<string, unknown>): Need {
  */
 /** Smallest output worth shrinking `max_tokens` to; below it the request is refused so the client compacts. */
 const MIN_OUTPUT = 1024;
+/** Headroom for what a chat template adds around the messages. */
+const TEMPLATE_TOKENS = 256;
 
 /**
  * When only the reserved output overflows the window, lower the payload's
  * `max_tokens` to the room the prompt leaves and return the need that results.
- * The prompt is padded a tenth, since the estimate reads dense text low.
+ * The prompt is padded a tenth, since the estimate reads dense text low, plus
+ * room for the chat template's own tokens.
  */
 export function fitOutput(stats: ModelStats | undefined | null, need: Need, payload: Record<string, unknown>): Need {
   const context = stats?.context;
   const output = need.output ?? 0;
   if (context === undefined || need.tokens <= context || output === 0) return need;
-  const room = context - Math.ceil((need.tokens - output) * 1.1);
+  const room = context - Math.ceil((need.tokens - output) * 1.1) - TEMPLATE_TOKENS;
   if (room < MIN_OUTPUT || room >= output) return need;
   payload[typeof payload.max_tokens === "number" ? "max_tokens" : "max_completion_tokens"] = room;
   return { ...need, tokens: need.tokens - output + room, output: room };

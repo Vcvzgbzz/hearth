@@ -229,7 +229,7 @@ import { cleanStats, fitOutput, mergeStats, needsOf, statsFromModels, statsFromP
   const payload: Record<string, unknown> = { max_tokens: 32_000 };
   const need = { tokens: 52_000, output: 32_000, images: false, tools: false };
   const fitted = fitOutput({ context: 32_768 }, need, payload);
-  assert.equal(payload.max_tokens, 32_768 - 22_000, "max_tokens shrinks to the room left, prompt padded a tenth");
+  assert.equal(payload.max_tokens, 32_768 - 22_000 - 256, "max_tokens shrinks to the room left, prompt padded a tenth plus template room");
   assert.equal(unfit({ context: 32_768 }, fitted), null, "and the request now fits");
 
   const tight: Record<string, unknown> = { max_completion_tokens: 8_000 };
