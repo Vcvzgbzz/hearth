@@ -590,6 +590,30 @@ than discovered later as the wrong icon.
 
 Omit `resources` and nothing changes, which is every config that predates it.
 
+#### Something small that lives on a card
+
+A reranker or embedder sidecar is always loaded and answers in milliseconds. As an
+ordinary backend it would take the card for every request and evict the big model
+on it; on a `shared` resource nobody would ever ask it to move, and a big load would
+land on top of it. Mark it resident:
+
+```yaml
+backends:
+  - { name: swap-image, url: "...", resources: [gpu1] }
+  - name: memory
+    url: "http://127.0.0.1:18087"
+    kind: none
+    resources: [gpu1]
+    resident: true          # or {yield: /yield, resume: /resume}
+```
+
+Its own requests never wait for the card or evict anything. Before any other
+backend's turn on that card, hearth POSTs `yield` with `{"seconds": 3600}` (a
+lease, so a hearth that dies mid-turn is not a sidecar gone forever), then `resume`
+once the card has been free for 30 seconds, so a burst of turns yields once. Both
+are best-effort: a resident that does not answer never holds up a turn. It is drawn
+on the card like any other backend.
+
 ### Backends that don't speak the OpenAI API
 
 An A1111 `/sdapi/v1/txt2img`, a whisper server's `/asr`, a TTS or rerank or

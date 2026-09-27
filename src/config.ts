@@ -100,6 +100,18 @@ export interface BackendConfig {
   routes: RouteRule[];
   /** Where this backend reports its own busy state; see ActivityDecl. */
   activity: ActivityDecl | null;
+  /** Lives on its `resources` without taking turns for them; see ResidentDecl. null for a normal backend. */
+  resident: ResidentDecl | null;
+}
+
+/**
+ * A small always-loaded service that shares a card rather than taking turns on it: its own
+ * requests never wait for the card or evict anyone, and before any other backend's turn on
+ * that card hearth POSTs `yield` (`{"seconds": n}`), then `resume` once the card is free again.
+ */
+export interface ResidentDecl {
+  yield: string;
+  resume: string;
 }
 
 export interface ModelRoute {
@@ -497,6 +509,17 @@ function activityDecl(v: unknown, where: string): ActivityDecl | null {
   };
 }
 
+/** `resident: true` for the default paths, or `{yield, resume}` to name them. */
+function residentDecl(v: unknown, where: string): ResidentDecl | null {
+  if (v === undefined || v === null || v === false) return null;
+  if (v === true) return { yield: "/yield", resume: "/resume" };
+  const o = asRecord(v, where);
+  const out = { yield: str(o.yield, `${where}.yield`, "/yield"), resume: str(o.resume, `${where}.resume`, "/resume") };
+  requirePath(out.yield, `${where}.yield`);
+  requirePath(out.resume, `${where}.resume`);
+  return out;
+}
+
 /** `routes:` entries, as a bare path or an object; lane and model are filled in once lanes exist. */
 function routeList(v: unknown, where: string): RouteRule[] {
   if (v === undefined) return [];
@@ -594,6 +617,7 @@ export function parseConfig(raw: unknown): HearthConfig {
         resources: strList(entry.resources, `backends[${i}].resources`),
         routes: routeList(entry.routes, `backends[${i}].routes`),
         activity: activityDecl(entry.activity, `backends[${i}].activity`),
+        resident: residentDecl(entry.resident, `backends[${i}].resident`),
       });
     }
     const seen = new Set<string>();
@@ -634,9 +658,16 @@ export function parseConfig(raw: unknown): HearthConfig {
       resources: strList(backend.resources, "backend.resources"),
       routes: routeList(backend.routes, "backend.routes"),
       activity: activityDecl(backend.activity, "backend.activity"),
+      resident: residentDecl(backend.resident, "backend.resident"),
     });
   }
   const backendNames = new Set(backends.map((b) => b.name));
+  // A resident on shared hardware (or none) would never be asked to yield, which is its only job.
+  for (const b of backends) {
+    if (b.resident && !b.resources.some((r) => !resourceDecls[r]?.shared)) {
+      throw new ConfigError(`backends "${b.name}" is resident but declares no exclusive resource to yield`);
+    }
+  }
 
   const lanesRaw = sched.lanes === undefined ? DEFAULT_LANES : asRecord(sched.lanes, "scheduler.lanes");
   const lanes: Record<string, { priority: number }> = {};

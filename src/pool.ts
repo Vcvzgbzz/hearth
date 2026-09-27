@@ -9,6 +9,12 @@ import type { Logger } from "./log.js";
 import { mergeStats, type ModelStats, type Need } from "./stats.js";
 import { ResourceArbiter } from "./resources.js";
 import { Scheduler } from "./scheduler.js";
+import { send } from "./upstream.js";
+
+/** How long a resident is asked to stay off the card; renewed by every later turn, released by /resume. */
+const RESIDENT_YIELD_S = 3600;
+/** The card must stay free this long before residents come back, so a burst of turns yields once. */
+export const RESIDENT_RESUME_MS = 30_000;
 
 /** The budget for a whole clear-the-card sequence, which may unload several neighbours. */
 const EVICT_BUDGET_MS = 45_000;
@@ -55,13 +61,19 @@ export class BackendPool {
     return names.filter((n) => !this.cfg.resources[n]?.shared);
   }
 
+  /** Residents asked to yield and not yet resumed. */
+  private readonly yielded = new Set<BackendSlot>();
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** The last twenty handoffs, so a card changing hands shows on the status page. */
   private readonly evicted: { t: number; backend: string; for: string; resources: string[] }[] = [];
 
   constructor(
     private readonly cfg: HearthConfig,
     private readonly log: Logger,
+    private readonly resumeAfterMs = RESIDENT_RESUME_MS,
   ) {
+    this.arbiter.onRelease(() => this.scheduleResume());
     for (const b of cfg.backends) {
       const state = new BackendState(b.url, b.kind, log);
       const slot: BackendSlot = {
@@ -88,10 +100,11 @@ export class BackendPool {
           wire: (m) => this.outboundId(m),
           // Ollama serves a resident set side by side, so a model's ceiling counts its own jobs.
           coresident: b.kind === "ollama",
-          resources: this.arbitrated(b.resources),
+          // A resident never takes turns: its own requests neither wait for the card nor evict.
+          resources: b.resident ? [] : this.arbitrated(b.resources),
           arbiter: this.arbiter,
           // Ask overlapping backends to unload before we load; weights stay resident after a run.
-          evict: this.arbitrated(b.resources).length > 0 ? () => this.evictFor(b) : undefined,
+          evict: !b.resident && this.arbitrated(b.resources).length > 0 ? () => this.evictFor(b) : undefined,
         }),
       };
       this.slots.push(slot);
@@ -151,9 +164,11 @@ export class BackendPool {
     const overlap = this.slots.filter(
       (s) => s.name !== b.name && this.arbitrated(s.cfg.resources).some((r) => mine.includes(r)),
     );
+    // Residents first and together: they are small, and their memory is what the load needs.
+    await Promise.all(overlap.filter((s) => s.cfg.resident).map((s) => this.residentCall(s, "yield", b.name)));
     const deadline = Date.now() + EVICT_BUDGET_MS;
     for (const s of overlap) {
-      if (!s.state.resident()) continue;
+      if (s.cfg.resident || !s.state.resident()) continue;
       if (Date.now() >= deadline) {
         this.log.warn("pool.evict_budget", {
           for: b.name, resources: mine, skipped: s.name, budgetMs: EVICT_BUDGET_MS,
@@ -165,6 +180,41 @@ export class BackendPool {
       while (this.evicted.length > 20) this.evicted.shift();
       await s.state.unload();
     }
+  }
+
+  /** POST a resident's yield or resume path. Best-effort: a resident that does not answer never holds up a turn. */
+  private async residentCall(s: BackendSlot, what: "yield" | "resume", forName?: string): Promise<void> {
+    const path = s.cfg.resident![what];
+    try {
+      const res = await send(`${s.cfg.url}${path}`, {
+        method: "POST",
+        json: what === "yield" ? { seconds: RESIDENT_YIELD_S } : {},
+        headersTimeoutMs: 30_000,
+      });
+      res.body.resume();
+      if (!res.ok) throw new Error(`answered ${res.status}`);
+      if (what === "yield") this.yielded.add(s);
+      else this.yielded.delete(s);
+      this.log.info(`pool.${what}`, { backend: s.name, ...(forName ? { for: forName } : {}) });
+    } catch (e) {
+      this.log.warn(`pool.${what}_failed`, { backend: s.name, detail: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** After a release: once the card has stayed free for resumeAfterMs, give yielded residents it back. */
+  private scheduleResume(): void {
+    if (this.yielded.size === 0) return;
+    if (this.resumeTimer) clearTimeout(this.resumeTimer);
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      const held = new Set(this.arbiter.snapshot().map(([r]) => r));
+      for (const s of [...this.yielded]) {
+        // Still taken by someone's turn: their release schedules this again.
+        if (this.arbitrated(s.cfg.resources).some((r) => held.has(r))) continue;
+        void this.residentCall(s, "resume");
+      }
+    }, this.resumeAfterMs);
+    this.resumeTimer.unref?.();
   }
 
   /** Recent handoffs, oldest first. See `evicted`. */
