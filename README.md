@@ -125,6 +125,7 @@ Every key with its default. Only `backend.url` is required.
 | `peers` | `[]` | nodes you can send work to |
 | `models.<id>.backend` | auto | pin a model to a named backend instead of resolving it from the catalogs |
 | `stateFile` | `null` | fallback for Save when the config file itself cannot be written. Null unless you need it |
+| `models.<id>.follow` | `false` | go out as whatever the pinned backend has loaded, and as `as` when nothing is (or when `as` is among several loaded). Needs `backend` and `as`. It follows any model, a non-chat one included, so pin it to a backend that serves one kind |
 | `models.<id>.concurrency` | backend's | jobs this model may run at once, above OR below its backend's `concurrency`. `batch` is the older name for it. See below |
 | `models` | `{}` | routing policy per model. Anything unlisted stays local |
 

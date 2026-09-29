@@ -117,6 +117,7 @@ export function writeState(path: string, state: SavedState): void {
 const DEFAULT_ROUTE: ModelRoute = {
   backend: null,
   as: null,
+  follow: false,
   policy: "local",
   peers: [],
   spilloverAt: 1,

@@ -120,6 +120,12 @@ export interface ModelRoute {
   backend: string | null;
   /** The id sent to the backend when it differs from the advertised one; null when they match. */
   as: string | null;
+  /**
+   * Go out as whatever `backend` has resident right now, and as `as` only when
+   * nothing is loaded there. For clients pinned to one id on a card whose seat
+   * gets swapped by hand: a fixed id would swap the card back on every request.
+   */
+  follow: boolean;
   policy: RoutePolicy;
   /** Who may serve it, in preference order. Empty means anyone that maps it. */
   peers: string[];
@@ -781,6 +787,13 @@ export function parseConfig(raw: unknown): HearthConfig {
       );
     }
     const alias = str(entry.as, `models.${id}.as`, "");
+    const follow = bool(entry.follow, `models.${id}.follow`, false);
+    if (follow && pinned === "") {
+      throw new ConfigError(`models.${id}.follow needs models.${id}.backend: the backend whose resident model it follows`);
+    }
+    if (follow && alias === "") {
+      throw new ConfigError(`models.${id}.follow needs models.${id}.as: the model to load when nothing is resident`);
+    }
     const params = modelParams(entry.params, id);
     const emulate = str(entry.emulate, `models.${id}.emulate`, "");
     if (emulate !== "" && !(EMULATIONS as readonly string[]).includes(emulate)) {
@@ -796,6 +809,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     models[id] = {
       backend: pinned === "" ? null : pinned,
       as: alias === "" ? null : alias,
+      follow,
       policy,
       peers: named,
       spilloverAt: count(entry.spilloverAt, `models.${id}.spilloverAt`, 1, 1),
