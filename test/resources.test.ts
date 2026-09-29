@@ -359,6 +359,60 @@ function pool(concurrency = 1) {
   refusing.close();
 }
 
+// --- a neighbour whose unload never lands is still on the card ------------
+// An unload that cannot reach its backend used to be logged and walked past, so
+// the load went ahead onto a card that was never cleared. It must fail the job.
+{
+  const chats: string[] = [];
+  const neighbour = createServer((req, res) => {
+    if (req.url === "/api/models/unload") {
+      req.socket.destroy();
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/running") res.end(JSON.stringify({ running: [{ model: "resident", state: "ready" }] }));
+    else res.end(JSON.stringify({ data: [{ id: "resident" }] }));
+  });
+  const spanning = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/running") return void res.end(JSON.stringify({ running: [] }));
+    if (req.url === "/v1/models") return void res.end(JSON.stringify({ data: [{ id: "big" }] }));
+    chats.push(req.url ?? "");
+    res.end(JSON.stringify({ choices: [{ message: { content: "hi" } }] }));
+  });
+  const at = async (s: ReturnType<typeof createServer>) => {
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    return `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+  };
+  const node = createNode(
+    parseConfig({
+      name: "stuck",
+      backends: [
+        { name: "cards", url: await at(neighbour), kind: "llama-swap", resources: ["gpu0"] },
+        { name: "spanning", url: await at(spanning), kind: "llama-swap", serves: ["big"], resources: ["gpu0"] },
+      ],
+    }),
+    silentLogger,
+  );
+  await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
+  await Promise.all(node.pool.all().map((b) => b.state.refresh()));
+
+  const r = await fetch(`http://127.0.0.1:${(node.server.address() as AddressInfo).port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "big", messages: [{ role: "user", content: "x" }] }),
+  });
+  await r.text();
+  assert.notEqual(r.status, 200, "the job fails while the neighbour is still resident");
+  assert.deepEqual(chats, [], "and nothing was loaded on top of it");
+
+  node.server.closeAllConnections();
+  node.server.close();
+  neighbour.closeAllConnections();
+  neighbour.close();
+  spanning.close();
+}
+
 console.log("resources.test.ts ok");
 
 // --- declared resources: shared hardware is not arbitrated -----------------
