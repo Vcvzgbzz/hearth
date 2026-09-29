@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 
-import { ConfigError, parseConfig } from "../src/config.js";
+import { ConfigError, parseConfig, peersMapping, type PeerConfig } from "../src/config.js";
 
 const minimal = { backend: { url: "http://127.0.0.1:9292" } };
 
@@ -238,6 +238,22 @@ const minimal = { backend: { url: "http://127.0.0.1:9292" } };
   // Saying both and agreeing is somebody mid-rename. Nothing is ambiguous.
   assert.equal(with_({ concurrency: 4, batch: 4 }), 4);
   assert.throws(() => with_({ concurrency: 0 }), /whole number >= 1/);
+}
+
+// --- one rule for "which peers could serve this": empty `peers` means any --
+{
+  const peers: PeerConfig[] = [
+    { name: "a", url: "http://a", token: "t", models: { x: "their-x" } },
+    { name: "b", url: "http://b", token: "t", models: {} },
+    { name: "c", url: "http://c", token: "t", models: { x: "x" } },
+  ];
+  assert.deepEqual(peersMapping("x", [], peers), ["a", "c"], "no named peers means every peer that maps it");
+  assert.deepEqual(peersMapping("x", ["c", "b", "a"], peers), ["c", "a"], "named peers keep their order");
+  assert.deepEqual(peersMapping("y", [], peers), []);
+  assert.throws(
+    () => parseConfig({ backend: { url: "http://127.0.0.1:1" }, peers: [{ name: "a", url: "http://a", token: "t", models: { x: "" } }] }),
+    /peers\[0\]\.models\.x is empty/,
+  );
 }
 
 console.log("config.test.ts ok");

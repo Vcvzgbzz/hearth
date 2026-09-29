@@ -16,8 +16,8 @@ import { emulatedRequest, relayEmulated } from "./emulate.js";
 import { Overrides, readState, writeState } from "./overrides.js";
 import type { Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
-import { BackendPool } from "./pool.js";
-import { decide } from "./route.js";
+import { BackendPool, type BackendSlot } from "./pool.js";
+import { decide, type LocalLoad } from "./route.js";
 import { History, KEEP } from "./history.js";
 import { QueueFullError } from "./scheduler.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
@@ -295,6 +295,17 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
   /** Run one completion where it belongs. A peer that fails before the first byte is retried locally. */
+  /** The local half of a routing decision: this model's queue and slots on the backend that serves it. */
+  function localLoad(slot: BackendSlot, model: string): LocalLoad {
+    const cap = slot.scheduler.capacityFor(model);
+    return {
+      queued: Object.values(cap.queued).reduce((a, b) => a + b, 0),
+      free: cap.free,
+      slots: cap.slots,
+      loaded: slot.state.loaded(),
+    };
+  }
+
   async function dispatch(
     payload: Record<string, unknown>,
     model: string,
@@ -315,18 +326,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // Per model, like the peer half two lines down. The backend's flat number
     // says "free" while THIS model's slots are full, which keeps work home to
     // queue behind itself when a peer could have started it.
-    const cap = local.scheduler.capacityFor(model);
-    const queuedTotal = Object.values(cap.queued).reduce((a, b) => a + b, 0);
     // What this request asks for, so routing can skip a peer whose model is too
     // small for it rather than sending the prompt across the network to be
     // refused there.
     const need = needsOf(payload);
-    const decision = decide(model, cfg, peers, {
-      queued: queuedTotal,
-      free: cap.free,
-      slots: cap.slots,
-      loaded: local.state.loaded(),
-    }, need);
+    const decision = decide(model, cfg, peers, localLoad(local, model), need);
 
     // What the local backend answered, for the log and the call history. A
     // relayed 400 — "this prompt does not fit" is the common one — is a failed
@@ -987,21 +991,16 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // answer, but asking it here is what makes peer warming a branch of this
     // route later rather than a second endpoint with its own opinions.
     const slotFor = pool.for(model);
-    const capFor = slotFor.scheduler.capacityFor(model);
+    const load = localLoad(slotFor, model);
     const decision = fromPeer !== null
       // A peer's warm is served here or nowhere. Forwarding it onward would
       // let two nodes that each prefer the other bounce a warm between them,
       // the same loop the chat route avoids by not re-routing peer work.
       ? ({ target: "local", reason: "from a peer" } as const)
-      : decide(model, cfg, peers, {
-          queued: Object.values(capFor.queued).reduce((a, b) => a + b, 0),
-          free: capFor.free,
-          slots: capFor.slots,
-          loaded: slotFor.state.loaded(),
-        });
+      : decide(model, cfg, peers, load);
 
     // A peer's warm is taken only if it can start now; it may never make us wait or evict on its schedule.
-    if (fromPeer !== null && capFor.free <= 0) {
+    if (fromPeer !== null && load.free <= 0) {
       json(res, 503, {
         model, warmed: false, declined: true,
         note: `${cfg.name} is busy; warm requests from peers are only taken when a slot is free`,

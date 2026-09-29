@@ -565,6 +565,12 @@ function trimUrl(u: string, where: string): string {
   return u.replace(/\/+$/, "");
 }
 
+/** Peers a route may use that map `id`, in preference order; an empty `named` means every peer. */
+export function peersMapping(id: string, named: readonly string[], peers: readonly PeerConfig[]): string[] {
+  const order = named.length > 0 ? named : peers.map((p) => p.name);
+  return order.filter((n) => peers.find((p) => p.name === n)?.models[id] !== undefined);
+}
+
 export function parseConfig(raw: unknown): HearthConfig {
   const root = asRecord(raw, "config");
 
@@ -724,6 +730,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     const map: Record<string, string> = {};
     for (const [mine, theirs] of Object.entries(models)) {
       map[mine] = str(theirs, `peers[${i}].models.${mine}`);
+      if (map[mine] === "") throw new ConfigError(`peers[${i}].models.${mine} is empty: name the peer's id for it`);
     }
     // A peer mapping nothing is valid: the state between trusting someone and borrowing from them.
     peers.push({
@@ -759,9 +766,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     // Catching it here instead of at request time is the reason this validation
     // exists at all. A policy that can never fire is a typo.
     if (policy !== "local") {
-      const candidates = named.length > 0 ? named : peers.map((p) => p.name);
-      const able = candidates.filter((n) => peers.find((p) => p.name === n)?.models[id]);
-      if (able.length === 0) {
+      if (peersMapping(id, named, peers).length === 0) {
         throw new ConfigError(
           `models.${id}.policy is "${policy}" but no peer maps "${id}" — ` +
             `add it to a peer's models mapping, or set policy: local`,
