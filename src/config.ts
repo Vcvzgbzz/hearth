@@ -153,6 +153,8 @@ export interface ModelRoute {
    * this model is the only one running. `batch:` is the older name.
    */
   concurrency: number | null;
+  /** Tokens one video costs this model when sizing a request; unset uses the flat default. */
+  videoTokens?: number;
 }
 
 export interface HearthConfig {
@@ -821,6 +823,9 @@ export function parseConfig(raw: unknown): HearthConfig {
       emulate: emulate === "" ? null : (emulate as Emulation),
       pool: modelPool(entry.pool, id),
     };
+    if (entry.videoTokens !== undefined) {
+      models[id].videoTokens = count(entry.videoTokens, `models.${id}.videoTokens`, 1);
+    }
   }
 
   const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels } =

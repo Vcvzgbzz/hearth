@@ -127,13 +127,26 @@ const CHARS_PER_TOKEN = 3.5;
 const PER_MESSAGE = 4;
 /** One image, flat, sized high: counting its base64 would put every vision request over every window. */
 const TOKENS_PER_IMAGE = 1600;
+/** One video, flat, unless the model sets `videoTokens`: a client spends a whole frame budget per clip. */
+const TOKENS_PER_VIDEO = 49_152;
 
 const chars = (v: unknown): number => (typeof v === "string" ? v.length : 0);
 
+/** The URL an image part points at, in either spelling: `{ url }` or the bare string. */
+const urlOf = (v: unknown): unknown => (typeof v === "string" ? v : (v as { url?: unknown } | null)?.url);
+
+/** A video_url part, or an image part whose data URL holds a video container. */
+const isVideo = (part: Record<string, unknown>): boolean => {
+  if (part.type === "video_url") return true;
+  const url = urlOf(part.image_url);
+  return typeof url === "string" && /^data:video\//i.test(url);
+};
+
 /** What this chat payload needs, without tokenizing: prompt plus reserved `max_tokens`. */
-export function needsOf(payload: Record<string, unknown>): Need {
+export function needsOf(payload: Record<string, unknown>, videoTokens = TOKENS_PER_VIDEO): Need {
   let text = 0;
   let images = 0;
+  let videos = 0;
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   for (const raw of messages) {
     text += PER_MESSAGE * CHARS_PER_TOKEN;
@@ -146,7 +159,9 @@ export function needsOf(payload: Record<string, unknown>): Need {
         const part = (raw2 ?? {}) as Record<string, unknown>;
         // Both spellings in the wild: OpenAI's image_url, and the input_image
         // of the newer responses-style bodies some clients send anyway.
-        if (part.type === "image_url" || part.type === "input_image" || part.image_url) {
+        if (isVideo(part)) {
+          videos++;
+        } else if (part.type === "image_url" || part.type === "input_image" || part.image_url) {
           images++;
         } else {
           text += chars(part.text);
@@ -164,9 +179,11 @@ export function needsOf(payload: Record<string, unknown>): Need {
       ? payload.max_completion_tokens
       : 0;
   return {
-    tokens: Math.ceil(text / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE + Math.max(0, reserve),
+    tokens: Math.ceil(text / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE + videos * videoTokens
+      + Math.max(0, reserve),
     output: Math.max(0, reserve),
-    images: images > 0,
+    // A video needs a model that sees, the same as an image does.
+    images: images + videos > 0,
     tools,
   };
 }

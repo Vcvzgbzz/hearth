@@ -127,6 +127,7 @@ Every key with its default. Only `backend.url` is required.
 | `stateFile` | `null` | fallback for Save when the config file itself cannot be written. Null unless you need it |
 | `models.<id>.follow` | `false` | go out as whatever the pinned backend has loaded, and as `as` when nothing is (or when `as` is among several loaded). Needs `backend` and `as`. It follows any model, a non-chat one included, so pin it to a backend that serves one kind |
 | `models.<id>.concurrency` | backend's | jobs this model may run at once, above OR below its backend's `concurrency`. `batch` is the older name for it. See below |
+| `models.<id>.videoTokens` | `49152` | what one video costs this model when checking a request fits its context window. Size it from the seat: frames sampled per clip × tokens per frame |
 | `models` | `{}` | routing policy per model. Anything unlisted stays local |
 
 Tokens accept `env:NAME`, so the config stays committable.

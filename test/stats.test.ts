@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { parseConfig } from "../src/config.js";
+import { ConfigError, parseConfig } from "../src/config.js";
 import { silentLogger } from "../src/log.js";
 import { PeerRegistry, type PeerCapacity } from "../src/peers.js";
 import { decide } from "../src/route.js";
@@ -170,6 +170,47 @@ import { cleanStats, fitOutput, mergeStats, needsOf, statsFromModels, statsFromP
   });
   assert.equal(withImage.images, true);
   assert.ok(withImage.tokens < 5_000, `an image is charged flat, got ${withImage.tokens}`);
+
+  // A video rides an image_url whose data URL is a video container, and it
+  // costs its sender's whole frame budget. Charged as one image it would be
+  // under-counted some thirty times over — and under-counting costs the window.
+  const clip = (mediaType: string) => ({
+    type: "image_url",
+    image_url: { url: `data:${mediaType};base64,${"A".repeat(200_000)}` },
+  });
+  const say = (...content: unknown[]) => needsOf({ messages: [{ role: "user", content }] });
+  const withVideo = say(clip("video/mp4"));
+  assert.ok(withVideo.tokens >= 40_000, `a video is charged as a video, got ${withVideo.tokens}`);
+  assert.equal(withVideo.images, true, "a video needs a model that sees, same as an image");
+  assert.ok(say(clip("video/webm")).tokens >= 40_000, "any video container, not only mp4");
+  assert.ok(
+    say({ type: "input_image", image_url: "data:video/mp4;base64,AAAA" }).tokens >= 40_000,
+    "and the responses-style spelling, whose image_url is the bare URL",
+  );
+  assert.ok(
+    say({ type: "video_url", video_url: { url: "https://example.test/clip.mp4" } }).tokens >= 40_000,
+    "and a video_url part, which is a video whatever its URL says",
+  );
+  assert.ok(say(clip("image/png")).tokens < 5_000, "an image data URL keeps the image price");
+  // One of each costs one video plus one image: the video is not ALSO an image.
+  const image = clip("image/png");
+  assert.equal(
+    say(clip("video/mp4"), image).tokens - withVideo.tokens,
+    say(image).tokens - say().tokens,
+    "a video is never counted twice",
+  );
+
+  // A model that sets its own clip price fits a video the flat default would refuse on a 32k window.
+  const cheap = needsOf({ messages: [{ role: "user", content: [clip("video/mp4")] }] }, 8192);
+  assert.ok(cheap.tokens < 10_000, `videoTokens replaces the flat price, got ${cheap.tokens}`);
+  assert.equal(unfit({ context: 32_768 }, cheap), null);
+  assert.match(unfit({ context: 32_768 }, withVideo) ?? "", /context length exceeded/);
+  const vcfg = parseConfig({ backend: { url: "http://127.0.0.1:9292" }, models: { v: { videoTokens: 8192 }, w: {} } });
+  assert.equal(vcfg.models["v"]!.videoTokens, 8192);
+  assert.equal(vcfg.models["w"]!.videoTokens, undefined, "unset means the flat default");
+  for (const bad of [0, 1.5, "8192"]) {
+    assert.throws(() => parseConfig({ backend: { url: "http://127.0.0.1:9292" }, models: { v: { videoTokens: bad } } }), ConfigError);
+  }
 
   const withTools = needsOf({
     messages: [{ role: "user", content: "go" }],

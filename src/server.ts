@@ -320,7 +320,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // What this request asks for, so routing can skip a peer whose model is too
     // small for it rather than sending the prompt across the network to be
     // refused there.
-    const need = needsOf(payload);
+    const need = needsOf(payload, cfg.models[model]?.videoTokens);
     const decision = decide(model, cfg, peers, {
       queued: queuedTotal,
       free: cap.free,
@@ -1241,7 +1241,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     }
     if (fromPeer !== null) {
       // A borrower's oversized request gets the local path's 4xx before it is queued.
-      const why = unfit(pool.statsFor(model), fitOutput(pool.statsFor(model), needsOf(payload), payload));
+      const why = unfit(pool.statsFor(model), fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload));
       if (why !== null) {
         apiError(res, 400, `${model} ${why}`, "invalid_request_error");
         return;
@@ -1273,7 +1273,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         try {
           await serving.scheduler.submit(
             // Peers are capped by peerMaxConcurrent per backend, whether or not apiKeys are set.
-            { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal, tokens: pool.poolTokens(model, needsOf(payload)) },
+            { lane, model, caller, maxPerCaller: cfg.peerMaxConcurrent, signal: ctrl.signal, tokens: pool.poolTokens(model, needsOf(payload, cfg.models[model]?.videoTokens)) },
             async () => {
               t.startedAt = Date.now();
               await serving.state.ensureFresh();
