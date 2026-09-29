@@ -1260,10 +1260,10 @@ cannot quietly eat a job every five seconds.
 
 Better to know this before you deploy it than after.
 
-- The queue lives in memory, and a restart cuts running work off with it.
-  SIGTERM closes connections rather than draining them, so a generation in
-  flight dies along with the queue behind it. Whatever supervises the process is
-  responsible for not restarting it constantly.
+- The queue lives in memory. SIGTERM drains in-flight requests, queued ones
+  included, for up to `shutdownGraceMs` (30 s by default); whatever the grace
+  does not cover is lost. Whatever supervises the process is responsible for not
+  restarting it constantly.
 - Retries only happen before the first byte. If a peer dies mid-stream the
   request fails, because the client already has half an answer and replaying
   would corrupt it. Before any bytes reach the client, failover is invisible.

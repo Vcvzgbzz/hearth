@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 
+import { ResourceArbiter } from "../src/resources.js";
 import { QueueFullError, Scheduler } from "../src/scheduler.js";
 
 const lanes = {
@@ -343,6 +344,66 @@ function holdSlot(s: Scheduler, order: string[]) {
 
   slot.release();
   await Promise.all(sent);
+}
+
+// --- every slot is released exactly once, whatever ends the job -------------
+// Success, a throw, an abort while queued, an abort while running and a failed
+// eviction all leave through execute()'s two tails or the queued-abort path. A
+// leak parks the backend; a double release admits past its concurrency.
+{
+  const arbiter = new ResourceArbiter();
+  let evictions = 0;
+  const s = new Scheduler({
+    lanes: { chat: { priority: 0 } },
+    concurrency: 3,
+    resources: ["gpu0"],
+    arbiter,
+    evict: async () => {
+      if (evictions++ === 0) throw new Error("the first eviction fails");
+    },
+  });
+  let inRun = 0;
+  let peak = 0;
+  let stall: ReturnType<typeof setTimeout> | undefined;
+  const settled = Promise.allSettled(
+    Array.from({ length: 40 }, (_, i) => {
+      const ctrl = new AbortController();
+      const p = s.submit({ lane: "chat", model: "m", caller: `c${i}`, signal: ctrl.signal }, () =>
+        new Promise<void>((resolve, reject) => {
+          inRun++;
+          peak = Math.max(peak, inRun);
+          let over = false;
+          const done = (err?: Error) => {
+            if (over) return;
+            over = true;
+            inRun--;
+            if (err) reject(err);
+            else resolve();
+          };
+          ctrl.signal.addEventListener("abort", () => done(new Error("aborted running")), { once: true });
+          setTimeout(() => (i % 5 === 1 ? done(new Error("boom")) : done()), 1 + (i % 4));
+        }),
+      );
+      if (i % 5 === 2) queueMicrotask(() => ctrl.abort());
+      if (i % 5 === 3) setTimeout(() => ctrl.abort(), 2);
+      return p;
+    }),
+  );
+  // A leaked slot stalls the queue rather than failing anything, so bound the wait.
+  const outcomes = await Promise.race([
+    settled,
+    new Promise<never>((_, reject) => {
+      stall = setTimeout(() => reject(new Error("queue stalled: a slot was never released")), 5_000);
+    }),
+  ]);
+  clearTimeout(stall);
+  assert.ok(outcomes.some((o) => o.status === "fulfilled"), "some jobs run to completion");
+  assert.ok(evictions >= 2, "the failed eviction is retried on the next turn");
+  assert.ok(peak <= 3, `never more than concurrency at once, saw ${peak}`);
+  assert.equal(inRun, 0);
+  assert.equal(s.capacity().running, 0, "every running slot came back");
+  assert.equal(Object.values(s.capacity().queued).reduce((a, b) => a + b, 0), 0, "and nothing is stranded");
+  assert.equal(arbiter.snapshot().length, 0, "the card is let go once the work is gone");
 }
 
 console.log("scheduler.test.ts ok");

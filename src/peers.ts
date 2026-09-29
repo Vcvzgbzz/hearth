@@ -2,7 +2,7 @@
  * Peer health and capacity. Health is polled, never inferred from an open socket; unknown,
  * stale and unreachable all mean unavailable; a peer is down after two failed polls.
  */
-import type { HearthConfig, PeerConfig } from "./config.js";
+import { peersMapping, type HearthConfig, type PeerConfig } from "./config.js";
 import { Controls } from "./controls.js";
 import type { Logger } from "./log.js";
 import { cleanStats, type ModelStats } from "./stats.js";
@@ -168,8 +168,7 @@ export class PeerRegistry {
   candidates(model: string, preferred: string[]): string[] {
     // Borrowing paused: no candidates, and every policy path already handles that.
     if (!this.controls.borrowingOn) return [];
-    const order = preferred.length > 0 ? preferred : [...this.byName.keys()];
-    return order.filter((n) => this.theirModelId(n, model) !== undefined && this.isUp(n));
+    return peersMapping(model, preferred, [...this.byName.values()]).filter((n) => this.isUp(n));
   }
 
   async pollOnce(name: string, timeoutMs = POLL_HEADERS_TIMEOUT_MS): Promise<void> {

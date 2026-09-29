@@ -155,7 +155,8 @@ export class BackendPool {
 
   /**
    * Clear every other backend off the hardware `b` just took, one at a time and within
-   * EVICT_BUDGET_MS. A refusal fails the job; a neighbour that never answers is given up on.
+   * EVICT_BUDGET_MS. Anything still resident afterwards, from a refusal, an unreachable
+   * unload or a spent budget, fails the job rather than loading on top of it.
    */
   private async evictFor(b: BackendConfig): Promise<void> {
     // Shared hardware never causes an eviction: that is the whole hazard this
@@ -179,6 +180,10 @@ export class BackendPool {
       this.evicted.push({ t: Date.now(), backend: s.name, for: b.name, resources: [...mine] });
       while (this.evicted.length > 20) this.evicted.shift();
       await s.state.unload();
+    }
+    const left = overlap.filter((s) => !s.cfg.resident && s.state.resident() !== null).map((s) => s.name);
+    if (left.length > 0) {
+      throw new Error(`${left.join(", ")} still loaded on ${mine.join(", ")}: not loading ${b.name} on top`);
     }
   }
 
