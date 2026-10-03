@@ -114,6 +114,11 @@ export class BackendState {
     private readonly url: string,
     private readonly kind: WarmSource,
     private readonly log: Logger,
+    /**
+     * Which of the ids this URL reports are this backend's. Two backends on one URL split
+     * what it serves, so a sidecar pinned beside a swapping model is nobody's resident but its own.
+     */
+    private readonly mine: (id: string) => boolean = () => true,
   ) {
     this.useEvents = kind === "llama-swap";
     this.warmIsKnown = kind !== "none";
@@ -340,6 +345,7 @@ export class BackendState {
   }
 
   private apply(models: ModelStatus[]): void {
+    models = models.filter((m) => this.mine(m.id));
     this.catalogIds = models.map((m) => m.id);
     this.loadingIds = models.filter((m) => m.state === STARTING).map((m) => m.id);
     this.setLoaded(models.filter((m) => m.state === READY).map((m) => m.id));
@@ -364,7 +370,7 @@ export class BackendState {
     if (catalog.status === "fulfilled") {
       this.catalogIds = (catalog.value.data ?? [])
         .map((m) => m.id ?? "")
-        .filter((m) => m !== "");
+        .filter((m) => m !== "" && this.mine(m));
     }
 
     if (this.kind === "single") {
@@ -372,7 +378,7 @@ export class BackendState {
       // Reading the catalogue is the only question worth asking such a server.
       this.setLoaded([...this.catalogIds]);
     } else if (warm.status === "fulfilled") {
-      this.setLoaded(warm.value);
+      this.setLoaded(warm.value.filter((m) => this.mine(m)));
     } else {
       // Missing warm endpoint isn't an error, it just means we never know
       // anything is warm, so the bonus never fires and readyNow stays empty.
@@ -472,7 +478,7 @@ export class BackendState {
       this.loadingIds = (running.running ?? [])
         .filter((m) => m.state === STARTING)
         .map((m) => m.model ?? "")
-        .filter((m) => m !== "");
+        .filter((m) => m !== "" && this.mine(m));
       return (running.running ?? [])
         .filter((m) => (m.state ?? READY) === READY)
         .map((m) => m.model ?? "")

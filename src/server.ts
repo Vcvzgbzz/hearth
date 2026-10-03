@@ -1331,6 +1331,18 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     return;
   }
 
+  /** The body with its `model` field renamed; anything that is not a JSON object goes through untouched. */
+  function withModel(body: Buffer | undefined, model: string): Buffer | undefined {
+    if (!body || body.length === 0) return body;
+    try {
+      const parsed = JSON.parse(body.toString()) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return body;
+      return Buffer.from(JSON.stringify({ ...(parsed as Record<string, unknown>), model }));
+    } catch {
+      return body;
+    }
+  }
+
   /** Everything not claimed above, proxied to a backend as-is. */
   async function routePassthrough(c: Call): Promise<void> {
     const { req, res, url, path } = c;
@@ -1399,16 +1411,21 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     res.on("close", () => {
       if (!res.writableEnded) ctrl.abort();
     });
-    const proxy = async (): Promise<void> => {
-      const up = await send(`${target.cfg.url}${outPath}${url.search}`, {
+    // `orFail` turns a 5xx into a throw before anything is relayed, so a route with a fallback can still use it.
+    const proxy = async (to: BackendSlot = target, sendBody = outBody, orFail = false): Promise<void> => {
+      const up = await send(`${to.cfg.url}${outPath}${url.search}`, {
         method: req.method ?? "GET",
-        ...(outBody && outBody.length > 0 ? { raw: outBody } : {}),
+        ...(sendBody && sendBody.length > 0 ? { raw: sendBody } : {}),
         // Client headers minus hop-by-hop, and minus our own key if that is what it carries.
         headers: stripOurKey(req) as Record<string, string>,
         signal: ctrl.signal,
-        ...backendDeadline(target.cfg),
+        ...backendDeadline(to.cfg),
       });
       log.debug("passthrough", { path, status: up.status });
+      if (orFail && up.status >= 500) {
+        up.body.resume();
+        throw new Error(`${to.name} answered ${up.status}`);
+      }
       await pipeThrough(up, res);
     };
 
@@ -1418,21 +1435,43 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
         const { lane } = routed.rule;
         // Two models can share one routed path; each queues as itself.
         const model = pool.routedModel(routed.slot, routed.rule, asked);
-        // Recorded in history like any local use.
-        const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
-        try {
-          await target.scheduler.submit(
-            { lane, model, caller: who, signal: ctrl.signal },
-            async () => {
-              t.startedAt = Date.now();
-              await proxy();
-            },
-          );
-        } catch (e) {
-          logRequest(t, { model, lane, caller: who, backend: target.name, target: "local", path }, false, e);
-          throw e;
+        // Queued on the backend that runs it, and recorded in history like any local use.
+        const run = async (to: BackendSlot, as: string, sendBody: Buffer | undefined, orFail: boolean): Promise<void> => {
+          const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
+          try {
+            await to.scheduler.submit(
+              { lane, model: as, caller: who, signal: ctrl.signal },
+              async () => {
+                t.startedAt = Date.now();
+                await proxy(to, sendBody, orFail);
+              },
+            );
+          } catch (e) {
+            logRequest(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, false, e);
+            throw e;
+          }
+          logRequest(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, true);
+        };
+        const fb = routed.rule.fallback;
+        const spare = fb ? pool.get(fb.backend) : undefined;
+        if (!fb || !spare) {
+          await run(target, model, outBody, false);
+        } else if (asked !== undefined && asked !== model && pool.owns(spare, asked)) {
+          // Asked for by an id only the fallback serves: that is a choice, not a failure.
+          await run(spare, asked, outBody, false);
+        } else {
+          try {
+            await run(target, model, outBody, true);
+          } catch (e) {
+            // A full lane is back-pressure, a closed socket has nobody to answer, and a started reply cannot be restarted.
+            if (e instanceof QueueFullError || ctrl.signal.aborted || res.headersSent) throw e;
+            log.warn("route.fallback", {
+              path, from: target.name, to: spare.name, model: fb.model,
+              detail: e instanceof Error ? e.message : String(e),
+            });
+            await run(spare, fb.model, withModel(body, pool.outboundId(fb.model)), false);
+          }
         }
-        logRequest(t, { model, lane, caller: who, backend: target.name, target: "local", path }, true);
       } else if (routed) {
         // A declared `queue: false` path — a progress endpoint polled WHILE the
         // work it asks about holds the slot. Counting those would draw traffic

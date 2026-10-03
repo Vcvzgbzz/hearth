@@ -75,7 +75,7 @@ export class BackendPool {
   ) {
     this.arbiter.onRelease(() => this.scheduleResume());
     for (const b of cfg.backends) {
-      const state = new BackendState(b.url, b.kind, log);
+      const state = new BackendState(b.url, b.kind, log, this.mineOn(b));
       const slot: BackendSlot = {
         name: b.name,
         cfg: b,
@@ -125,6 +125,17 @@ export class BackendPool {
   }
 
   /**
+   * What a backend sees of a URL it shares with another: everything except the ids a sibling
+   * declares it `serves`. Alone on its URL, or beside siblings that declare nothing, everything.
+   */
+  private mineOn(b: BackendConfig): ((id: string) => boolean) | undefined {
+    const theirs = new Set(
+      this.cfg.backends.filter((o) => o.name !== b.name && o.url === b.url).flatMap((o) => o.serves),
+    );
+    return theirs.size === 0 ? undefined : (id) => !theirs.has(id);
+  }
+
+  /**
    * The backend that declared this request path, by exact match. `{model}` matches one segment,
    * and only a model this backend serves, so a pattern cannot pull in unrelated traffic.
    */
@@ -166,7 +177,7 @@ export class BackendPool {
       (s) => s.name !== b.name && this.arbitrated(s.cfg.resources).some((r) => mine.includes(r)),
     );
     // Residents first and together: they are small, and their memory is what the load needs.
-    await Promise.all(overlap.filter((s) => s.cfg.resident).map((s) => this.residentCall(s, "yield", b.name)));
+    await Promise.all(overlap.filter((s) => s.cfg.resident?.yield).map((s) => this.residentCall(s, "yield", b.name)));
     const deadline = Date.now() + EVICT_BUDGET_MS;
     for (const s of overlap) {
       if (s.cfg.resident || !s.state.resident()) continue;
@@ -190,6 +201,7 @@ export class BackendPool {
   /** POST a resident's yield or resume path. Best-effort: a resident that does not answer never holds up a turn. */
   private async residentCall(s: BackendSlot, what: "yield" | "resume", forName?: string): Promise<void> {
     const path = s.cfg.resident![what];
+    if (path === null) return;
     try {
       const res = await send(`${s.cfg.url}${path}`, {
         method: "POST",
@@ -322,10 +334,14 @@ export class BackendPool {
    */
   routedModel(slot: BackendSlot, rule: RouteRule, asked: string | undefined): string {
     if (asked === undefined || asked === rule.model) return rule.model;
-    if (this.cfg.models[asked]?.backend === slot.name) return asked;
-    const wire = this.outboundId(asked);
-    if (slot.cfg.serves.includes(wire) || slot.state.catalog().includes(wire)) return asked;
-    return rule.model;
+    return this.owns(slot, asked) ? asked : rule.model;
+  }
+
+  /** Is this id this backend's own: pinned to it, declared by it, or in its catalogue? */
+  owns(slot: BackendSlot, model: string): boolean {
+    if (this.cfg.models[model]?.backend === slot.name) return true;
+    const wire = this.outboundId(model);
+    return slot.cfg.serves.includes(wire) || slot.state.catalog().includes(wire);
   }
 
   /** True only when every backend declares what it serves and none names this id, so a typo can be refused. */

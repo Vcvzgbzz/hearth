@@ -643,6 +643,23 @@ once the card has been free for 30 seconds, so a burst of turns yields once. Bot
 are best-effort: a resident that does not answer never holds up a turn. It is drawn
 on the card like any other backend.
 
+**A sidecar inside the same llama-swap.** llama-swap can keep one small model loaded in
+a `persistent` group while the big seats swap beside it. That is one URL reporting two
+loaded models, so name it twice: the sidecar declares what it `serves`, and the swapping
+backend stops seeing those ids. Its resident model, its catalogue and any `follow` id are
+then about the seat, never the sidecar.
+
+```yaml
+backends:
+  - { name: card, url: "http://127.0.0.1:8080", kind: llama-swap, resources: [gpu1] }
+  - name: rerank
+    url: "http://127.0.0.1:8080"      # the same llama-swap
+    kind: llama-swap
+    serves: [reranker]
+    resources: [gpu1]
+    resident: { yield: false }      # llama-swap has no yield path, so it is never asked
+```
+
 ### Backends that don't speak the OpenAI API
 
 An A1111 `/sdapi/v1/txt2img`, a whisper server's `/asr`, a TTS or rerank or
@@ -675,6 +692,17 @@ A route defaults to the lowest-priority lane you've configured (`batch` in the
 stock config) and reports under the backend's name. Both are overridable per
 route with `lane:` and `model:`. A declared path is forwarded byte for byte like
 everything else on that route, apart from the one `as:` rename described below.
+
+A queued route can name somewhere else to run when its backend cannot answer:
+
+```yaml
+    routes:
+      - { path: /v1/rerank, model: reranker, fallback: { backend: cpu, model: reranker-cpu } }
+```
+
+Unreachable, or a 5xx before any byte, and the same request is queued on `cpu` with its
+`model` renamed to the id that backend serves. A 4xx is the caller's answer and is relayed.
+A request that names an id only the fallback serves goes straight there.
 
 **Synchronous endpoints only.** ComfyUI's `POST /prompt` → poll `/history/{id}`
 does not fit: holding a slot across two unrelated requests leaks it the moment
