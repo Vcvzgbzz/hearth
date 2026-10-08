@@ -15,6 +15,8 @@ interface State {
   data: UiData | null;
   live: boolean;
   dead: boolean;
+  /** The data stream refused this address and this browser holds no session: the login card shows. */
+  loginRequired: boolean;
   page: Page;
   sel: Sel;
   toast: Toast;
@@ -26,6 +28,7 @@ export const useStore = create<State>(() => ({
   data: null,
   live: false,
   dead: false,
+  loginRequired: false,
   page: (location.hash.slice(1) as Page) || "topology",
   sel: null,
   toast: null,
@@ -48,19 +51,38 @@ export function toast(tone: "ok" | "bad", text: string): void {
 }
 
 /** Open the stream, falling back to polling if no snapshot arrives; reconnects are the browser's. */
+let es: EventSource | null = null;
+let poll: number | null = null;
+
+function disconnect(): void {
+  es?.close();
+  es = null;
+  if (poll !== null) {
+    clearInterval(poll);
+    poll = null;
+  }
+}
+
 export function connect(): void {
+  disconnect();
   let gotSnapshot = false;
-  let poll: number | null = null;
   const load = async () => {
     try {
       const r = await fetch("/ui/data", { cache: "no-store" });
+      // 401/403 is not "dead": the node is up, it simply does not know this browser yet.
+      if (r.status === 401 || r.status === 403) {
+        useStore.setState({ loginRequired: true, dead: false });
+        return;
+      }
       if (!r.ok) throw new Error(String(r.status));
-      useStore.setState({ data: (await r.json()) as UiData, dead: false });
+      useStore.setState({ data: (await r.json()) as UiData, dead: false, loginRequired: false });
     } catch {
       useStore.setState({ dead: true });
     }
   };
-  const es = new EventSource("/ui/events");
+  // An immediate probe, so a login is offered at once rather than after the 4s fallback.
+  void load();
+  es = new EventSource("/ui/events");
   es.addEventListener("snapshot", (e) => {
     gotSnapshot = true;
     if (poll !== null) clearInterval(poll);
@@ -86,27 +108,61 @@ export function connect(): void {
   }, 4000);
 }
 
+/** Sign in: the cookie the server sets is then sent with every request by the browser itself. */
+export async function login(user: string, pass: string): Promise<string | null> {
+  let r: Response;
+  try {
+    r = await fetch("/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, pass }),
+    });
+  } catch {
+    return "cannot reach this node";
+  }
+  const d = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) return d.error ?? `login failed (${r.status})`;
+  useStore.setState({ loginRequired: false, dead: false });
+  connect();
+  return null;
+}
+
+/** Drop this browser's session and come back clean. */
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/logout", { method: "POST" });
+  } catch { /* the reload is the point anyway */ }
+  location.reload();
+}
+
 function askForKey(): Promise<string | null> {
   return new Promise((resolve) => useStore.setState({ askKey: resolve }));
 }
 
 /**
- * A request the node may want a key for. Asks once, remembers the key in this browser, and
- * forgets it on a 401. Errors come back as `{message, path}` so a form can place them.
+ * A request the node may want a key for. Sends first — a live operator session rides the
+ * cookie and needs no key at all — and only asks for a key when the node answers 401 and
+ * none is stored yet. Errors come back as `{message, path}` so a form can place them.
  */
 export async function request<T = Record<string, unknown>>(method: string, path: string, body?: unknown): Promise<T> {
-  const mode = useStore.getState().data?.control;
+  const doFetch = (k: string): Promise<Response> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (k) headers.Authorization = `Bearer ${k}`;
+    return fetch(path, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  };
   let key = storedKey() ?? "";
-  if (mode === "key" && !key) {
-    const entered = await askForKey();
-    useStore.setState({ askKey: null });
-    if (!entered) throw new RequestError("a key is needed to change anything here", null);
-    key = entered.trim();
-    rememberKey(key);
+  let r = await doFetch(key);
+  if (r.status === 401 && key === "") {
+    const mode = useStore.getState().data?.control;
+    if (mode === "key") {
+      const entered = await askForKey();
+      useStore.setState({ askKey: null });
+      if (!entered) throw new RequestError("a key is needed to change anything here", null);
+      key = entered.trim();
+      rememberKey(key);
+      r = await doFetch(key);
+    }
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (key) headers.Authorization = `Bearer ${key}`;
-  const r = await fetch(path, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
   if (r.status === 401) {
     forgetKey();

@@ -195,6 +195,32 @@ const minimal = { backend: { url: "http://127.0.0.1:9292" } };
   );
 }
 
+// --- the operator login: a hash in the file, never a password ---------------
+{
+  // The shape `hearth set-operator` writes: 16-byte salt and 64-byte scrypt, both hex.
+  const passHash = `${"a1".repeat(16)}:${"b2".repeat(64)}`;
+  const cfg = parseConfig({ ...minimal, operator: { user: "jadeyn", passHash } });
+  assert.deepEqual(cfg.operator, { user: "jadeyn", passHash }, "a well-formed login loads");
+
+  assert.equal(parseConfig(minimal).operator, null, "no operator block means no login");
+
+  assert.throws(
+    () => parseConfig({ ...minimal, operator: { user: "", passHash } }),
+    /operator\.user/,
+    "an empty username is a config error, not a silent no-login",
+  );
+  assert.throws(
+    () => parseConfig({ ...minimal, operator: { user: "jadeyn", passHash: "not-a-hash" } }),
+    /operator\.passHash/,
+    "a raw password in the file must not parse — only the set-operator output does",
+  );
+  assert.throws(
+    () => parseConfig({ ...minimal, operator: { user: "jadeyn" } }),
+    /operator\.passHash/,
+    "and a missing hash too",
+  );
+}
+
 // --- lanes -----------------------------------------------------------------
 {
   const cfg = parseConfig({ ...minimal, scheduler: { lanes: { now: { priority: 0 } } } });

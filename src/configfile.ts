@@ -25,7 +25,7 @@ const LIVE_KEYS = [
 ] as const satisfies readonly (keyof HearthConfig)[];
 
 /** Live keys that stay frozen once applied, as the fixed config is. */
-const FROZEN_LIVE = new Set<string>(["apiKeys", "apiKeyLabels", "apiKeyModels", "peerTokens"]);
+const FROZEN_LIVE = new Set<string>(["apiKeys", "apiKeyLabels", "apiKeyModels", "peerTokens", "operator"]);
 
 export function deepFreeze(v: unknown): void {
   if (v === null || typeof v !== "object" || Object.isFrozen(v)) return;

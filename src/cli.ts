@@ -2,18 +2,24 @@
 /**
  * hearth serve [--config path] [--check]
  * hearth init  [--config path]
+ * hearth set-operator <user> <pass> [--config path]
  *
  * `init` probes the usual local server ports and writes a runnable config; `serve --check`
- * validates and exits, for ExecStartPre.
+ * validates and exits, for ExecStartPre. `set-operator` writes the login credential into the
+ * config: the file holds only a scrypt salt:hash of the password, which verifies and reveals
+ * nothing. The previous file is backed up beside it, and a restart picks the login up.
  */
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { parseArgs } from "node:util";
 
 import { ConfigError, loadConfig } from "./config.js";
+import { writeFileAtomic } from "./configfile.js";
 import { LEVELS, createLogger, type Level } from "./log.js";
+import { hashPassword } from "./login.js";
 import { createNode } from "./server.js";
 import { getJson } from "./upstream.js";
+import { parseDocument } from "yaml";
 
 const DEFAULT_CONFIG = "hearth.yaml";
 
@@ -150,8 +156,39 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "set-operator") {
+    const [user, pass] = positionals.slice(1);
+    if (!user || !pass) {
+      console.error("usage: hearth set-operator <user> <pass> [--config path]");
+      process.exit(1);
+    }
+    if (!existsSync(configPath)) {
+      console.error(`${configPath} does not exist — run hearth init first`);
+      process.exit(1);
+    }
+    const text = readFileSync(configPath, "utf8");
+    let doc;
+    try {
+      doc = parseDocument(text);
+    } catch {
+      console.error(`${configPath} is not valid YAML — fix it before adding a login`);
+      process.exit(1);
+    }
+    // The password leaves this process as a hash only: salt and 64 bytes of scrypt, both hex.
+    const passHash = await hashPassword(pass);
+    doc.setIn(["operator"], doc.createNode({ user, passHash }));
+    // The file is the source of truth, so keep the pre-edit bytes beside it.
+    const backup = `${configPath}.bak-${new Date().toISOString().slice(0, 10)}`;
+    writeFileSync(backup, text);
+    // Long lines must not fold: the passHash line is 160 chars and would break if wrapped.
+    writeFileAtomic(configPath, doc.toString({ lineWidth: 0 }));
+    console.log(`operator login set for "${user}" in ${configPath}`);
+    console.log(`the file's previous state is at ${backup}; restart hearth for the login to take effect.`);
+    return;
+  }
+
   if (command !== "serve") {
-    console.error(`unknown command "${command}". Try: hearth serve | hearth init`);
+    console.error(`unknown command "${command}". Try: hearth serve | hearth init | hearth set-operator`);
     process.exit(1);
   }
 

@@ -1,12 +1,12 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, Moon, Network, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, LogOut, Moon, Network, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
 import { History, Inspector, Models, Queue } from "./pages.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "../ui/types.js";
-import { go, select, useStore, type Page } from "./store.js";
+import { go, login, logout, select, useStore, type Page } from "./store.js";
 import { Topology } from "./Topology.js";
 import { Button, Card, cx, Pill } from "./ui.js";
 
@@ -148,6 +148,44 @@ function Activity() {
   );
 }
 
+function LoginCard() {
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    const msg = await login(user, pass);
+    setBusy(false);
+    if (msg !== null) setErr(msg);
+  };
+  return (
+    <div className="grid flex-1 place-items-center p-5">
+      <Card className="w-full max-w-sm p-5">
+        <form onSubmit={submit}>
+          <div className="flex items-center gap-2 text-base font-semibold">
+            <Flame size={16} className="text-accent" />
+            log in to hearth
+          </div>
+          <p className="mt-1 text-dim">This page is loopback-only. A login opens the whole console — dashboard, config, controls — from anywhere on your network.</p>
+          <input autoFocus value={user} onChange={(e) => setUser(e.target.value)} placeholder="username"
+                 className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
+          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password"
+                 className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
+          {err !== null && <div className="mt-2 text-sm text-bad">{err}</div>}
+          <div className="mt-4 flex justify-end">
+            <Button tone="primary" type="submit" disabled={busy || user === "" || pass === ""}>
+              {busy ? "signing in…" : "log in"}
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
 function KeyDialog() {
   const ask = useStore((s) => s.askKey);
   const [key, setKey] = useState("");
@@ -186,6 +224,7 @@ export default function App() {
   const data = useStore((s) => s.data);
   const live = useStore((s) => s.live);
   const dead = useStore((s) => s.dead);
+  const loginRequired = useStore((s) => s.loginRequired);
   const page = useStore((s) => s.page);
   const [dark, toggleTheme] = useTheme();
 
@@ -221,8 +260,14 @@ export default function App() {
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-5">
           <span className="font-semibold">{self?.name ?? "…"}</span>
           {dead ? <Pill tone="bad">unreachable</Pill> : <Pill tone={live ? "ok" : "warn"} pulse={live}>{live ? "live" : "polling"}</Pill>}
+          {data?.operator && <Pill tone="ok">signed in as {data.operator}</Pill>}
           <div className="ml-4 min-w-0"><Health /></div>
           <div className="ml-auto flex items-center gap-3">
+            {data?.operator && (
+              <button onClick={() => { void logout(); }} className="flex items-center gap-1.5 text-[12px] text-dim hover:text-fg" title="end this browser's session">
+                <LogOut size={14} /> sign out
+              </button>
+            )}
             <ConfigPill />
             <button onClick={toggleTheme} aria-label="toggle theme" className="text-dim hover:text-fg">
               {dark ? <Sun size={16} /> : <Moon size={16} />}
@@ -230,7 +275,9 @@ export default function App() {
           </div>
         </header>
 
-        {!data ? (
+        {loginRequired ? (
+          <LoginCard />
+        ) : !data ? (
           <div className="grid flex-1 place-items-center text-dim">{dead ? "hearth is not answering" : "connecting…"}</div>
         ) : page === "topology" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">

@@ -206,6 +206,12 @@ export interface HearthConfig {
   /** Tokens peers present to us, by peer name. Kept separate from apiKeys so
    *  peer traffic is attributable and can be capped on its own. */
   peerTokens: Record<string, string>;
+  /**
+   * The operator login: a username and the scrypt hash of its password, as printed by
+   * `hearth set-operator`. Null means the console has no login form and no session can
+   * exist — the address and the keys are the only doors in.
+   */
+  operator: { user: string; passHash: string } | null;
   /** Models we'll serve to peers. Empty means none, since lending is opt-in. */
   share: string[];
   /** What each model is for, shown to peers beside it. */
@@ -876,6 +882,20 @@ export function parseConfig(raw: unknown): HearthConfig {
     port: count(listen.port, "listen.port", 4141, 1),
   };
 
+  // The password is a hash, never a secret in the file: `set-operator` computes it and
+  // the file holds only the salt:hash pair, which verifies and reveals nothing.
+  let operator: { user: string; passHash: string } | null = null;
+  if (root.operator !== undefined && root.operator !== null) {
+    const e = asRecord(root.operator, "operator");
+    const user = str(e.user, "operator.user").trim();
+    if (user === "") throw bad("operator.user", "must not be empty");
+    const passHash = str(e.passHash, "operator.passHash");
+    // 16-byte salt and 64-byte scrypt, both hex: the shape `set-operator` prints.
+    if (!/^[0-9a-f]{32}:[0-9a-f]{128}$/.test(passHash))
+      throw bad("operator.passHash", "must be the salt:hash printed by `hearth set-operator`");
+    operator = { user, passHash };
+  }
+
   let uiListen: { host: string; port: number; control: UiControl } | null = null;
   if (root.uiListen !== undefined && root.uiListen !== null) {
     const u = asRecord(root.uiListen, "uiListen");
@@ -930,6 +950,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     apiKeyLabels,
     apiKeyModels,
     peerTokens,
+    operator,
     share: strList(root.share, "share"),
     notes: (() => {
       const raw = root.notes === undefined ? {} : asRecord(root.notes, "notes");

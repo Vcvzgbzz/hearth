@@ -206,6 +206,8 @@ export interface Controls {
 export interface UiData {
   /** Whether the write routes exist on the socket that served this page. */
   canWarm: boolean;
+  /** The operator logged in on this socket, or null for loopback, key and status-page callers. */
+  operator: string | null;
   /** How to authenticate a write here, decided per socket rather than guessed. */
   control: "open" | "key" | "off";
   controls: Controls;

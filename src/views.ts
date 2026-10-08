@@ -30,12 +30,15 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
    * Everything the page draws, shared by /ui/data and the event stream. `canWarm` is whether this
    * socket can perform actions. Uses ensureFresh, never probeAll.
    */
-  async function uiPayload(canWarm: boolean): Promise<Record<string, unknown>> {
+  async function uiPayload(canWarm: boolean, operator: string | null = null): Promise<Record<string, unknown>> {
     await peers.ensureFresh();
     // Declared activity paths are read only while a page is building data, never on a timer.
     for (const b of pool.all()) if (b.cfg.activity) void b.state.sampleActivity(b.cfg.activity);
     return {
       canWarm,
+      // Who this socket signed in as, so the page can show it and offer a sign-out;
+      // loopback and key callers are nobody in particular.
+      operator,
       // How this page must authenticate its writes, decided per socket rather
       // than assumed. "off" when the socket serves no write routes at all.
       control: canWarm ? writeMode() : "off",

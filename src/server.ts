@@ -14,6 +14,7 @@ import {
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink } from "./configfile.js";
+import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, verifyDecoy, verifyPassword } from "./login.js";
 import type { Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
@@ -257,6 +258,15 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       i++;
     }
     return null;
+  }
+
+  /** The operator login: a session is the third trust signal, beside the address and the keys. */
+  const sessions = new OperatorSessions();
+  const loginThrottle = new LoginThrottle();
+  /** The logged-in operator behind this request's session cookie, or null. */
+  function sessionOperator(req: IncomingMessage): string | null {
+    const token = cookieToken(req.headers.cookie);
+    return token ? sessions.check(token) : null;
   }
 
   /** Per-request timing for the one-line request log; `waitedMs` shows whether admission queued it. */
@@ -580,11 +590,14 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     if (r.auth === "open") return { ...base, peer: null, caller: "", models: null };
 
     if (r.auth === "loopback") {
-      if (!isLoopback(req)) {
-        refuse(res, 403, "the status page is loopback-only", env);
+      // A logged-in operator may reach the page and its data stream from off-loopback: the page
+      // is static, and the payload is the same one the status port serves keyless.
+      const op = sessionOperator(req);
+      if (!isLoopback(req) && op === null) {
+        refuse(res, 403, "the status page is loopback-only, or open to a logged-in operator", env);
         return null;
       }
-      return { ...base, peer: null, caller: "", models: null };
+      return { ...base, peer: null, caller: op !== null ? "operator:" + op : "", models: null };
     }
 
     const asPeer = r.auth === "local" ? null : peerCaller(req);
@@ -596,7 +609,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       return { ...base, peer: asPeer, caller: asPeer, models: null };
     }
 
-    const asLocal = localCaller(req);
+    // A live operator session is a full local identity: no scope, so nothing below it can refuse.
+    let asLocal = localCaller(req);
+    if (asLocal === null) {
+      const op = sessionOperator(req);
+      if (op !== null) asLocal = { caller: "operator:" + op, models: null };
+    }
     if (asPeer === null && asLocal === null) {
       refuse(res, 401, "unauthorized", env);
       return null;
@@ -632,10 +650,15 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     { path: "/v1/chat/completions", methods: ["POST"], auth: "either", envelope: "openai",
       scoped: true, handler: routeChat },
 
-    // On the MAIN port the page stays loopback-only. Reaching it from
-    // elsewhere is what uiListen is for, and that is a separate socket.
-    { path: ["/ui", "/ui/", "/ui/next", "/ui/classic", "/ui/data", "/ui/events"], auth: "loopback", envelope: "openai",
-      handler: routeUi },
+    // Login and logout take no credential by definition; cross-origin POSTs are refused above.
+    { path: "/login", methods: ["POST"], auth: "open", handler: routeLogin },
+    { path: "/logout", methods: ["POST"], auth: "open", handler: routeLogout },
+
+    // The page is static — every byte of data comes from /ui/data and /ui/events — so it may go
+    // out wide; the gate that matters is the one on the data stream. The status port keeps its
+    // own frozen route table and is untouched by this.
+    { path: ["/ui", "/ui/", "/ui/next", "/ui/classic"], auth: "open", handler: routeUi },
+    { path: ["/ui/data", "/ui/events"], auth: "loopback", envelope: "openai", handler: routeUi },
 
     { path: "*", auth: "local", envelope: "openai", handler: routePassthrough },
   ];
@@ -1233,14 +1256,67 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     );
   }
 
+  /** The operator login: verify against the config's hash, mint a session, set the cookie. */
+  async function routeLogin(c: Call): Promise<void> {
+    if (!cfg.operator) {
+      json(c.res, 404, { error: "no operator login is configured on this node" });
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse((await readBody(c.req, cfg.maxBodyBytes)).toString() || "{}");
+    } catch {
+      json(c.res, 400, { error: "the login body must be JSON" });
+      return;
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      json(c.res, 400, { error: "the login body must be JSON" });
+      return;
+    }
+    const user = typeof body.user === "string" ? body.user : "";
+    const pass = typeof body.pass === "string" ? body.pass : "";
+    const ip = c.req.socket.remoteAddress ?? "?";
+    const now = Date.now();
+    if (loginThrottle.blocked(user, ip, now)) {
+      json(c.res, 429, { error: "too many failed logins — try again in a few minutes" });
+      return;
+    }
+    // An unknown username burns one full scrypt, so response time says nothing about it.
+    const ok = user !== "" && secretEq(user, cfg.operator.user)
+      ? await verifyPassword(pass, cfg.operator.passHash)
+      : await verifyDecoy(pass);
+    if (!ok) {
+      loginThrottle.note(user, ip, now);
+      log.warn("login.failed", { ip, user: user === "" ? null : user });
+      json(c.res, 401, { error: "bad username or password" });
+      return;
+    }
+    loginThrottle.clear(user);
+    const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+    c.res.setHeader("Set-Cookie", `${COOKIE}=${sessions.mint(user, now)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`);
+    log.info("login.ok", { ip, caller: "operator:" + user });
+    json(c.res, 200, { ok: true });
+  }
+
+  /** Drop this request's session, if any; a session-less logout is a no-op. */
+  async function routeLogout(c: Call): Promise<void> {
+    const token = cookieToken(c.req.headers.cookie);
+    if (token) sessions.drop(token);
+    c.res.setHeader("Set-Cookie", `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+    json(c.res, 200, { ok: true });
+  }
+
+  /** A caller id like `operator:jadeyn` is the login the page can show and sign out of. */
+  const opOf = (caller: string): string | null => (caller.startsWith("operator:") ? caller.slice(9) : null);
+
   async function routeUi(c: Call): Promise<void> {
     const { req, res, path } = c;
     // The event stream shares the page's address-based gate.
     if (path === "/ui/events") {
-      await serveUiEvents(req, res, true);
+      await serveUiEvents(req, res, true, opOf(c.caller));
       return;
     }
-    await serveUi(path, res, true);
+    await serveUi(path, res, true, opOf(c.caller));
     return;
   }
 
@@ -1457,7 +1533,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     }
   }
 
-  async function serveUiEvents(req: IncomingMessage, res: ServerResponse, canWarm: boolean): Promise<void> {
+  async function serveUiEvents(req: IncomingMessage, res: ServerResponse, canWarm: boolean, operator: string | null = null): Promise<void> {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-store",
@@ -1474,6 +1550,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     writeFrame(res, "snapshot", {
       ...snapshot,
       canWarm,
+      operator,
       control: canWarm ? writeMode() : "off",
     });
     lastFlushAt = Date.now();
@@ -1498,12 +1575,12 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   }
 
   /** The page and its data, the only things either listener serves to the page. */
-  async function serveUi(path: string, res: ServerResponse, canWarm = false): Promise<void> {
+  async function serveUi(path: string, res: ServerResponse, canWarm = false, operator: string | null = null): Promise<void> {
     if (path === "/ui/data") {
       // One payload rather than three fetches. It also means /network and
       // /queue keep their own auth gate untouched: nothing here relaxes them,
       // the page simply does not use them.
-      json(res, 200, await uiPayload(canWarm));
+      json(res, 200, await uiPayload(canWarm, operator));
       return;
     }
     // The 2.0 console everywhere; the previous page stays at /ui/classic for one release.
@@ -1564,6 +1641,10 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       })
     : null;
 
+  /** Expired sessions, swept like any other in-memory state; unref'd so it never holds the process. */
+  const sessionSweep = setInterval(() => { sessions.prune(); }, 30 * 60_000);
+  sessionSweep.unref?.();
+
   /** Where a Save goes: the config file when writable, else the sidecar, else nowhere. */
   return {
     server,
@@ -1578,6 +1659,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       config.watch();
     },
     close: async (graceMs = 0) => {
+      clearInterval(sessionSweep);
+      sessions.prune();
       config.close();
       peers.stop();
       pool.stop();

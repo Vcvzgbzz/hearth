@@ -370,17 +370,23 @@ const base = await new Promise<string>((ready) =>
     );
     const remote = `http://${iface.address}:${port}`;
 
-    for (const path of ["/ui", "/ui/data"]) {
+    // The shell is static — every byte of data comes from /ui/data and /ui/events — so it
+    // may go out wide; the gate that matters is the one on the data stream.
+    const page = await fetch(`${remote}/ui`);
+    assert.equal(page.status, 200, "/ui is a static shell, open to anyone who can reach it");
+    await page.text();
+
+    for (const path of ["/ui/data", "/ui/events"]) {
       const bare = await fetch(`${remote}${path}`);
       assert.equal(bare.status, 403, `${path} must refuse an off-box caller`);
 
       // The point of the whole test: a VALID api key still does not open it.
-      // Every other route on this server would accept this request.
+      // A key runs models and edits config; the dashboard is a login, not a key.
       const keyed = await fetch(`${remote}${path}`, {
         headers: { Authorization: "Bearer secret-key" },
       });
       assert.equal(keyed.status, 403,
-        `${path} must stay loopback-only even for a valid api key`);
+        `${path} stays closed for a valid api key`);
       assert.match(await keyed.text(), /loopback-only/);
     }
 
