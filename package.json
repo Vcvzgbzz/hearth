@@ -1,6 +1,6 @@
 {
   "name": "@vcvzgbzz/hearth",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A queue in front of your local inference server, and an optional way to lend the spare capacity to someone you trust.",
   "type": "module",
   "license": "MIT",
