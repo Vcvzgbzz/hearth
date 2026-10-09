@@ -197,6 +197,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | path | who | what |
 |---|---|---|
 | `/ui` | anyone | the console, a static shell; its data takes loopback or a login: topology with live request flow, models and sharing, the queue and recent requests, and the config file by section. ⌘K jumps anywhere |
+| `/restart` | local | `POST` drains in-flight work and exits `75`, so a supervisor with `Restart=on-failure` (or `always`) starts the node again; the console offers it while a change waits for a restart. Without a supervisor it only stops. `501` when not run by `hearth serve` |
 | `/control` | local | read or change what leaves this node: lending, borrowing, per-model sharing, peer model maps |
 | `/queue/events` | local | the caller's own jobs, pushed over SSE: a `snapshot` on connect, then `jobs` whenever the list changes (queued, started, finished, moved in line). One connection serves every job a client has, so it never needs to poll |
 | `X-Hearth-Job: <id>` | request header | the client's own id for this request (letters, digits, `._:-`, up to 128). It comes back as the job's `id` on `/queue` and `/queue/events`, so a client can match updates to its own work |

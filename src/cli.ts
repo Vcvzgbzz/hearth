@@ -291,15 +291,17 @@ async function main(): Promise<void> {
 
   // A second signal stops immediately instead of waiting out the grace again.
   let stopping = false;
-  const shutdown = (sig: string) => {
+  const shutdown = (sig: string, code = 0) => {
     if (stopping) {
       log.warn("shutdown.forced", { signal: sig });
       process.exit(1);
     }
     stopping = true;
     log.info("shutting down", { signal: sig, graceMs: cfg.shutdownGraceMs });
-    void node.close(cfg.shutdownGraceMs).then(() => process.exit(0));
+    void node.close(cfg.shutdownGraceMs).then(() => process.exit(code));
   };
+  // 75 (EX_TEMPFAIL) is a failure to systemd, so Restart=on-failure brings the node back.
+  node.onRestart = () => shutdown("restart", 75);
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }

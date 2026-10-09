@@ -118,6 +118,8 @@ export interface HearthNode {
   start: () => void;
   /** Stop, letting in-flight requests finish for up to `graceMs` (default 0 destroys them). */
   close: (graceMs?: number) => Promise<void>;
+  /** What `POST /restart` calls; set by `hearth serve`, null when nothing could start the node again. */
+  onRestart: (() => void) | null;
 }
 
 export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
@@ -682,6 +684,7 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // Local only: /control changes state, so a peer must never reach it.
     { path: "/network", auth: "local", handler: routeNetwork },
     { path: "/control", auth: "local", handler: routeControl },
+    { path: "/restart", methods: ["POST"], auth: "local", handler: routeRestart },
     { path: "/config", methods: ["GET", "PATCH", "POST"], auth: "local", handler: routeConfig },
     { path: "/queue", auth: "local", handler: routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: routeQueueEvents },
@@ -824,6 +827,17 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
    * Read (GET) or change (POST) federation at runtime: `lending`, `borrowing`, per-model `share`
    * (null defers to config), `link`/`unlink`, and `save`. Local only; omitted fields are left alone.
    */
+  /** Drain and exit non-zero, so a supervisor with Restart=on-failure starts the node again. */
+  async function routeRestart(c: Call): Promise<void> {
+    if (node.onRestart === null) {
+      json(c.res, 501, { error: "this node was not started by `hearth serve`, so it cannot restart itself" });
+      return;
+    }
+    log.info("restart.requested", { caller: c.caller });
+    json(c.res, 202, { ok: true });
+    node.onRestart();
+  }
+
   async function routeControl(c: Call): Promise<void> {
     const { req, res } = c;
     if (req.method === "GET") {
@@ -1794,8 +1808,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   const sessionSweep = setInterval(() => { sessions.prune(); }, 30 * 60_000);
   sessionSweep.unref?.();
 
-  /** Where a Save goes: the config file when writable, else the sidecar, else nowhere. */
-  return {
+  const node: HearthNode = {
+    onRestart: null,
     server,
     pool,
     peers,
@@ -1846,4 +1860,5 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       await closed;
     },
   };
+  return node;
 }

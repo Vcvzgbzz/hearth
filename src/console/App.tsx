@@ -6,7 +6,7 @@ import { Config } from "./config.js";
 import { History, Inspector, Models, Queue } from "./pages.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
-import { go, login, logout, select, useStore, type Page } from "./store.js";
+import { go, login, logout, restartNode, select, useStore, type Page } from "./store.js";
 import { Topology } from "./Topology.js";
 import { Button, Card, cx, Pill } from "./ui.js";
 
@@ -32,7 +32,16 @@ function ConfigPill() {
   if (!c) return null;
   const tone = c.error ? "bad" : c.restartPending.length ? "warn" : "ok";
   const text = c.error ? "config does not load" : c.restartPending.length ? `restart to apply ${c.restartPending.length}` : c.path ? "saved" : "in memory";
-  return <button onClick={() => go("config")} title={c.path ?? undefined}><Pill tone={tone}>{text}</Pill></button>;
+  return (
+    <span className="flex items-center gap-2">
+      <button onClick={() => go("config")} title={c.path ?? undefined}><Pill tone={tone}>{text}</Pill></button>
+      {!c.error && c.restartPending.length > 0 && (
+        <button className="text-[12px] text-dim hover:text-fg" onClick={() => {
+          if (confirm("Restart hearth? Running requests finish first, everyone is signed out, and it only comes back if systemd (or similar) restarts it.")) void restartNode();
+        }}>restart</button>
+      )}
+    </span>
+  );
 }
 
 type Finding = { tone: "bad" | "warn"; text: string; go: () => void };

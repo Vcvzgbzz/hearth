@@ -192,6 +192,28 @@ export async function request<T = Record<string, unknown>>(method: string, path:
   return d as T;
 }
 
+/** Ask the node to restart, then reload once it answers again; a restart ends every session. */
+export async function restartNode(): Promise<void> {
+  try {
+    await request("POST", "/restart");
+  } catch (e) {
+    toast("bad", (e as Error).message);
+    return;
+  }
+  toast("ok", "restarting…");
+  disconnect();
+  const deadline = Date.now() + 120_000;
+  // Wait for it to go down first, so the old process answering is not taken for the new one.
+  let wentDown = false;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const up = await fetch("/healthz", { cache: "no-store" }).then(() => true, () => false);
+    if (!up) wentDown = true;
+    else if (wentDown) return location.reload();
+  }
+  toast("bad", "hearth did not come back — check its supervisor");
+}
+
 export class RequestError extends Error {
   constructor(message: string, readonly path: string | null) {
     super(message);
