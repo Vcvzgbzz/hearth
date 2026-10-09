@@ -36,7 +36,15 @@ comment is read by strangers. Write for them.
 - A new config key is declared in `src/fields.ts`, the one table the parser and
   the console editor both read, or the parser rejects it. If it applies without
   a restart, add it to `LIVE_KEYS` in `src/configfile.ts`.
-- User-visible behaviour or config changes update `README.md` in the same PR.
+- Update every doc your change makes wrong, in the same PR. Search for the
+  names you touched (`grep -rn <name> README.md src/`) rather than trusting
+  memory. The places that describe behaviour:
+  - `README.md`: the config table (one row per setting in `src/fields.ts`),
+    the endpoint table (one row per route in `src/server.ts`), and any section
+    or example that shows what you changed
+  - `src/fields.ts`: each setting's one-line `desc`, which the console shows
+  - `src/cli.ts`: the `hearth init` starter config and the command usage lines
+  - `AGENTS.md`: the file map and these rules, if you move or add files
 
 ## Commit messages
 
