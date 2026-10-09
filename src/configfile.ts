@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { basename, dirname } from "node:path";
 
-import { parseDocument, type Document } from "yaml";
+import { isMap, isScalar, parseDocument, type Document } from "yaml";
 
 import { Refusal } from "./admit.js";
 import { ConfigError, parseConfig, peersMapping, type HearthConfig, type ModelRoute, type RoutePolicy } from "./config.js";
@@ -50,6 +50,8 @@ export interface ConfigOp {
   path: (string | number)[];
   value?: unknown;
   delete?: true;
+  /** Rename the map key at `path`, keeping its value, comments and layout. */
+  rename?: string;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -422,6 +424,16 @@ export class ConfigFile {
         if (!Array.isArray(op.path) || op.path.length === 0) throw new ConfigRefusal(400, "each op needs a non-empty path", null);
         if (op.delete) {
           doc.deleteIn(op.path);
+          continue;
+        }
+        if (op.rename !== undefined) {
+          const parent = doc.getIn(op.path.slice(0, -1), true);
+          const key = op.path[op.path.length - 1];
+          const pair = isMap(parent) ? parent.items.find((p) => (isScalar(p.key) ? p.key.value : p.key) === key) : undefined;
+          if (!pair || !isScalar(pair.key)) throw new ConfigRefusal(409, `nothing at ${op.path.join(".")} to rename`, null);
+          if (typeof op.rename !== "string" || op.rename === "") throw new ConfigRefusal(400, "rename needs a non-empty name", null);
+          if (isMap(parent) && parent.has(op.rename)) throw new ConfigRefusal(400, `${op.rename} already exists`, null);
+          pair.key.value = op.rename;
           continue;
         }
         // A list or map written inline stays inline when replaced.

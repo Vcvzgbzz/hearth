@@ -57,6 +57,17 @@ function refsOf(doc: Record<string, unknown>, catalog: string[]): Record<Ref, st
   };
 }
 
+/** Renames ride as their own ops, so the file keeps the entry's comments and layout. */
+const Renamer = createContext<(path: Path, to: string) => void>(() => {});
+
+/** `obj` with the key at `rel` renamed, order kept. */
+function renameIn(obj: unknown, rel: Path, to: string): unknown {
+  if (!isObj(obj) || rel.length === 0) return obj;
+  const [head, ...rest] = rel;
+  if (rest.length) return { ...obj, [head as string]: renameIn(obj[head as string], rest, to) };
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k === head ? to : k, v]));
+}
+
 /** Set by whatever adds a control; the control takes focus as it mounts. */
 let focusNext: string | null = null;
 const takeFocus = (id: string) => (el: HTMLElement | null) => {
@@ -80,26 +91,36 @@ const tagOf = (f: Field): string =>
     : f.type === "ref" || f.type === "refs" ? f.ref : f.type;
 
 /** One line under a control: what it does, and what it is when unset. */
-function Hint({ f }: { f: Field }) {
+function Hint({ f, quiet = false }: { f: Field; quiet?: boolean }) {
   const d = "def" in f ? f.def : undefined;
   const def = d === undefined ? null : f.type === "ms" && typeof d === "number" ? `${d} (${humanMs(d)})` : String(d);
-  return <div className="mt-1 text-[11px] leading-4 text-dim">{f.desc}{def !== null && <> Default <span className={mono}>{def}</span>.</>}</div>;
+  return <div className={cx("mt-1 text-[11px] leading-4 text-dim", quiet && "hint hidden")}>{f.desc}{def !== null && <> Default <span className={mono}>{def}</span>.</>}</div>;
 }
 
-/** A list of scalars as one line: edit freely, commit on Enter or blur — so `a, b` is typeable at all. */
+/** A free list as chips: type and press Enter or comma to add; Backspace on an empty box removes the last. */
 function ListInput({ id, v, onChange, bad }: { id: string; v: string[]; onChange: (v: string[]) => void; bad: boolean }) {
-  const [raw, setRaw] = useState(() => v.join(", "));
-  useEffect(() => { setRaw(v.join(", ")); }, [v]);
-  const commit = () => {
-    const next = raw.split(",").map((x) => x.trim()).filter(Boolean);
-    if (next.length === v.length && next.every((x, i) => x === v[i])) { setRaw(v.join(", ")); return; }
-    onChange(next);
+  const [raw, setRaw] = useState("");
+  const add = () => {
+    const next = raw.split(",").map((x) => x.trim()).filter((x) => x && !v.includes(x));
+    setRaw("");
+    if (next.length) onChange([...v, ...next]);
   };
   return (
-    <input id={id} ref={takeFocus(id)} className={cx(INPUT, mono, "w-full", bad ? "border-bad" : "border-line")} value={raw} placeholder="a, b, c"
-           onChange={(e) => setRaw(e.target.value)}
-           onKeyDown={(e) => e.key === "Enter" && commit()}
-           onBlur={commit} />
+    <div className={cx("flex min-h-8 max-w-2xl flex-wrap items-center gap-1.5 rounded-md border bg-bg px-1.5 py-1 focus-within:border-accent", bad ? "border-bad" : "border-line")}>
+      {v.map((x) => (
+        <span key={x} className={cx("inline-flex h-6 items-center gap-1 rounded border border-line bg-muted pl-1.5 pr-0.5", mono)}>
+          {x}
+          <button type="button" aria-label={`remove ${x}`} className="rounded p-0.5 text-dim hover:text-bad" onClick={() => onChange(v.filter((y) => y !== x))}><X size={11} /></button>
+        </span>
+      ))}
+      <input id={id} ref={takeFocus(id)} className={cx(mono, "h-6 min-w-24 flex-1 bg-transparent outline-none")} value={raw} placeholder={v.length ? "" : "add, then Enter"}
+             onChange={(e) => setRaw(e.target.value)}
+             onKeyDown={(e) => {
+               if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
+               else if (e.key === "Backspace" && raw === "" && v.length) onChange(v.slice(0, -1));
+             }}
+             onBlur={add} />
+    </div>
   );
 }
 
@@ -166,17 +187,17 @@ function Scalar({ id, name, f, v, onChange, bad }: {
   if (typeof v === "number" || v === null) {
     return <input id={id} ref={takeFocus(id)} type="number" className={cx(base, "tabular w-36")} value={v ?? ""} onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />;
   }
-  return <input id={id} ref={takeFocus(id)} className={cx(base, mono, "w-full")} placeholder={f?.type === "secret" ? "env:NAME" : undefined}
+  return <input id={id} ref={takeFocus(id)} className={cx(base, mono, "w-full max-w-2xl")} placeholder={f?.type === "secret" ? "env:NAME" : undefined}
                 value={v === undefined ? "" : String(v)} onChange={(e) => onChange(e.target.value)} />;
 }
 
 /** Any value: maps as labelled rows, lists of maps as cards, scalars and scalar lists as controls. */
-function Value({ name, v, path, onChange, err }: {
-  name: string; v: unknown; path: Path; onChange: (v: unknown) => void; err: Err | null;
+function Value({ name, v, path, onChange, err, compact }: {
+  name: string; v: unknown; path: Path; onChange: (v: unknown) => void; err: Err | null; compact?: boolean;
 }): ReactNode {
   const bad = err?.path === fmt(path);
   const f = fieldAt(path);
-  if (isObj(v)) return <Obj v={v} path={path} onChange={onChange} err={err} />;
+  if (isObj(v)) return <Obj v={v} path={path} onChange={onChange} err={err} compact={compact} />;
   if (Array.isArray(v) && (v.some(isObj) || (NEW[fmt(path)]?.list && v.length === 0))) {
     const spec = NEW[fmt(path)];
     return (
@@ -205,16 +226,39 @@ function Value({ name, v, path, onChange, err }: {
       <Scalar id={fid(path)} name={name} f={f} v={v} onChange={onChange} bad={bad} />
       {bad && <div className="mt-1 text-[11px] text-bad">{err!.message}</div>}
       {!bad && secretHint(name, v) && <div className="mt-1 text-[11px] text-warn">{secretHint(name, v)}</div>}
-      {f && <Hint f={f} />}
+      {f && <Hint f={f} quiet />}
     </div>
   );
 }
 
 /** One named thing — a model, a backend, a route — as a card that folds away. */
-function Entry({ label, title, bad, onRemove, children }: {
-  label: string; title?: ReactNode; bad: boolean; onRemove: () => void; children: ReactNode;
+function Entry({ label, title, bad, onRemove, onRename, children }: {
+  label: string; title?: ReactNode; bad: boolean; onRemove: () => void;
+  /** Rename the entry; returns why not, or null when done. */
+  onRename?: (to: string) => string | null;
+  children: ReactNode;
 }) {
   const [open, setOpen] = useState(true);
+  const [name, setName] = useState(label);
+  const [why, setWhy] = useState<string | null>(null);
+  useEffect(() => { setName(label); }, [label]);
+  const rename = () => {
+    const to = name.trim();
+    if (!onRename || to === label) { setName(label); setWhy(null); return; }
+    const no = onRename(to);
+    setWhy(no);
+    if (no) setName(label);
+  };
+  if (onRename && !title) {
+    title = (
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <input aria-label={`rename ${label}`} value={name} onChange={(e) => setName(e.target.value)} onBlur={rename}
+               onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setName(label); setWhy(null); } }}
+               className={cx(mono, "min-w-0 max-w-xs flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 font-medium hover:border-line focus:border-accent focus:outline-none")} />
+        {why && <span className="text-[11px] text-bad">{why}</span>}
+      </span>
+    );
+  }
   return (
     <Card className={cx("overflow-hidden", bad && "border-bad")}>
       <div className={cx("flex items-center gap-2 bg-muted/40 px-3 py-1.5", open && "border-b border-line")}>
@@ -232,16 +276,27 @@ function Entry({ label, title, bad, onRemove, children }: {
 /** Only the innermost hovered row shows its remove button; its parents' stay hidden. */
 const ROW_HOVER = "[&:hover:not(:has(.obj-row:hover))>.rm]:opacity-100 [&:hover:not(:has(.obj-row:hover))>div>.rm]:opacity-100";
 
-function Obj({ v, path, onChange, err }: { v: Record<string, unknown>; path: Path; onChange: (v: unknown) => void; err: Err | null }) {
+function Obj({ v, path, onChange, err, compact }: {
+  v: Record<string, unknown>; path: Path; onChange: (v: unknown) => void; err: Err | null; compact?: boolean;
+}) {
   const scope = scopeOf(path);
   const spec = NEW[fmt(path)];
   const drop = (k: string) => { const { [k]: _, ...rest } = v; onChange(rest); };
   const set = (k: string) => (n: unknown) => onChange({ ...v, [k]: n });
+  const noteRename = useContext(Renamer);
   if (spec) {
     return (
       <div className="flex flex-col gap-3">
         {Object.entries(v).map(([k, x]) => (
-          <Entry key={k} label={k} bad={err?.path?.startsWith(fmt([...path, k])) ?? false} onRemove={() => drop(k)}>
+          <Entry key={k} label={k} bad={err?.path?.startsWith(fmt([...path, k])) ?? false} onRemove={() => drop(k)}
+                 onRename={(to) => {
+                   if (!to) return "needs a name";
+                   if (to in v) return `${to} already exists`;
+                   // Same position, new key; anything that refers to the old name is caught by the save's validation.
+                   noteRename([...path, k], to);
+                   onChange(Object.fromEntries(Object.entries(v).map(([n, y]) => [n === k ? to : n, y])));
+                   return null;
+                 }}>
             <Value name={k} v={x} path={[...path, k]} err={err} onChange={set(k)} />
           </Entry>
         ))}
@@ -259,20 +314,21 @@ function Obj({ v, path, onChange, err }: { v: Record<string, unknown>; path: Pat
       {Object.entries(v).filter(([k]) => k !== hide).map(([k, x]) => {
         const at = [...path, k];
         const nested = isObj(x) || (Array.isArray(x) && x.some(isObj));
-        const label = <label htmlFor={nested ? undefined : fid(at)} className={cx("w-44 shrink-0 pt-1.5 text-dim max-sm:w-auto max-sm:pt-0", mono)}>{k}</label>;
+        const label = <label htmlFor={nested ? undefined : fid(at)} title={fieldAt(at)?.desc} className={cx("w-44 shrink-0 pt-1.5 text-dim max-sm:w-auto max-sm:pt-0", mono)}>{k}</label>;
         // A group's name sits above it, and its settings indent under it rather than taking a column.
         if (nested) {
           return (
             <div key={k} className={cx("obj-row border-b border-line/50 py-2 last:border-0", ROW_HOVER)}>
               <div className="flex items-start justify-between">{label}{rm(k)}</div>
               <div className="mt-1 border-l-2 border-line pl-3">
-                <Value name={k} v={x} path={at} err={err} onChange={set(k)} />
+                <Value name={k} v={x} path={at} err={err} onChange={set(k)} compact />
               </div>
             </div>
           );
         }
         return (
-          <div key={k} className={cx("obj-row flex items-start gap-3 border-b border-line/50 py-2 last:border-0 max-sm:flex-col max-sm:gap-1", ROW_HOVER)}>
+          // A setting's description shows while it is being edited; the label carries it as a tooltip otherwise.
+          <div key={k} className={cx("obj-row flex items-start gap-3 border-b border-line/50 py-2 last:border-0 max-sm:flex-col max-sm:gap-1 [&:focus-within_.hint]:block", ROW_HOVER)}>
             {label}
             <div className="min-w-0 flex-1 max-sm:w-full">
               {/* A cleared field becomes null in the draft, which opsBetween turns into a key deletion. */}
@@ -284,7 +340,7 @@ function Obj({ v, path, onChange, err }: { v: Record<string, unknown>; path: Pat
       })}
       <div className="pt-2">
         {scope ? (
-          <AddSetting scope={scope} have={v} onAdd={(k) => { focusNext = fid([...path, k]); onChange({ ...v, [k]: seedOf(FIELDS[scope][k]!) }); }} />
+          <AddSetting scope={scope} have={v} compact={compact} onAdd={(k) => { focusNext = fid([...path, k]); onChange({ ...v, [k]: seedOf(FIELDS[scope][k]!) }); }} />
         ) : (
           <AddPair path={path} have={v} onAdd={(k, x) => onChange({ ...v, [k]: x })} />
         )}
@@ -294,7 +350,7 @@ function Obj({ v, path, onChange, err }: { v: Record<string, unknown>; path: Pat
 }
 
 /** "+ add setting": the settings this scope has that are not set yet, searchable, each with what it does. */
-function AddSetting({ scope, have, onAdd }: { scope: Scope; have: Record<string, unknown>; onAdd: (key: string) => void }) {
+function AddSetting({ scope, have, onAdd, compact }: { scope: Scope; have: Record<string, unknown>; onAdd: (key: string) => void; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hl, setHl] = useState(0);
@@ -305,6 +361,15 @@ function AddSetting({ scope, have, onAdd }: { scope: Scope; have: Record<string,
   const list = unset.filter(([k, f]) => words.every((w) => `${k} ${f.desc}`.toLowerCase().includes(w)));
   const pick = (k: string) => { setOpen(false); setQ(""); onAdd(k); };
   if (!open) {
+    // Inside a group, a quiet link: the entry's own button is the one that reads as "add".
+    if (compact) {
+      return (
+        <button type="button" onClick={() => { setOpen(true); setHl(0); }}
+                className="inline-flex items-center gap-1 text-[11px] text-dim hover:text-fg focus-visible:outline-2 focus-visible:outline-accent">
+          <Plus size={11} />setting
+        </button>
+      );
+    }
     return (
       <button type="button" onClick={() => { setOpen(true); setHl(0); }}
               className="inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed border-line px-2 text-[12px] text-dim hover:border-accent hover:text-fg focus-visible:outline-2 focus-visible:outline-accent">
@@ -486,6 +551,7 @@ export function Config() {
   const [file, setFile] = useState<File | null>(null);
   const [tab, setTab] = useState<string>("backends");
   const [drafts, setDrafts] = useState<Record<string, unknown>>({});
+  const [renames, setRenames] = useState<Record<string, Op[]>>({});
   const [text, setText] = useState("");
   const [err, setErr] = useState<Err | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -496,6 +562,7 @@ export function Config() {
       setFile(f);
       setText(f.text);
       setDrafts({});
+      setRenames({});
       setErr(null);
     } catch (e) {
       setErr({ message: e instanceof Error ? e.message : String(e), path: null });
@@ -536,7 +603,10 @@ export function Config() {
     }
   };
   const saveSection = (key: string) => {
-    const ops = key === "node" ? opsBetween(original("node"), drafts.node) : opsBetween(original(key), drafts[key], [key]);
+    const rn = renames[key] ?? [];
+    // Diff against the original with the renames already applied, so they are not also a delete and an add.
+    const base = rn.reduce((o, r) => renameIn(o, key === "node" ? r.path : r.path.slice(1), r.rename!), original(key));
+    const ops = [...rn, ...(key === "node" ? opsBetween(base, drafts.node) : opsBetween(base, drafts[key], [key]))];
     if (ops.length) void review({ ops });
   };
   const sec = SECTIONS.find((s) => s.key === tab);
@@ -550,12 +620,15 @@ export function Config() {
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <Card className="flex flex-wrap items-center gap-3 px-4 py-3">
-        {status.error ? <Pill tone="bad">does not load</Pill> : status.restartPending.length ? <Pill tone="warn">restart needed</Pill> : <Pill tone="ok">applied</Pill>}
-        <span className={cx(mono, "min-w-0 break-all")}>{status.path ?? "in memory — no config file"}</span>
-        {status.restartPending.length > 0 && <span className="text-warn">restart hearth to apply: {status.restartPending.join(", ")}</span>}
-        {status.error && <span className="w-full text-bad">{status.error} — the node keeps running the last config that loaded.</span>}
-      </Card>
+      {/* A clean, applied file needs no banner: the nav says where it lives. */}
+      {(status.error || status.restartPending.length > 0 || !status.path) && (
+        <Card className="flex flex-wrap items-center gap-3 px-4 py-3">
+          {status.error ? <Pill tone="bad">does not load</Pill> : status.restartPending.length ? <Pill tone="warn">restart needed</Pill> : <Pill tone="ok">in memory</Pill>}
+          {!status.path && <span className="text-dim">no config file — edits last until the node stops</span>}
+          {status.restartPending.length > 0 && <span className="text-warn">restart hearth to apply: {status.restartPending.join(", ")}</span>}
+          {status.error && <span className="w-full text-bad">{status.error} — the node keeps running the last config that loaded.</span>}
+        </Card>
+      )}
       {status.path && file && (
         <div className="flex min-h-0 flex-1 gap-3 max-md:flex-col">
           <nav className="flex w-44 shrink-0 flex-col gap-0.5 max-md:w-full max-md:flex-row max-md:overflow-x-auto">
@@ -566,6 +639,7 @@ export function Config() {
                 {s.label}{s.key in drafts && <span className="ml-auto size-1.5 rounded-full bg-accent" />}
               </button>
             ))}
+            <div className="mt-auto truncate px-3 pt-3 text-[11px] text-dim max-md:hidden" title={status.path}>{status.path}</div>
           </nav>
           <Card className="flex min-h-0 flex-1 flex-col overflow-hidden max-md:min-h-[60vh]">
             <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
@@ -576,7 +650,7 @@ export function Config() {
               <div className="ml-auto flex gap-2">
                 {sec ? (
                   <>
-                    <Button disabled={!(tab in drafts)} onClick={() => { const { [tab]: _, ...rest } = drafts; setDrafts(rest); setErr(null); }}><RotateCcw size={13} />revert</Button>
+                    <Button disabled={!(tab in drafts)} onClick={() => { const { [tab]: _, ...rest } = drafts; setDrafts(rest); const { [tab]: _r, ...rn } = renames; setRenames(rn); setErr(null); }}><RotateCcw size={13} />revert</Button>
                     <Button tone="primary" disabled={!(tab in drafts)} onClick={() => saveSection(tab)}><Save size={13} />review & save</Button>
                   </>
                 ) : (
@@ -591,12 +665,14 @@ export function Config() {
             {sec ? (
               <div className="min-h-0 flex-1 overflow-auto p-4">
                 <Refs.Provider value={refsOf(merged, catalog)}>
+                <Renamer.Provider value={(path, to) => setRenames((r) => ({ ...r, [tab]: [...(r[tab] ?? []), { path, rename: to }] }))}>
                   {current(tab) === undefined ? (
                     <Button onClick={() => setDrafts({ ...drafts, [tab]: sec.list ? [] : {} })}><Plus size={13} />add a {sec.label.toLowerCase()} section</Button>
                   ) : (
                     <Value name={tab} v={current(tab)} path={tab === "node" ? [] : [tab]} err={err}
                            onChange={(n) => setDrafts({ ...drafts, [tab]: n })} />
                   )}
+                </Renamer.Provider>
                 </Refs.Provider>
               </div>
             ) : (

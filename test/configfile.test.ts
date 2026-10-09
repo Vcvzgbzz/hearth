@@ -349,6 +349,26 @@ operator:
   await node.close();
 }
 
+/* ------------------------------------------ a rename changes the key and nothing else */
+
+{
+  writeFileSync(cfgPath, ORIGINAL);
+  const a = await boot();
+  const r = await a.patch({ ops: [{ path: ["peers", "friend"], rename: "gpu-east" }] });
+  assert.equal(r.status, 200);
+  await r.text();
+  const after = readFileSync(cfgPath, "utf8");
+  // The yaml writer collapses the space before an inline comment on any save; nothing else moves.
+  assert.equal(after, ORIGINAL.replace("  friend:", "  gpu-east:").replace(/ +# the local/, " # the local"), "comments, flow maps and order untouched");
+  const dup = await a.patch({ ops: [{ path: ["backends", "main"], rename: "main" }] });
+  assert.equal(dup.status, 400, "renaming onto a name that exists is refused");
+  await dup.text();
+  const gone = await a.patch({ ops: [{ path: ["peers", "nobody"], rename: "x" }] });
+  assert.equal(gone.status, 409, "and so is renaming something that is not there");
+  await gone.text();
+  await a.node.close();
+}
+
 backend.closeAllConnections();
 backend.close();
 console.log("configfile.test.ts ok");

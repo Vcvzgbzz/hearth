@@ -35,6 +35,8 @@ import { lineDiff, opsBetween } from "../src/console/diff.js";
   assert.deepEqual(d.filter((l) => l.kind === "+").map((l) => l.text), ["line ten"]);
   assert.equal(d.filter((l) => l.kind === "…").length, 2, "unchanged runs before and after are folded");
   assert.equal(d.filter((l) => l.kind === " ").length, 6, "with three lines of context either side");
+  const changed = d.filter((l) => l.kind === "-" || l.kind === "+").map((l) => l.kind);
+  assert.deepEqual(changed, ["-", "+"], "the old line reads before its replacement");
 }
 
 console.log("diff.test.ts ok");

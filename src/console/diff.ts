@@ -18,8 +18,9 @@ export function lineDiff(a: string, b: string, context = 3): Line[] {
   let j = 0;
   while (i < x.length || j < y.length) {
     if (i < x.length && j < y.length && x[i] === y[j]) { all.push({ kind: " ", text: x[i]! }); i++; j++; }
-    else if (j < y.length && (i >= x.length || dp[i]![j + 1]! >= dp[i + 1]![j]!)) all.push({ kind: "+", text: y[j++]! });
-    else all.push({ kind: "-", text: x[i++]! });
+    // Removals before additions, as unified diffs read: the old line, then what replaces it.
+    else if (i < x.length && (j >= y.length || dp[i + 1]![j]! >= dp[i]![j + 1]!)) all.push({ kind: "-", text: x[i++]! });
+    else all.push({ kind: "+", text: y[j++]! });
   }
   const near = all.map((l, k) => l.kind !== " " || all.slice(Math.max(0, k - context), k + context + 1).some((m) => m.kind !== " "));
   const out: Line[] = [];
@@ -30,7 +31,7 @@ export function lineDiff(a: string, b: string, context = 3): Line[] {
   return out;
 }
 
-export type Op = { path: (string | number)[]; value?: unknown; delete?: true };
+export type Op = { path: (string | number)[]; value?: unknown; delete?: true; rename?: string };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);

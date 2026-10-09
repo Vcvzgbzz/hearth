@@ -57,8 +57,10 @@ export function Button({ children, onClick, tone = "plain", disabled, type = "bu
     <button
       type={type} onClick={onClick} disabled={disabled}
       className={cx(
-        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium transition-colors disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent",
-        tone === "primary" ? "bg-accent text-white hover:brightness-110" : "border border-line bg-panel hover:bg-muted",
+        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+        // A disabled primary is idle, not broken: neutral rather than a faded accent.
+        tone === "primary" ? "bg-accent text-white hover:brightness-110 disabled:bg-muted disabled:text-dim disabled:hover:brightness-100"
+          : "border border-line bg-panel hover:bg-muted disabled:opacity-40",
       )}
     >
       {children}
