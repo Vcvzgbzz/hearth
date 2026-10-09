@@ -3,7 +3,7 @@
  * file it would write, shown as a diff with what needs a restart, and only then is it written.
  * The form knows each setting from fields.ts: its type, default and what it does.
  */
-import { Plus, RotateCcw, Save, Trash2, X } from "lucide-react";
+import { ChevronRight, Plus, RotateCcw, Save, Trash2, X } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { lineDiff, opsBetween, type Op } from "./diff.js";
@@ -184,17 +184,15 @@ function Value({ name, v, path, onChange, err }: {
         {v.map((item, i) => {
           const titled = isObj(item) && typeof item.name === "string";
           return (
-            <Card key={i} className={cx("p-3", err?.path?.startsWith(fmt([...path, i])) && "border-bad")}>
-              <div className="mb-1 flex items-center gap-2">
-                {titled ? (
-                  <input aria-label={`${spec?.noun ?? "entry"} name`} id={fid([...path, i, "name"])} ref={takeFocus(fid([...path, i, "name"]))} value={item.name as string}
-                         onChange={(e) => onChange(v.map((x, k) => (k === i ? { ...(x as object), name: e.target.value } : x)))}
-                         className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 font-medium hover:border-line focus:border-accent focus:outline-none" />
-                ) : <span className="font-medium">#{i + 1}</span>}
-                <button className="ml-auto text-dim hover:text-bad" aria-label={`remove ${titled ? item.name : `#${i + 1}`}`} onClick={() => onChange(v.filter((_, k) => k !== i))}><Trash2 size={14} /></button>
-              </div>
+            <Entry key={i} label={titled ? (item.name as string) : `#${i + 1}`} bad={err?.path?.startsWith(fmt([...path, i])) ?? false}
+                   onRemove={() => onChange(v.filter((_, k) => k !== i))}
+                   title={titled ? (
+                     <input aria-label={`${spec?.noun ?? "entry"} name`} id={fid([...path, i, "name"])} ref={takeFocus(fid([...path, i, "name"]))} value={item.name as string}
+                            onChange={(e) => onChange(v.map((x, k) => (k === i ? { ...(x as object), name: e.target.value } : x)))}
+                            className={cx("min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 font-medium hover:border-line focus:border-accent focus:outline-none", mono)} />
+                   ) : undefined}>
               <Value name={name} v={item} path={[...path, i]} err={err} onChange={(n) => onChange(v.map((x, k) => (k === i ? n : x)))} />
-            </Card>
+            </Entry>
           );
         })}
         {spec && <NewButton spec={spec} taken={v.flatMap((x) => (isObj(x) && typeof x.name === "string" ? [x.name] : []))}
@@ -212,33 +210,80 @@ function Value({ name, v, path, onChange, err }: {
   );
 }
 
+/** One named thing — a model, a backend, a route — as a card that folds away. */
+function Entry({ label, title, bad, onRemove, children }: {
+  label: string; title?: ReactNode; bad: boolean; onRemove: () => void; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <Card className={cx("overflow-hidden", bad && "border-bad")}>
+      <div className={cx("flex items-center gap-2 bg-muted/40 px-3 py-1.5", open && "border-b border-line")}>
+        <button type="button" aria-expanded={open} aria-label={`${open ? "collapse" : "expand"} ${label}`} onClick={() => setOpen(!open)} className="text-dim hover:text-fg">
+          <ChevronRight size={14} className={cx("transition-transform", open && "rotate-90")} />
+        </button>
+        {title ?? <button type="button" onClick={() => setOpen(!open)} className={cx(mono, "font-medium")}>{label}</button>}
+        <button type="button" className="ml-auto text-dim hover:text-bad" aria-label={`remove ${label}`} onClick={onRemove}><Trash2 size={14} /></button>
+      </div>
+      {open && <div className="px-3 py-1">{children}</div>}
+    </Card>
+  );
+}
+
+/** Only the innermost hovered row shows its remove button; its parents' stay hidden. */
+const ROW_HOVER = "[&:hover:not(:has(.obj-row:hover))>.rm]:opacity-100 [&:hover:not(:has(.obj-row:hover))>div>.rm]:opacity-100";
+
 function Obj({ v, path, onChange, err }: { v: Record<string, unknown>; path: Path; onChange: (v: unknown) => void; err: Err | null }) {
   const scope = scopeOf(path);
   const spec = NEW[fmt(path)];
+  const drop = (k: string) => { const { [k]: _, ...rest } = v; onChange(rest); };
+  const set = (k: string) => (n: unknown) => onChange({ ...v, [k]: n });
+  if (spec) {
+    return (
+      <div className="flex flex-col gap-3">
+        {Object.entries(v).map(([k, x]) => (
+          <Entry key={k} label={k} bad={err?.path?.startsWith(fmt([...path, k])) ?? false} onRemove={() => drop(k)}>
+            <Value name={k} v={x} path={[...path, k]} err={err} onChange={set(k)} />
+          </Entry>
+        ))}
+        <div><NewButton spec={spec} taken={Object.keys(v)} onCreate={(id, vals) => { focusNext = fid([...path, id, spec.keys[0]!]); onChange({ ...v, [id]: vals }); }} /></div>
+      </div>
+    );
+  }
   // Inside a list card the name is the card's title, so it is not a row as well.
   const hide = typeof path[path.length - 1] === "number" && typeof v.name === "string" ? "name" : null;
+  const rm = (k: string) => (
+    <button className="rm pt-1.5 text-dim opacity-0 hover:text-bad focus:opacity-100 max-sm:hidden" aria-label={`remove ${k}`} onClick={() => drop(k)}><X size={13} /></button>
+  );
   return (
     <div className="flex flex-col">
       {Object.entries(v).filter(([k]) => k !== hide).map(([k, x]) => {
         const at = [...path, k];
         const nested = isObj(x) || (Array.isArray(x) && x.some(isObj));
+        const label = <label htmlFor={nested ? undefined : fid(at)} className={cx("w-44 shrink-0 pt-1.5 text-dim max-sm:w-auto max-sm:pt-0", mono)}>{k}</label>;
+        // A group's name sits above it, and its settings indent under it rather than taking a column.
+        if (nested) {
+          return (
+            <div key={k} className={cx("obj-row border-b border-line/50 py-2 last:border-0", ROW_HOVER)}>
+              <div className="flex items-start justify-between">{label}{rm(k)}</div>
+              <div className="mt-1 border-l-2 border-line pl-3">
+                <Value name={k} v={x} path={at} err={err} onChange={set(k)} />
+              </div>
+            </div>
+          );
+        }
         return (
-          // Only the innermost hovered row shows its remove button; its parents' stay hidden.
-          <div key={k} className="obj-row flex items-start gap-3 border-b border-line/50 py-2 last:border-0 max-sm:flex-col max-sm:gap-1 [&:hover:not(:has(.obj-row:hover))>button]:opacity-100">
-            <label htmlFor={nested ? undefined : fid(at)} className={cx("w-44 shrink-0 pt-1.5 text-dim max-sm:w-auto max-sm:pt-0", mono)}>{k}</label>
+          <div key={k} className={cx("obj-row flex items-start gap-3 border-b border-line/50 py-2 last:border-0 max-sm:flex-col max-sm:gap-1", ROW_HOVER)}>
+            {label}
             <div className="min-w-0 flex-1 max-sm:w-full">
               {/* A cleared field becomes null in the draft, which opsBetween turns into a key deletion. */}
-              <Value name={k} v={x} path={at} err={err} onChange={(n) => onChange({ ...v, [k]: n })} />
+              <Value name={k} v={x} path={at} err={err} onChange={set(k)} />
             </div>
-            <button className="pt-2 text-dim opacity-0 hover:text-bad focus:opacity-100 max-sm:hidden" aria-label={`remove ${k}`}
-                    onClick={() => { const { [k]: _, ...rest } = v; onChange(rest); }}><X size={13} /></button>
+            {rm(k)}
           </div>
         );
       })}
       <div className="pt-2">
-        {spec ? (
-          <NewButton spec={spec} taken={Object.keys(v)} onCreate={(id, vals) => { focusNext = fid([...path, id, spec.keys[0]!]); onChange({ ...v, [id]: vals }); }} />
-        ) : scope ? (
+        {scope ? (
           <AddSetting scope={scope} have={v} onAdd={(k) => { focusNext = fid([...path, k]); onChange({ ...v, [k]: seedOf(FIELDS[scope][k]!) }); }} />
         ) : (
           <AddPair path={path} have={v} onAdd={(k, x) => onChange({ ...v, [k]: x })} />
