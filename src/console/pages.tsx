@@ -258,19 +258,94 @@ const pct = (xs: number[], p: number) => {
 };
 const secs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`);
 
-/** What the last ten minutes of finished requests looked like, per model: how many, how long they waited and ran. */
+type Call = NonNullable<UiData["calls"]>[number];
+type Day = { calls: Call[]; minutes: { t: number; queued: number }[] };
+
+/** A day of calls and queue depth, refetched every minute while shown. */
+function useDay(on: boolean): Day | null {
+  const [day, setDay] = useState<Day | null>(null);
+  useEffect(() => {
+    if (!on) return;
+    let live = true;
+    const load = async () => {
+      try {
+        const r = await fetch("/ui/history", { cache: "no-store" });
+        if (r.ok && live) setDay((await r.json()) as Day);
+      } catch { /* the header already says when the node is unreachable */ }
+    };
+    void load();
+    const id = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => { live = false; clearInterval(id); };
+  }, [on]);
+  return day;
+}
+
+const BUCKET_MS = 15 * 60_000;
+
+/** The day in 15-minute bars: finished requests (failures on top, in red) over the deepest queue. */
+function DayChart({ day }: { day: Day }) {
+  const now = Date.now();
+  const start = now - 96 * BUCKET_MS;
+  const ok = new Array<number>(96).fill(0);
+  const bad = new Array<number>(96).fill(0);
+  const deep = new Array<number>(96).fill(0);
+  const at = (t: number) => Math.min(95, Math.floor((t - start) / BUCKET_MS));
+  for (const c of day.calls) if (c.t >= start) (c.ok ? ok : bad)[at(c.t)]!++;
+  for (const m of day.minutes) if (m.t >= start) deep[at(m.t)] = Math.max(deep[at(m.t)]!, m.queued);
+  const top = Math.max(1, ...ok.map((n, i) => n + bad[i]!));
+  const qtop = Math.max(4, ...deep);
+  const W = 960;
+  const H = 64;
+  const bw = W / 96;
+  const hours = [24, 18, 12, 6, 0];
+  return (
+    <div className="px-4 pt-3">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block h-16 w-full" aria-label="requests per 15 minutes over the last day">
+        {deep.map((q, i) => q > 0 && <rect key={`q${i}`} x={i * bw} y={H - (q / qtop) * H} width={bw} height={(q / qtop) * H} fill="var(--warn)" opacity={0.12} />)}
+        {ok.map((n, i) => {
+          const h = ((n + bad[i]!) / top) * (H - 4);
+          const hb = (bad[i]! / top) * (H - 4);
+          return h > 0 && (
+            <g key={i}>
+              <rect x={i * bw + 1} y={H - h} width={bw - 2} height={h - hb} rx={1} fill="var(--ok)" opacity={0.75} />
+              {hb > 0 && <rect x={i * bw + 1} y={H - hb} width={bw - 2} height={hb} fill="var(--bad)" />}
+            </g>
+          );
+        })}
+        <line x1={0} x2={W} y1={H - 0.5} y2={H - 0.5} stroke="var(--border)" />
+      </svg>
+      <div className="mt-1 flex justify-between text-[10px] text-dim">{hours.map((h) => <span key={h}>{h ? `${h}h ago` : "now"}</span>)}</div>
+    </div>
+  );
+}
+
+/** Finished requests per model over the last ten minutes or the last day: how many, how long they waited and ran. */
 export function History() {
-  const calls = useStore((s) => s.data!.calls ?? []);
-  const by = new Map<string, typeof calls>();
+  const [range, setRange] = useState<"10m" | "24h">("10m");
+  const live = useStore((s) => s.data!.calls ?? []);
+  const day = useDay(range === "24h");
+  const calls = range === "24h" ? day?.calls ?? [] : live;
+  const by = new Map<string, Call[]>();
   for (const c of calls) by.set(c.model, [...(by.get(c.model) ?? []), c]);
   const rows = [...by.entries()].sort((a, b) => b[1].length - a[1].length);
   const longest = Math.max(1, ...rows.map(([, cs]) => pct(cs.map((c) => c.waitedMs + c.ms), 95)));
   return (
     <Card className="mt-4 overflow-hidden">
-      <div className="border-b border-line px-4 py-2.5">
-        <div className="font-medium">Recent requests</div>
-        <div className="text-[11px] text-dim">Per model, over the history window. The bar is p95 time: waiting, then running.</div>
+      <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+        <div className="mr-auto">
+          <div className="font-medium">Recent requests</div>
+          <div className="text-[11px] text-dim">Per model. The bar is p95 time: waiting, then running.</div>
+        </div>
+        <div role="group" aria-label="range" className="flex rounded-lg border border-line p-0.5 text-[12px]">
+          {(["10m", "24h"] as const).map((r) => (
+            <button key={r} type="button" aria-pressed={range === r} onClick={() => setRange(r)}
+                    className={cx("rounded-md px-2.5 py-1", range === r ? "bg-muted font-medium" : "text-dim hover:text-fg")}>
+              {r === "10m" ? "10 min" : "24 h"}
+            </button>
+          ))}
+        </div>
       </div>
+      {range === "24h" && day && <DayChart day={day} />}
       <table className="w-full text-left">
         <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
           <tr>{["model", "requests", "failed", "wait p50", "run p50", "run p95", ""].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
@@ -299,7 +374,7 @@ export function History() {
           })}
         </tbody>
       </table>
-      {rows.length === 0 && <Empty>No requests have finished yet.</Empty>}
+      {rows.length === 0 && <Empty>{range === "24h" && !day ? "loading…" : "No requests finished in this window."}</Empty>}
     </Card>
   );
 }

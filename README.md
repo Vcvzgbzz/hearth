@@ -162,6 +162,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
+| `historyFile` | unset | a file that keeps the console's day of history and its recent log lines across restarts, written every minute and at shutdown. Unset keeps them in memory |
 | `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
 
 Tokens accept `env:NAME`, so the config stays committable.
@@ -226,6 +227,8 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/network` | local | every node, what each one serves, and what's **loaded right now**. Also lists peer models you haven't mapped, which is usually the config mistake people actually make |
 | `/queue` | local | jobs in flight, with lane, caller and position |
 | `/ui/data`, `/ui/events` | loopback, or a login | the page's data, pushed. A snapshot then diffs |
+| `/ui/history` | loopback, or a login | the last day of finished calls and per-minute queue depth, for the Queue page's 24 h view |
+| `/ui/logs` | loopback, or a login | the most recent log lines (up to 5,000), for the Logs page |
 | `/healthz` | anyone | whether this node can serve. `503` when it can't. The one unauthenticated endpoint |
 | `/peer/hello`, `/peer/state` | peers | identity and capacity, per model |
 
@@ -556,24 +559,32 @@ single response and still adds **nothing** to what `npm install` pulls down —
 the browser half is bundled from devDependencies and the package keeps its one
 runtime dependency.
 
-Four pages, and ⌘K jumps to anything on them:
+Five pages, and ⌘K jumps to anything on them:
 
 - **Topology**: this node, its backends, the hardware they share, and its peers,
-  with requests drawn as they flow. Click anything for its details and controls.
+  with requests drawn as they flow, over a strip of the last ten minutes. Click
+  anything for its details and controls.
 - **Models**: every model on one row: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once.
-- **Queue**: jobs in flight and recent calls, queue depth over the last ten
-  minutes, and **which model was in use, when**. One lane per model: a faint
-  track where it was resident, and a bright segment for every request that ran
-  on it. A GPU flipping between two models draws a staircase, and the caption
-  counts the swaps. That thrash is the thing hearth exists to prevent, and you
-  cannot see it in an instantaneous reading. Ids that are one seat under
-  several names (`as`) fold into one lane.
+- **Queue**: jobs in flight, and finished requests per model with how long they
+  waited and ran, over the last ten minutes or the last day. The day view adds
+  a chart of requests per 15 minutes, failures in red, with queue depth behind.
+- **Logs**: hearth's recent log lines as sentences, newest first, with a level
+  filter, a search, and the raw fields a click away.
 - **Config**: `hearth.yaml` by section, or as text. See below.
 
-The history is a fixed ring of 120 samples taken every 5s, held in memory. It
-dies with the process, exactly like the queue does.
+The live view is 120 samples taken every 5s. The day view and the Logs page are
+held in memory and lost on restart unless `historyFile` names a file to keep
+them in:
+
+```yaml
+historyFile: /var/lib/hearth/history.json
+```
+
+It is written every minute and at shutdown, and read once at startup. Under
+systemd, `StateDirectory=hearth` makes `/var/lib/hearth` writable. The full log
+is still whatever captures stdout, journald usually; the page shows the tail.
 
 ### Changing things from the page
 

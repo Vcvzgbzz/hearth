@@ -236,6 +236,8 @@ export interface HearthConfig {
    * null otherwise. Under `ProtectSystem=strict` pair it with `StateDirectory=hearth`.
    */
   stateFile: string | null;
+  /** Where the console's day of history and recent logs survive a restart; null keeps them in memory. */
+  historyFile: string | null;
   /** What this node calls itself when talking to peers. */
   name: string;
   listen: { host: string; port: number };
@@ -1103,6 +1105,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     // Set by loadConfig, which is the only caller that knows one.
     configPath: null,
     stateFile: str(root.stateFile, "stateFile", "") || null,
+    historyFile: str(root.historyFile, "historyFile", "") || null,
     listen: mainListen,
     resources: resourceDecls,
     backends,

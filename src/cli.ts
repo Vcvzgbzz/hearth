@@ -83,6 +83,9 @@ scheduler:
 
 # The console is on /ui. Off this machine it asks for a login: the first visit
 # creates one, or set it with \`hearth set-operator <user> <pass>\`.
+#
+# Keep the console's day of history and recent logs across restarts.
+# historyFile: /var/lib/hearth/history.json
 
 # Keys allowed on the OpenAI endpoints. Empty means no auth, which is only
 # reasonable while this is bound to loopback. Setting it means loopback needs a
@@ -252,8 +255,9 @@ async function main(): Promise<void> {
     console.error(`--log must be one of: ${LEVELS.join(", ")}`);
     process.exit(1);
   }
-  const log = createLogger(level);
-  const node = createNode(cfg, log);
+  const node = createNode(cfg, createLogger(level));
+  // The node's logger, so startup and shutdown lines reach the console's Logs page too.
+  const log = node.log;
 
   node.start();
   node.server.listen(cfg.listen.port, cfg.listen.host, () => {

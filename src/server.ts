@@ -5,20 +5,21 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 
 import { admitModel, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
 import { peersMapping, WARM_LANE, type BackendConfig, type HearthConfig, type RoutePolicy } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
-import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink } from "./configfile.js";
+import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, hashPassword, verifyDecoy, verifyPassword } from "./login.js";
-import type { Logger } from "./log.js";
+import { LogRing, type Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
 import { decide, type LocalLoad } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
-import { History } from "./history.js";
+import { DAY_MS, History } from "./history.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_HTML } from "./ui.js";
 import { createViews } from "./views.js";
@@ -124,9 +125,14 @@ export interface HearthNode {
   close: (graceMs?: number) => Promise<void>;
   /** What `POST /restart` calls; set by `hearth serve`, null when nothing could start the node again. */
   onRestart: (() => void) | null;
+  /** The node's logger: stdout, plus the console's Logs page. */
+  log: Logger;
 }
 
-export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
+export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
+  // Every line still goes to stdout; the ring keeps the recent ones for the console's Logs page.
+  const logs = new LogRing();
+  const log = logs.tap(baseLog);
   // ConfigFile swaps the live keys in whole and everything reads those per call; the rest changes
   // only with a restart, so an accidental write throws instead of going stale.
   for (const part of [cfg.listen, cfg.backends, cfg.scheduler, cfg.resources,
@@ -766,6 +772,11 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // out wide; the gate that matters is the one on the data stream.
     { path: ["/ui", "/ui/"], auth: "open", handler: routeUi },
     { path: ["/ui/data", "/ui/events"], auth: "loopback", envelope: "openai", handler: routeUi },
+    // The history view's day and the Logs page, fetched on demand rather than pushed with every frame.
+    { path: "/ui/history", methods: ["GET"], auth: "loopback", envelope: "openai",
+      handler: async (c) => json(c.res, 200, history.since(DAY_MS)) },
+    { path: "/ui/logs", methods: ["GET"], auth: "loopback", envelope: "openai",
+      handler: async (c) => json(c.res, 200, { entries: logs.all(), persisted: cfg.historyFile !== null }) },
 
     { path: "*", auth: "local", envelope: "openai", handler: routePassthrough },
   ];
@@ -1899,22 +1910,54 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   const sessionSweep = setInterval(() => { sessions.prune(); }, 30 * 60_000);
   sessionSweep.unref?.();
 
+  /** The day of history and recent logs, read once at start and written every minute and at close. */
+  function loadHistory(): void {
+    if (!cfg.historyFile || !existsSync(cfg.historyFile)) return;
+    try {
+      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown };
+      history.restore(saved.history);
+      logs.restore(saved.logs);
+    } catch (e) {
+      log.warn("history.unreadable", { path: cfg.historyFile, error: String(e) });
+    }
+  }
+  let historyWarned = false;
+  function saveHistory(): void {
+    if (!cfg.historyFile) return;
+    try {
+      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all() }));
+      historyWarned = false;
+    } catch (e) {
+      // Once per failure streak: a read-only path must not fill the journal every minute.
+      if (!historyWarned) log.warn("history.unwritable", { path: cfg.historyFile, error: String(e) });
+      historyWarned = true;
+    }
+  }
+  let historyTimer: ReturnType<typeof setInterval> | null = null;
+
   const node: HearthNode = {
     onRestart: null,
+    log,
     server,
     pool,
     peers,
     history,
     start: () => {
+      loadHistory();
       pool.start();
       peers.start();
       history.start();
+      if (cfg.historyFile) {
+        historyTimer = setInterval(saveHistory, 60_000);
+        historyTimer.unref?.();
+      }
       config.watch();
       // Last, so the first probe sees a backend whose warm state has been read.
       canary?.start();
     },
     close: async (graceMs = 0) => {
       canary?.stop();
+      if (historyTimer) clearInterval(historyTimer);
       clearInterval(sessionSweep);
       sessions.prune();
       config.close();
@@ -1952,6 +1995,8 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
 
       server.closeAllConnections?.();
       await closed;
+      // After the drain, so the calls it let finish are in the file.
+      saveHistory();
     },
   };
   return node;

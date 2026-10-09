@@ -1,8 +1,9 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, LogOut, Moon, Network, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, LogOut, Moon, Network, ScrollText, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
+import { Logs } from "./logs.js";
 import { CanaryAlert, History, Inspector, Models, Queue } from "./pages.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
@@ -14,6 +15,7 @@ const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "models", label: "Models", icon: Boxes },
   { id: "queue", label: "Queue", icon: ListOrdered },
+  { id: "logs", label: "Logs", icon: ScrollText },
   { id: "config", label: "Config", icon: FileCog },
 ];
 
@@ -328,6 +330,8 @@ export default function App() {
               <Inspector />
             </Card>
           </div>
+        ) : page === "logs" ? (
+          <div className="flex min-h-0 flex-1 flex-col p-5"><Logs /></div>
         ) : (
           <div className="min-h-0 flex-1 overflow-auto p-5">
             {page === "models" && <Models />}

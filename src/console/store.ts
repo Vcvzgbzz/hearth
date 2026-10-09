@@ -18,7 +18,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export type Page = "topology" | "models" | "queue" | "config";
+export type Page = "topology" | "models" | "queue" | "logs" | "config";
 export type Sel = { kind: "self" | "peer" | "backend" | "resource"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 

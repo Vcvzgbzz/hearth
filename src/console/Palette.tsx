@@ -30,7 +30,7 @@ export function Palette() {
     if (!d) return [];
     const self = d.net.nodes.find((n) => n.self)!;
     const page = (p: Page, label: string): Cmd => ({ id: `p:${p}`, label, hint: "page", run: () => go(p) });
-    const out: Cmd[] = [page("topology", "Topology"), page("models", "Models"), page("queue", "Queue"), page("config", "Config")];
+    const out: Cmd[] = [page("topology", "Topology"), page("models", "Models"), page("queue", "Queue"), page("logs", "Logs"), page("config", "Config")];
     for (const b of self.backends ?? []) out.push({ id: `b:${b.name}`, label: b.name, hint: "backend", run: () => { go("topology"); select({ kind: "backend", id: b.name }); } });
     for (const p of d.net.nodes.filter((n) => !n.self)) out.push({ id: `n:${p.name}`, label: p.name, hint: p.up ? "peer" : "peer · down", run: () => { go("topology"); select({ kind: "peer", id: p.name }); } });
     for (const r of d.net.resources ?? []) out.push({ id: `r:${r.name}`, label: r.name, hint: r.holder ? `hardware · ${r.holder}` : "hardware", run: () => { go("topology"); select({ kind: "resource", id: r.name }); } });
