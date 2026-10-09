@@ -223,13 +223,14 @@ function Obj({ v, path, onChange, err }: { v: Record<string, unknown>; path: Pat
         const at = [...path, k];
         const nested = isObj(x) || (Array.isArray(x) && x.some(isObj));
         return (
-          <div key={k} className="group flex items-start gap-3 border-b border-line/50 py-2 last:border-0 max-sm:flex-col max-sm:gap-1">
+          // Only the innermost hovered row shows its remove button; its parents' stay hidden.
+          <div key={k} className="obj-row flex items-start gap-3 border-b border-line/50 py-2 last:border-0 max-sm:flex-col max-sm:gap-1 [&:hover:not(:has(.obj-row:hover))>button]:opacity-100">
             <label htmlFor={nested ? undefined : fid(at)} className={cx("w-44 shrink-0 pt-1.5 text-dim max-sm:w-auto max-sm:pt-0", mono)}>{k}</label>
             <div className="min-w-0 flex-1 max-sm:w-full">
               {/* A cleared field becomes null in the draft, which opsBetween turns into a key deletion. */}
               <Value name={k} v={x} path={at} err={err} onChange={(n) => onChange({ ...v, [k]: n })} />
             </div>
-            <button className="pt-2 text-dim opacity-0 hover:text-bad focus:opacity-100 group-hover:opacity-100 max-sm:hidden" aria-label={`remove ${k}`}
+            <button className="pt-2 text-dim opacity-0 hover:text-bad focus:opacity-100 max-sm:hidden" aria-label={`remove ${k}`}
                     onClick={() => { const { [k]: _, ...rest } = v; onChange(rest); }}><X size={13} /></button>
           </div>
         );
