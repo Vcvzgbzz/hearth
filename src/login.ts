@@ -92,6 +92,10 @@ export class OperatorSessions {
     this.live.delete(hashToken(token));
   }
 
+  clear(): void {
+    this.live.clear();
+  }
+
   /** Expired sessions, for the periodic sweep. */
   prune(now: number = Date.now()): number {
     let n = 0;

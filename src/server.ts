@@ -14,7 +14,7 @@ import {
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink } from "./configfile.js";
-import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, verifyDecoy, verifyPassword } from "./login.js";
+import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, hashPassword, verifyDecoy, verifyPassword } from "./login.js";
 import type { Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
@@ -289,8 +289,16 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
   /** The operator login: a session is the third trust signal, beside the address and the keys. */
   const sessions = new OperatorSessions();
   const loginThrottle = new LoginThrottle();
+  let sessionsFor = cfg.operator;
+  /** The login applies live, so a changed one signs every old session out, as a restart would. */
+  function syncSessions(): void {
+    if (cfg.operator === sessionsFor) return;
+    sessions.clear();
+    sessionsFor = cfg.operator;
+  }
   /** The logged-in operator behind this request's session cookie, or null. */
   function sessionOperator(req: IncomingMessage): string | null {
+    syncSessions();
     const token = cookieToken(req.headers.cookie);
     return token ? sessions.check(token) : null;
   }
@@ -688,6 +696,13 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
     // Login and logout take no credential by definition; cross-origin POSTs are refused above.
     { path: "/login", methods: ["POST"], auth: "open", handler: routeLogin },
     { path: "/logout", methods: ["POST"], auth: "open", handler: routeLogout },
+    // First run: whoever reaches the console before an operator exists creates one. Closed after.
+    { path: "/setup", methods: ["GET", "POST"], auth: "open", handler: routeSetup },
+
+    // A bare address typed into a browser lands on the console instead of a 401.
+    { path: "/", methods: ["GET", "HEAD"], auth: "open", handler: async (c) => {
+      c.res.writeHead(302, { Location: "/ui" }).end();
+    } },
 
     // The page is static — every byte of data comes from /ui/data and /ui/events — so it may go
     // out wide; the gate that matters is the one on the data stream.
@@ -1378,9 +1393,55 @@ export function createNode(cfg: HearthConfig, log: Logger): HearthNode {
       return;
     }
     loginThrottle.clear(user);
-    const maxAge = Math.floor(SESSION_TTL_MS / 1000);
-    c.res.setHeader("Set-Cookie", `${COOKIE}=${sessions.mint(user, now)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`);
+    startSession(c.res, user, now);
     log.info("login.ok", { ip, caller: "operator:" + user });
+    json(c.res, 200, { ok: true });
+  }
+
+  function startSession(res: ServerResponse, user: string, now: number): void {
+    syncSessions();
+    const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+    res.setHeader("Set-Cookie", `${COOKIE}=${sessions.mint(user, now)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`);
+  }
+
+  /** GET says whether the node still needs its first operator; POST creates it and signs it in. */
+  async function routeSetup(c: Call): Promise<void> {
+    if (c.req.method === "GET") {
+      json(c.res, 200, { needed: cfg.operator === null });
+      return;
+    }
+    if (cfg.operator) {
+      json(c.res, 409, { error: "this node already has an operator — log in instead" });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse((await readBody(c.req, cfg.maxBodyBytes)).toString() || "{}");
+    } catch {
+      json(c.res, 400, { error: "the setup body must be JSON" });
+      return;
+    }
+    const b = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+    const user = typeof b.user === "string" ? b.user.trim() : "";
+    const pass = typeof b.pass === "string" ? b.pass : "";
+    if (user === "" || pass.length < 8) {
+      json(c.res, 400, { error: "a username and a password of at least 8 characters" });
+      return;
+    }
+    const passHash = await hashPassword(pass);
+    // Re-checked after the await: two first-run tabs must not both win.
+    if (cfg.operator) {
+      json(c.res, 409, { error: "this node already has an operator — log in instead" });
+      return;
+    }
+    try {
+      config.patch({ ops: [{ path: ["operator"], value: { user, passHash } }] });
+    } catch (e) {
+      json(c.res, e instanceof ConfigRefusal ? e.status : 500, { error: (e as Error).message });
+      return;
+    }
+    startSession(c.res, user, Date.now());
+    log.info("setup.operator", { ip: c.req.socket.remoteAddress ?? "?", caller: "operator:" + user });
     json(c.res, 200, { ok: true });
   }
 

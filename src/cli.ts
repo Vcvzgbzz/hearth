@@ -81,8 +81,8 @@ scheduler:
     chat: { priority: 0 }     # a person is watching this
     batch: { priority: 100 }  # a render nobody is waiting on
 
-# The console is on /ui. Off this machine it asks for a login: set one with
-# \`hearth set-operator <user> <pass>\`.
+# The console is on /ui. Off this machine it asks for a login: the first visit
+# creates one, or set it with \`hearth set-operator <user> <pass>\`.
 
 # Keys allowed on the OpenAI endpoints. Empty means no auth, which is only
 # reasonable while this is bound to loopback. Setting it means loopback needs a
@@ -181,7 +181,7 @@ async function main(): Promise<void> {
     // Long lines must not fold: the passHash line is 160 chars and would break if wrapped.
     writeFileAtomic(configPath, doc.toString({ lineWidth: 0 }));
     console.log(`operator login set for "${user}" in ${configPath}`);
-    console.log(`the file's previous state is at ${backup}; restart hearth for the login to take effect.`);
+    console.log(`the file's previous state is at ${backup}; a running hearth picks the login up on its own.`);
     return;
   }
 

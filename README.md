@@ -142,7 +142,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `borrowing.pollMs` / `.staleMs` | `60000` / `60000` | background floor that warms the cache. The real mechanism is on-demand |
 | `borrowing.coldPenalty` | `2` | what a model load is worth to `fastest`, in queued-jobs-equivalent |
 | `apiKeys` | `[]` | keys allowed on `/v1/*`. Empty means loopback only. Setting it means loopback needs a key too, including any local tool you point at this. An entry may be `{ key, label }` to name a caller — see below |
-| `operator` | unset | the console login, `{user, passHash}`. Written by `hearth set-operator`; see [The console](#the-console) |
+| `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
 | `stateFile` | unset | a console sidecar from before 2.0. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
@@ -203,6 +203,8 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `X-Hearth-Queue: stream` | request header | on a streamed chat, open the stream while the request waits and send `: hearth-queue {"position":N}` comments (how many are ahead, the running turn included). OpenAI-style parsers skip comments. A failure after that arrives as an SSE `data: {"error": …}` frame, since the 200 is already sent |
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
+| `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |
+| `/` | anyone | `GET` redirects to `/ui` |
 | `/network` | local | every node, what each one serves, and what's **loaded right now**. Also lists peer models you haven't mapped, which is usually the config mistake people actually make |
 | `/queue` | local | jobs in flight, with lane, caller and position |
 | `/ui/data`, `/ui/events` | loopback, or a login | the page's data, pushed. A snapshot then diffs |
@@ -505,13 +507,17 @@ or a signed-in operator. **An api key does not open them.** A browser cannot
 send a bearer token on an `EventSource`, and the alternatives are worse: a key
 in the query string ends up in logs and history.
 
-From loopback the console needs nothing. From anywhere else, set a login once:
+From loopback the console needs nothing. From anywhere else, the first visit
+to a node with no login asks you to create one, and the address alone is enough:
+`http://<host>:4141` redirects to `/ui`. Until that happens, anyone who can reach
+the port can claim it, so create it before binding wide, or from the shell:
 
 ```bash
 hearth set-operator admin 'a long passphrase'   # writes operator: {user, passHash}
 ```
 
-The page then asks for it. A session is an HttpOnly, SameSite=Lax cookie that
+Either way the page then asks for it. A changed login applies without a restart and
+signs every existing session out. A session is an HttpOnly, SameSite=Lax cookie that
 slides for 30 days and lives in memory, so a restart signs everyone out. It is a
 full local identity — `/control`, `/config` and the passthrough included — so
 treat the password like an unscoped api key. Failed logins are throttled per

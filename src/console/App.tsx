@@ -161,13 +161,15 @@ function Activity() {
 function LoginCard() {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
+  const setup = useStore((s) => s.setupRequired);
+  const [confirm, setConfirm] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setErr(null);
-    const msg = await login(user, pass);
+    const msg = setup && pass !== confirm ? "the passwords do not match" : await login(user, pass, setup);
     setBusy(false);
     if (msg !== null) setErr(msg);
   };
@@ -177,17 +179,23 @@ function LoginCard() {
         <form onSubmit={submit}>
           <div className="flex items-center gap-2 text-base font-semibold">
             <Flame size={16} className="text-accent" />
-            log in to hearth
+            {setup ? "set up hearth" : "log in to hearth"}
           </div>
-          <p className="mt-1 text-dim">This page is loopback-only. A login opens the whole console — dashboard, config, controls — from anywhere on your network.</p>
+          <p className="mt-1 text-dim">{setup
+            ? "This node has no operator yet. Create the login that opens the whole console — dashboard, config, controls — from anywhere on your network."
+            : "This page is loopback-only. A login opens the whole console — dashboard, config, controls — from anywhere on your network."}</p>
           <input autoFocus value={user} onChange={(e) => setUser(e.target.value)} placeholder="username"
                  className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password"
                  className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
+          {setup && (
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again"
+                   className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
+          )}
           {err !== null && <div className="mt-2 text-sm text-bad">{err}</div>}
           <div className="mt-4 flex justify-end">
             <Button tone="primary" type="submit" disabled={busy || user === "" || pass === ""}>
-              {busy ? "signing in…" : "log in"}
+              {busy ? "signing in…" : setup ? "create login" : "log in"}
             </Button>
           </div>
         </form>

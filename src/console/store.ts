@@ -28,6 +28,8 @@ interface State {
   dead: boolean;
   /** The data stream refused this address and this browser holds no session: the login card shows. */
   loginRequired: boolean;
+  /** No operator exists yet: the login card creates the first one instead. */
+  setupRequired: boolean;
   page: Page;
   sel: Sel;
   toast: Toast;
@@ -40,6 +42,7 @@ export const useStore = create<State>(() => ({
   live: false,
   dead: false,
   loginRequired: false,
+  setupRequired: false,
   page: (location.hash.slice(1) as Page) || "topology",
   sel: null,
   toast: null,
@@ -82,7 +85,8 @@ export function connect(): void {
       const r = await fetch("/ui/data", { cache: "no-store" });
       // 401/403 is not "dead": the node is up, it simply does not know this browser yet.
       if (r.status === 401 || r.status === 403) {
-        useStore.setState({ loginRequired: true, dead: false });
+        const s = (await (await fetch("/setup")).json().catch(() => ({}))) as { needed?: boolean };
+        useStore.setState({ loginRequired: true, setupRequired: s.needed === true, dead: false });
         return;
       }
       if (!r.ok) throw new Error(String(r.status));
@@ -120,10 +124,10 @@ export function connect(): void {
 }
 
 /** Sign in: the cookie the server sets is then sent with every request by the browser itself. */
-export async function login(user: string, pass: string): Promise<string | null> {
+export async function login(user: string, pass: string, setup = false): Promise<string | null> {
   let r: Response;
   try {
-    r = await fetch("/login", {
+    r = await fetch(setup ? "/setup" : "/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user, pass }),
@@ -132,8 +136,10 @@ export async function login(user: string, pass: string): Promise<string | null> 
     return "cannot reach this node";
   }
   const d = (await r.json().catch(() => ({}))) as { error?: string };
+  // Someone else finished setup first: the card turns back into a login.
+  if (r.status === 409 && setup) useStore.setState({ setupRequired: false });
   if (!r.ok) return d.error ?? `login failed (${r.status})`;
-  useStore.setState({ loginRequired: false, dead: false });
+  useStore.setState({ loginRequired: false, setupRequired: false, dead: false });
   connect();
   return null;
 }
