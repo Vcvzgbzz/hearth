@@ -9,7 +9,7 @@ over again. hearth is the admission point that stops that. It speaks the OpenAI
 API, so nothing you already use has to change.
 
 ```bash
-npm i -g github:Vcvzgbzz/hearth   # not on npm yet
+npm i -g @vcvzgbzz/hearth
 hearth init          # probes for llama-swap / llama.cpp / ollama, writes hearth.yaml
 hearth serve
 ```
@@ -110,10 +110,16 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.concurrency` | `backendDefaults` | jobs at once on this backend |
 | `backends.<name>.firstByteMs` / `.idleMs` | `backendDefaults` | per-backend deadlines. A sidecar that renders a clip before it answers at all needs a longer one than a chat server |
 | `backends.<name>.activity` | none | `{ path, running, queued? }` — where a backend reports its OWN busy state, so one hearth forwards to but does not schedule still lights while it works. See below |
+| `backends.<name>.resources` | none | hardware this backend uses. Backends on one exclusive card take turns. See [Backends that share a card](#backends-that-share-a-card) |
+| `backends.<name>.resident` | `false` | stays loaded beside the card's swapping model and is asked to yield when it needs the memory. See [Something small that lives on a card](#something-small-that-lives-on-a-card) |
+| `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. See [Backends that don't speak the OpenAI API](#backends-that-dont-speak-the-openai-api) |
+| `resources.<name>.kind` | `gpu` | `gpu`, `cpu` or `other`. Picks the icon; `gpu` and `other` are exclusive unless shared |
+| `resources.<name>.shared` | `false` | many backends at once, never arbitrated: CPUs, mostly. See [Hardware that is not a card](#hardware-that-is-not-a-card) |
 | `backendDefaults.concurrency` | `1` | jobs at once per backend, unless it sets its own |
 | `backendDefaults.firstByteMs` | `900000` | how long a backend may take to start answering. Catches one that accepts the connection and then never answers, which would otherwise hold its slot — and its card — until a restart. `0` waits forever |
 | `backendDefaults.idleMs` | `600000` | how long a backend may go silent once its answer has started. Catches a generation that hangs mid-stream. `0` waits forever |
 | `scheduler.lanes` | `chat`, `batch` | named lanes and their base priority |
+| `scheduler.lanes.<lane>.priority` | `0` | base priority. Lower goes first |
 | `scheduler.lanes.<lane>.concurrency` | unset | the most slots of one backend this lane may hold at once. Unset is no ceiling. See Lanes |
 | `scheduler.lanes.<lane>.maxWaitMs` | unset | fail a queued job in this lane with a 503 once nothing on its backend has started for this long. A guard against a wedged backend, not a deadline: a slow queue that keeps moving never trips it |
 | `scheduler.agePerSecond` | `1` | priority earned per second waited, which is also the starvation bound |
@@ -121,10 +127,20 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `scheduler.maxPerLane` | `100` | how long one lane's queue may get before new work is refused. Off-box jobs are bounded separately, on their own count |
 | `scheduler.maxPerCaller` | `0`, or `2` with apiKeys | queued-or-running jobs per caller per lane. Off without apiKeys, where every local caller is one identity |
 | `models.<id>` | — | routing policy per model. Anything unlisted stays local |
+| `models.<id>.policy` | `local` | where requests run: `local`, `peer`, `spillover` or `fastest`. See [Sharing capacity](#sharing-capacity) |
+| `models.<id>.peers` | any that maps it | only these peers may run it |
+| `models.<id>.spilloverAt` | `1` | `spillover` only: go to a peer once this many jobs are queued here |
+| `models.<id>.fallbackLocal` | `true` | run here when no peer can take it |
+| `models.<id>.lane` | the client's | lane this model's requests queue in, over the one the client asked for |
+| `models.<id>.as` | unset | the id this one goes out as: an alias for another model. See [Advertising a nicer id](#advertising-a-nicer-id-than-the-backend-uses) |
+| `models.<id>.params` | unset | request fields stamped on every call (`temperature`, `reasoning_effort`, …). See [One resident model, several ids](#one-resident-model-several-ids-different-defaults) |
+| `models.<id>.emulate` | unset | `llama-server`: reshape the backend's answers into llama-server's format (`reasoning_content`, `timings`) for clients that expect it |
 | `models.<id>.note` | unset | what the model is for. Shown to borrowers and as `description` on `/v1/models`. A note alone routes nothing |
 | `models.<id>.backend` | auto | pin a model to a named backend instead of resolving it from the catalogs |
 | `models.<id>.follow` | `false` | go out as whatever the pinned backend has loaded, and as `as` when nothing is (or when `as` is among several loaded). Needs `backend` and `as`. It follows any model, a non-chat one included, so pin it to a backend that serves one kind |
 | `models.<id>.concurrency` | backend's | jobs this model may run at once, above OR below its backend's `concurrency`. See below |
+| `models.<id>.pool` | unset | token budget shared by this model's running turns: `tokens`, and `output` to cap what each turn reserves. See [One backend, models with different ceilings](#one-backend-models-with-different-ceilings) |
+| `models.<id>.stats` | unset | what the model takes, for one that hasn't loaded or a backend that can't say: `context`, `vision`, `tools`, `thinking`, `effort`, `quant`. See [Knowing what a borrowed model can take](#knowing-what-a-borrowed-model-can-take) |
 | `models.<id>.shareAfterMs` | unset | a turn joins this model's running turns only once each has run this long, so two turns started together do not both pay for sharing the card. Only matters where `concurrency` is above 1 |
 | `models.<id>.videoTokens` | `49152` | what one video costs this model when checking a request fits its context window. Size it from the seat: frames sampled per clip × tokens per frame |
 | `peers.<name>` | — | one entry per friend: `url` and `token` to borrow from them, `accept` to lend to them, or both |
@@ -145,7 +161,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
-| `stateFile` | unset | a console sidecar from before 2.0. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
+| `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
 
 Tokens accept `env:NAME`, so the config stays committable.
 
@@ -383,41 +399,43 @@ gate.
 
 ## The status page
 
-`http://127.0.0.1:4141/ui`, once `hearth serve` is running. React and MUI,
+`http://127.0.0.1:4141/ui`, once `hearth serve` is running. React and Tailwind,
 compiled to one file at build time and inlined into the page, so it is still a
 single response and still adds **nothing** to what `npm install` pulls down —
 the browser half is bundled from devDependencies and the package keeps its one
 runtime dependency.
 
-It shows four things the JSON endpoints make you assemble yourself:
+Four pages, and ⌘K jumps to anything on them:
 
-- **Queue depth over the last ten minutes**, which is how you tell whether the
-  queue is doing anything or you have added a hop for nothing.
-- **Which model was in use, when.** One lane per model: a faint track where it
-  was resident, and a bright segment for every request that ran on it, so a
-  30-second call and a burst of two-second ones look different. A GPU flipping
-  between two models draws a staircase, and the caption counts the swaps. That
-  thrash is the thing hearth exists to prevent, and you cannot see it in an
-  instantaneous reading. Ids that are one seat under several names (`as`) fold
-  into one lane, and the raw samples and calls sit under "Show the numbers".
-- **Every model, on one row each**: which nodes hold it, whether it is loaded
+- **Topology**: this node, its backends, the hardware they share, and its peers,
+  with requests drawn as they flow. Click anything for its details and controls.
+- **Models**: every model on one row: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
-  view, and a model that appears on four of them appeared four times before
-  this.
-- **What each peer offers**, including the models it offers that you have no
-  mapping for — usually the first sign a friend has added something.
+  view; this is all of them at once.
+- **Queue**: jobs in flight and recent calls, queue depth over the last ten
+  minutes, and **which model was in use, when**. One lane per model: a faint
+  track where it was resident, and a bright segment for every request that ran
+  on it. A GPU flipping between two models draws a staircase, and the caption
+  counts the swaps. That thrash is the thing hearth exists to prevent, and you
+  cannot see it in an instantaneous reading. Ids that are one seat under
+  several names (`as`) fold into one lane.
+- **Config**: `hearth.yaml` by section, or as text. See below.
+
+The history is a fixed ring of 120 samples taken every 5s, held in memory. It
+dies with the process, exactly like the queue does.
 
 ### Changing things from the page
 
-Three of those are clickable on the main listener, and every one of them is a
-**runtime override that a restart discards**:
+Besides the config editor, the Topology and Models pages change three things
+directly:
 
 - **lending** and **borrowing**, the two directions of federation, as separate
-  switches. Pausing lending empties what you lend, so peers see a healthy node
+  switches. These two are operational: they apply at once and a restart clears
+  them. Pausing lending empties what you lend, so peers see a healthy node
   offering nothing and stop choosing you, rather than a wall of 403s that looks
   like a revoked token. Pausing borrowing removes peers as routing candidates,
   so a model with `fallbackLocal: false` refuses cleanly.
-- **lent / held per model**, on top of `lending.models`. You can hold back one
+- **lent / held per model**, written into `lending.models`. You can hold back one
   model without pausing the rest, or lend one the file never listed. A model no
   backend here serves is refused — advertising it would 404 every request, and
   the peer's operator cannot tell that from a broken link.
@@ -428,6 +446,20 @@ Three of those are clickable on the main listener, and every one of them is a
   forever. A model you also serve gets `policy: fastest` with a local fallback;
   one you do not gets `policy: peer` and no fallback, since home is a backend
   that has never heard of it.
+
+### Editing the config from the page
+
+Each section lists its entries as cards. A setting's description shows while it
+is focused. **add setting** searches every setting the entry can take, including
+those inside a group (`stats.vision`), and goes to one that is already set.
+Click an entry's name to rename it; the rename changes only the key, so its
+comments and layout stay. Nothing is written until **review & save** has shown
+the diff and said whether it applies live or needs a restart.
+
+When a change is waiting for a restart, the header offers **restart**. hearth
+finishes what is in flight, then exits with status `75` so a supervisor that
+restarts on failure (systemd's `Restart=on-failure`) brings it straight back,
+and the page reconnects. Without such a supervisor it only stops.
 
 ### Where changes go
 
@@ -473,9 +505,6 @@ ReadOnlyPaths=/opt/hearth /etc/hearth.env   # NOT the config as well
 be writable, not `/etc` — hearth writes in place when it cannot stage a temp
 file beside the config, which is exactly what that pairing produces.
 
-Pausing lending or borrowing is operational rather than config: it applies at
-once and a restart clears it.
-
 ### Editing the file over HTTP
 
 `GET /config` returns the file's text, a `hash`, and its status: `restartPending`
@@ -491,14 +520,13 @@ curl -X PATCH localhost:4141/config -H 'content-type: application/json' \
   -d '{"baseHash": "<hash>", "text": "..."}'
 ```
 
+An op can also rename a map key in place, keeping its value and comments:
+`{"path": ["peers", "old-name"], "rename": "new-name"}`. Renaming onto a name
+that exists is a 400, and renaming something that is not there is a 409.
+
 Add `"dryRun": true` to see the resulting text without writing it. A refusal is
 `{"error": {"message", "path"}}`: 422 for a config that would not load (with the
 field), 409 for a conflict.
-
-The history is a fixed ring of 120 samples taken every 5s, held in memory. It
-dies with the process, exactly like the queue does. Keeping it across restarts
-would mean choosing a storage engine, which is a much larger decision than
-"draw me a line".
 
 ### The console
 
@@ -564,13 +592,13 @@ Say what each backend consumes and the ones that overlap take turns:
 
 ```yaml
 backends:
-  swap: { url: "http://127.0.0.1:9292", resources: [gpu0] }
-  swap-image: { url: "http://127.0.0.1:9293", resources: [gpu1] }
-  deep: { url: "http://127.0.0.1:9294", resources: [gpu0, gpu1] }
+  chat: { url: "http://127.0.0.1:9292", resources: [gpu0] }
+  image: { url: "http://127.0.0.1:9293", resources: [gpu1] }
+  big: { url: "http://127.0.0.1:9294", resources: [gpu0, gpu1] }
 ```
 
-`swap` and `swap-image` never wait for each other. `deep` waits for both, and
-both wait for `deep`. The names are yours and mean nothing outside this file.
+`chat` and `image` never wait for each other. `big` waits for both, and
+both wait for `big`. The names are yours and mean nothing outside this file.
 
 This is still not placement. Routing is untouched: a model resolves to exactly
 one backend by the same rules as before, and nothing decides a job would be
@@ -623,7 +651,7 @@ resources:
   cpu:  { kind: cpu, shared: true }
 
 backends:
-  swap: { url: "...", resources: [gpu0] }
+  chat: { url: "...", resources: [gpu0] }
   guard: { url: "...", resources: [cpu] }
   judge: { url: "...", resources: [cpu] }
 ```
@@ -662,9 +690,9 @@ land on top of it. Mark it resident:
 
 ```yaml
 backends:
-  swap-image: { url: "...", resources: [gpu1] }
+  image: { url: "...", resources: [gpu1] }
   memory:
-    url: "http://127.0.0.1:18087"
+    url: "http://127.0.0.1:8082"
     kind: none
     resources: [gpu1]
     resident: true          # or {yield: /yield, resume: /resume}
@@ -976,8 +1004,8 @@ If a backend names its models badly, name them yourself:
 
 ```yaml
 backends:
-  swap: { url: "http://127.0.0.1:8080" }
-  guard: { url: "http://127.0.0.1:18081", serves: [guard], kind: none }
+  chat: { url: "http://127.0.0.1:8080" }
+  guard: { url: "http://127.0.0.1:8081", serves: [guard], kind: none }
 ```
 
 A bare `llama-server` reports the gguf path it was launched with, so discovery
@@ -1230,8 +1258,8 @@ Say it yourself for those:
 
 ```yaml
 models:
-  deep:      { stats: { context: 32768 } }
-  video-wan: { stats: { context: 8192, vision: true } }
+  big:   { stats: { context: 32768 } }
+  video: { stats: { context: 8192, vision: true } }
 ```
 
 `context`, `vision`, `tools`, `thinking`, `effort`, `quant` — all optional, and a typo is
@@ -1249,8 +1277,10 @@ thing that can actually count.
 
 ## Running it on a server
 
-One gotcha, and it will bite you the first time. `npm ci --omit=dev` **fails**
-in a checkout of this repo:
+From the registry, `npm i -g @vcvzgbzz/hearth` on the box is the whole install.
+
+Deploying a build of your own checkout has one gotcha, and it will bite you the
+first time. `npm ci --omit=dev` **fails** in a checkout of this repo:
 
 ```
 npm error command sh -c tsc
@@ -1305,6 +1335,9 @@ them from the config as `env:NAME`, which is also what keeps the config
 committable. Note that `--check` will fail outside systemd unless you source
 that env file first, since a missing token is deliberately fatal.
 
+`Restart=on-failure` is also what brings the node back after the console's
+**restart** button, which exits with status `75` for exactly that.
+
 `TimeoutStopSec` is there because a stop is not instant any more. On SIGTERM
 hearth stops accepting connections, drops the idle ones, and gives whatever is
 already in flight up to `shutdownGraceMs` to finish — a chat turn mid-stream, a
@@ -1344,10 +1377,10 @@ Better to know this before you deploy it than after.
   one backend and queues there.
 - No end-user auth. `apiKeys` is a coarse gate. Per-account fairness belongs in
   the application, which is the thing that knows who the accounts are.
-- Only chat completions are queued. `/v1/embeddings`, `/v1/completions` and
-  everything else pass through unscheduled. If you embed and generate against
-  one GPU, hearth currently serialises half of that. Known gap, not a design
-  position.
+- Only chat completions and the paths a backend declares under `routes` are
+  queued. `/v1/embeddings`, `/v1/completions` and everything else pass through
+  unscheduled unless you name them there. See [Backends that don't speak the
+  OpenAI API](#backends-that-dont-speak-the-openai-api).
 
 ## Security
 
@@ -1366,8 +1399,8 @@ The defaults assume a private network: Tailscale, WireGuard, a LAN you trust.
 Loopback is this node's whole notion of local trust, and a browser tab is on
 loopback. So any page you happen to be visiting could POST here — no preflight
 needed, and the attacker not being able to read the reply does not matter when
-the damage is the request. Tunnelling the page to your laptop, which is the
-advice above, puts hearth on the loopback of the machine you browse the web on.
+the damage is the request. Running hearth on the machine you browse with, or
+tunnelling its port to it, puts hearth on that browser's loopback.
 
 So any write carrying an `Origin` that is not this node's is refused. curl, the
 peer protocol and a server-side app all send no `Origin` and are unaffected, and
@@ -1393,7 +1426,7 @@ Measured against a real node in that configuration, with one model shared:
 | valid peer token, **unshared** model | 403 |
 | wrong token | 401 |
 | **no token at all** | **200, any model in the catalogue** |
-| **no token, `/ui`** | **200** |
+| **no token, `/ui/data`** | **200** |
 
 A peer holding a valid token is still gated correctly — the token is checked
 before the address, so `lending.models` holds. The hole is the unauthenticated case: it
@@ -1442,9 +1475,14 @@ Unknown always means local. A probe that doesn't answer in time is unknown.
 ## Development
 
 ```bash
-npm test          # assert-based, each file runs standalone
+npm run typecheck                  # server, tests and the console
+npm test                           # assert-based, each file runs standalone
+npx tsx test/<name>.test.ts        # one file; `npm run build:console` first for page tests
 npm run build
 ```
+
+Contributing with an AI agent? [`AGENTS.md`](AGENTS.md) has the rules for
+commits, comments and pull requests here.
 
 Embedding it instead of running the CLI:
 
@@ -1485,11 +1523,5 @@ builds the browser half first (`pretest`), and `npm run typecheck` checks it
 against [`tsconfig.ui.json`](tsconfig.ui.json), which is also the tsconfig
 esbuild is pointed at: the JSX setting has to be one fact, or the bundle
 compiles against a runtime that is not there and the page renders blank.
-
-It used to be one template literal holding the whole page, where backticks and
-`${` had to be escaped by hand. A `\"` in the inner layer collapses to a bare
-`"` on the way out, which terminates the emitted string, and tsc sees nothing
-wrong because the TypeScript is valid — the browser just renders nothing. That
-class of bug is gone rather than guarded.
 
 MIT.
