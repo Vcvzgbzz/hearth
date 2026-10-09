@@ -260,8 +260,9 @@ function Entry({ label, title, bad, onRemove, onRename, children }: {
     );
   }
   return (
-    <Card className={cx("overflow-hidden", bad && "border-bad")}>
-      <div className={cx("flex items-center gap-2 bg-muted/40 px-3 py-1.5", open && "border-b border-line")}>
+    // No overflow clipping: the add-setting menu drops out of the card.
+    <Card className={cx(bad && "border-bad")}>
+      <div className={cx("flex items-center gap-2 rounded-t-[inherit] bg-muted/40 px-3 py-1.5", open ? "border-b border-line" : "rounded-b-[inherit]")}>
         <button type="button" aria-expanded={open} aria-label={`${open ? "collapse" : "expand"} ${label}`} onClick={() => setOpen(!open)} className="text-dim hover:text-fg">
           <ChevronRight size={14} className={cx("transition-transform", open && "rotate-90")} />
         </button>
@@ -318,7 +319,7 @@ function Obj({ v, path, onChange, err, compact }: {
         // A group's name sits above it, and its settings indent under it rather than taking a column.
         if (nested) {
           return (
-            <div key={k} className={cx("obj-row border-b border-line/50 py-2 last:border-0", ROW_HOVER)}>
+            <div key={k} id={`g${fid(at)}`} tabIndex={-1} className={cx("obj-row border-b border-line/50 py-2 outline-none last:border-0", ROW_HOVER)}>
               <div className="flex items-start justify-between">{label}{rm(k)}</div>
               <div className="mt-1 border-l-2 border-line pl-3">
                 <Value name={k} v={x} path={at} err={err} onChange={set(k)} compact />
@@ -340,7 +341,21 @@ function Obj({ v, path, onChange, err, compact }: {
       })}
       <div className="pt-2">
         {scope ? (
-          <AddSetting scope={scope} have={v} compact={compact} onAdd={(k) => { focusNext = fid([...path, k]); onChange({ ...v, [k]: seedOf(FIELDS[scope][k]!) }); }} />
+          <AddSetting scope={scope} have={v} compact={compact}
+                      onAdd={([k, c]) => {
+                        const f = FIELDS[scope][k!]!;
+                        focusNext = fid([...path, k!, ...(c ? [c] : [])]);
+                        if (!c || f.type !== "object" || !f.scope) { onChange({ ...v, [k!]: seedOf(f) }); return; }
+                        // A setting inside a group: make the group from its seed when it is not there yet.
+                        const group = isObj(v[k!]) ? v[k!] as Record<string, unknown> : f.seed;
+                        onChange({ ...v, [k!]: { ...group, [c]: seedOf(FIELDS[f.scope][c]!) } });
+                      }}
+                      onFind={(keys) => {
+                        const id = fid([...path, ...keys]);
+                        const el = document.getElementById(id) ?? document.getElementById(`g${id}`);
+                        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+                        el?.focus();
+                      }} />
         ) : (
           <AddPair path={path} have={v} onAdd={(k, x) => onChange({ ...v, [k]: x })} />
         )}
@@ -350,16 +365,39 @@ function Obj({ v, path, onChange, err, compact }: {
 }
 
 /** "+ add setting": the settings this scope has that are not set yet, searchable, each with what it does. */
-function AddSetting({ scope, have, onAdd, compact }: { scope: Scope; have: Record<string, unknown>; onAdd: (key: string) => void; compact?: boolean }) {
+type Option = { key: string; keys: string[]; f: Field; set: boolean };
+
+/** This scope's settings and, one level down, those of its groups (`stats.vision`), set or not. */
+function optionsOf(scope: Scope, have: Record<string, unknown>): Option[] {
+  const out: Option[] = [];
+  for (const [k, f] of Object.entries(FIELDS[scope])) {
+    // raw settings are edited in the hearth.yaml tab, so the menu does not offer them.
+    if (f.type === "raw") continue;
+    out.push({ key: k, keys: [k], f, set: k in have });
+    if (f.type === "object" && f.scope) {
+      const inner = isObj(have[k]) ? have[k] : {};
+      for (const [c, g] of Object.entries(FIELDS[f.scope])) {
+        if (g.type !== "raw") out.push({ key: `${k}.${c}`, keys: [k, c], f: g, set: c in inner });
+      }
+    }
+  }
+  return out;
+}
+
+function AddSetting({ scope, have, onAdd, onFind, compact }: {
+  scope: Scope; have: Record<string, unknown>; onAdd: (keys: string[]) => void; onFind: (keys: string[]) => void; compact?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hl, setHl] = useState(0);
-  // raw settings are edited in the hearth.yaml tab, so the menu does not offer them.
-  const unset = Object.entries(FIELDS[scope]).filter(([k, f]) => !(k in have) && f.type !== "raw");
-  if (unset.length === 0) return null;
+  const all = optionsOf(scope, have);
+  const unset = all.filter((o) => !o.set && o.keys.length === 1).length;
+  if (all.length === 0) return null;
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = unset.filter(([k, f]) => words.every((w) => `${k} ${f.desc}`.toLowerCase().includes(w)));
-  const pick = (k: string) => { setOpen(false); setQ(""); onAdd(k); };
+  // Unset first; a setting already in place is still found, and picking it goes to it.
+  const list = all.filter((o) => (words.length ? words.every((w) => `${o.key} ${o.f.desc}`.toLowerCase().includes(w)) : !o.set && o.keys.length === 1))
+    .sort((a, b) => Number(a.set) - Number(b.set));
+  const pick = (o: Option) => { setOpen(false); setQ(""); (o.set ? onFind : onAdd)(o.keys); };
   if (!open) {
     // Inside a group, a quiet link: the entry's own button is the one that reads as "add".
     if (compact) {
@@ -373,29 +411,32 @@ function AddSetting({ scope, have, onAdd, compact }: { scope: Scope; have: Recor
     return (
       <button type="button" onClick={() => { setOpen(true); setHl(0); }}
               className="inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed border-line px-2 text-[12px] text-dim hover:border-accent hover:text-fg focus-visible:outline-2 focus-visible:outline-accent">
-        <Plus size={12} />add setting <span className="text-dim/70">· {unset.length} more</span>
+        <Plus size={12} />add setting{unset > 0 && <span className="text-dim/70">· {unset} more</span>}
       </button>
     );
   }
   const listId = `opts-${scope}`;
   return (
     <div className="relative w-full max-w-lg" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
-      <input autoFocus role="combobox" aria-expanded aria-controls={listId} aria-activedescendant={list[hl] ? `${listId}-${list[hl]![0]}` : undefined}
+      <input autoFocus role="combobox" aria-expanded aria-controls={listId} aria-activedescendant={list[hl] ? `${listId}-${list[hl]!.key}` : undefined}
              value={q} placeholder="search settings…" className={cx(INPUT, "w-full border-accent")}
              onChange={(e) => { setQ(e.target.value); setHl(0); }}
              onKeyDown={(e) => {
                if (e.key === "ArrowDown") { e.preventDefault(); setHl((h) => Math.min(h + 1, list.length - 1)); }
                else if (e.key === "ArrowUp") { e.preventDefault(); setHl((h) => Math.max(h - 1, 0)); }
-               else if (e.key === "Enter" && list[hl]) { e.preventDefault(); pick(list[hl]![0]); }
+               else if (e.key === "Enter" && list[hl]) { e.preventDefault(); pick(list[hl]!); }
                else if (e.key === "Escape") setOpen(false);
              }} />
       <ul id={listId} role="listbox" className="absolute z-20 mt-1 max-h-80 w-full overflow-auto rounded-lg border border-line bg-panel py-1 shadow-xl">
-        {list.map(([k, f], i) => (
-          <li key={k} id={`${listId}-${k}`} role="option" aria-selected={i === hl}
-              onMouseDown={(e) => { e.preventDefault(); pick(k); }} onMouseEnter={() => setHl(i)}
+        {list.map((o, i) => (
+          <li key={o.key} id={`${listId}-${o.key}`} role="option" aria-selected={i === hl}
+              onMouseDown={(e) => { e.preventDefault(); pick(o); }} onMouseEnter={() => setHl(i)}
               className={cx("cursor-pointer px-3 py-1.5", i === hl && "bg-muted")}>
-            <div className="flex items-center gap-2"><span className={mono}>{k}</span><span className="rounded bg-line/70 px-1 text-[10px] text-dim">{tagOf(f)}</span></div>
-            <div className="text-[11px] leading-4 text-dim">{f.desc}</div>
+            <div className="flex items-center gap-2">
+              <span className={mono}>{o.key}</span><span className="rounded bg-line/70 px-1 text-[10px] text-dim">{tagOf(o.f)}</span>
+              {o.set && <span className="ml-auto text-[10px] text-dim">set — go to it</span>}
+            </div>
+            <div className="text-[11px] leading-4 text-dim">{o.f.desc}</div>
           </li>
         ))}
         {list.length === 0 && <li className="px-3 py-2 text-dim">no setting matches “{q}”</li>}
