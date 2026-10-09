@@ -252,6 +252,9 @@ export default function App() {
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
+  // Signed out, nothing else works: the card is the whole page.
+  if (loginRequired) return <div className="flex h-full"><LoginCard /></div>;
+
   const self = data?.net.nodes.find((n) => n.self);
   return (
     <div className="flex h-full">
@@ -292,9 +295,7 @@ export default function App() {
           </div>
         </header>
 
-        {loginRequired ? (
-          <LoginCard />
-        ) : !data ? (
+        {!data ? (
           <div className="grid flex-1 place-items-center text-dim">{dead ? "hearth is not answering" : "connecting…"}</div>
         ) : page === "topology" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">
