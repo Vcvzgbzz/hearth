@@ -166,6 +166,18 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   await a.node.close();
 }
 
+{
+  // A hand edit to a restart-only key loads, and the journal says it is waiting on a restart.
+  writeFileSync(cfgPath, ORIGINAL);
+  const warned: Record<string, unknown>[] = [];
+  const node = createNode(loadConfig(cfgPath), { ...silentLogger, warn: (msg, f) => { if (msg === "config.reloaded") warned.push(f ?? {}); } });
+  node.start();
+  writeFileSync(cfgPath, ORIGINAL.replace("serves: [mine, spare]", "serves: [mine]"));
+  await settle();
+  assert.deepEqual(warned.at(-1)?.restartPending, ["backends"], "a serves edit is logged as waiting on a restart");
+  await node.close();
+}
+
 /* ------------------------------------------------------------ PATCH /config */
 
 {

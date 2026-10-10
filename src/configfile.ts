@@ -570,8 +570,10 @@ export class ConfigFile {
     }
     this.lastText = text;
     this.hash = hashOf(text);
-    this.log.info("config.reloaded", { path: this.path, hash: this.hash });
     this.apply(next);
+    // A hand edit has no reply to carry restartPending, so the journal must say what is still waiting.
+    if (this.pending.length) this.log.warn("config.reloaded", { path: this.path, hash: this.hash, restartPending: this.pending, hint: "restart hearth to apply these" });
+    else this.log.info("config.reloaded", { path: this.path, hash: this.hash });
   }
 
   /** Pick up hand edits: watch the directory (editors replace files), debounced, ignoring our own writes. */
