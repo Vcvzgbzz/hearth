@@ -107,6 +107,28 @@ export interface BackendConfig {
   activity: ActivityDecl | null;
   /** Lives on its `resources` without taking turns for them; see ResidentDecl. null for a normal backend. */
   resident: ResidentDecl | null;
+  /** Keeps named lanes off its `resources` while its app is in use; see HoldDecl. null holds nothing. */
+  hold: HoldDecl | null;
+}
+
+/**
+ * `hold:` on a backend with an `activity:` path: work hearth does not schedule (an image app
+ * driven from its own page) keeps the listed lanes of every backend sharing its hardware from
+ * starting, from the moment the app answers until it has reported nothing running or queued
+ * for `idleMs`. Other lanes take the card as before.
+ */
+export interface HoldDecl {
+  /** The lanes kept waiting, or sent to `models.<id>.whenHeld`. */
+  lanes: string[];
+  /** How long the app must stay idle before the lanes may start again. */
+  idleMs: number;
+  /**
+   * The id the app loads under when it is a seat in a model swapper: one a backend declares in
+   * `serves`, this one included. The hold then starts when that seat starts loading, not a load
+   * later when the app first answers, and ends when the swapper drops it. null for an app that
+   * is simply up or down.
+   */
+  seat: string | null;
 }
 
 /**
@@ -147,6 +169,11 @@ export interface ModelRoute {
   params: Record<string, unknown> | null;
   /** The lane every request for this id queues in, over the client's; null lets the client choose. */
   lane: string | null;
+  /**
+   * The id a request for this one runs as while a neighbour's `hold` keeps its lane off this
+   * model's hardware; null leaves it queued until the hold ends.
+   */
+  whenHeld: string | null;
   /** What this model can take when nothing can be asked; observed values win field by field. */
   stats: ModelStats | null;
   /** Reshapes this id's backend answers into another server's format; see emulate.ts. */
@@ -617,6 +644,18 @@ function residentDecl(v: unknown, where: string): ResidentDecl | null {
   return out;
 }
 
+/** `hold:` on a backend; lane names are checked once the lanes exist. */
+function holdDecl(v: unknown, where: string): HoldDecl | null {
+  if (v === undefined || v === null) return null;
+  const o = asRecord(v, where);
+  only(o, ["lanes", "idleMs", "seat"], where);
+  const lanes = strList(o.lanes, `${where}.lanes`);
+  if (lanes.length === 0) throw bad(`${where}.lanes`, "must name at least one lane to hold");
+  if (o.idleMs === undefined) throw bad(`${where}.idleMs`, "is required: how long the app must stay idle before the lanes start again");
+  const seat = str(o.seat, `${where}.seat`, "");
+  return { lanes, idleMs: atLeast(o.idleMs, `${where}.idleMs`, 0), seat: seat === "" ? null : seat };
+}
+
 /** `routes:` entries, as a bare path or an object; lane and model are filled in once lanes exist. */
 function routeList(v: unknown, where: string): RouteRule[] {
   if (v === undefined) return [];
@@ -856,6 +895,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       routes: routeList(entry.routes, `${at}.routes`),
       activity: activityDecl(entry.activity, `${at}.activity`),
       resident: residentDecl(entry.resident, `${at}.resident`),
+      hold: holdDecl(entry.hold, `${at}.hold`),
     });
   }
   if (backends.length === 0) throw bad("backends", "must not be empty");
@@ -922,6 +962,23 @@ export function parseConfig(raw: unknown): HearthConfig {
   // See WARM_LANE_PRIORITY. Added rather than defaulted, so it survives an
   // explicit `lanes:` block that would otherwise replace it.
   if (lanes[WARM_LANE] === undefined) lanes[WARM_LANE] = { priority: WARM_LANE_PRIORITY };
+
+  // A hold is read off the backend's own busy signal and only means something on hardware others wait for.
+  for (const b of backends) {
+    if (b.hold === null) continue;
+    const at = `backends.${b.name}.hold`;
+    if (b.activity === null) throw bad(at, `needs backends.${b.name}.activity: the path that says whether the app is in use`);
+    if (!b.resources.some((r) => !resourceDecls[r]?.shared)) {
+      throw bad(at, `needs an exclusive resource on backends.${b.name}.resources: there is nothing to hold`);
+    }
+    for (const l of b.hold.lanes) {
+      if (!(l in lanes)) throw bad(`${at}.lanes`, `names "${l}", which is not in scheduler.lanes (${Object.keys(lanes).join(", ")})`);
+    }
+    // Only a declared id says which backend loads the seat; a discovered one could be anybody's.
+    if (b.hold.seat !== null && !backends.some((o) => o.serves.includes(b.hold!.seat!))) {
+      throw bad(`${at}.seat`, `is "${b.hold.seat}", which no backend declares in serves: name the swapper's id for this app`);
+    }
+  }
 
   // Route defaults need the lanes: the lowest-priority lane, since a named path is usually the heavy work.
   const fallbackLane = Object.entries(lanes)
@@ -1044,6 +1101,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     if (emulate !== "" && !(EMULATIONS as readonly string[]).includes(emulate)) {
       throw bad(`models.${id}.emulate`, `is "${emulate}"; known: ${EMULATIONS.join(", ")}`);
     }
+    const whenHeld = str(entry.whenHeld, `models.${id}.whenHeld`, "");
     const lane = str(entry.lane, `models.${id}.lane`, "");
     if (lane !== "" && !(lane in lanes)) {
       throw bad(
@@ -1062,6 +1120,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       concurrency: modelConcurrency(entry, id),
       params,
       lane: lane === "" ? null : lane,
+      whenHeld: whenHeld === "" ? null : whenHeld,
       stats: declaredStats(entry.stats, id),
       emulate: emulate === "" ? null : (emulate as Emulation),
       pool: modelPool(entry.pool, id),
@@ -1071,6 +1130,18 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
     if (entry.videoTokens !== undefined) {
       models[id].videoTokens = count(entry.videoTokens, `models.${id}.videoTokens`, 1);
+    }
+  }
+
+  // Checked once every model is known: a target that is itself redirected would make the answer depend on order.
+  for (const [id, route] of Object.entries(models)) {
+    if (route.whenHeld === null) continue;
+    const to = models[route.whenHeld];
+    if (route.whenHeld === id || to === undefined) {
+      throw bad(`models.${id}.whenHeld`, `is "${route.whenHeld}", which is not another id under models:`);
+    }
+    if (to.whenHeld !== null) {
+      throw bad(`models.${id}.whenHeld`, `names "${route.whenHeld}", which has a whenHeld of its own -- name the id the request should end up on`);
     }
   }
 

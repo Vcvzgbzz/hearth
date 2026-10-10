@@ -41,7 +41,7 @@ export function deepFreeze(v: unknown): void {
 const IGNORED = new Set<string>(["configPath", "stateFile"]);
 
 const DEFAULT_ROUTE: ModelRoute = {
-  backend: null, as: null, follow: false, policy: "local", peers: [], spilloverAt: 1,
+  backend: null, as: null, follow: false, policy: "local", peers: [], spilloverAt: 1, whenHeld: null,
   fallbackLocal: true, concurrency: null, params: null, lane: null, stats: null, emulate: null, pool: null,
 };
 

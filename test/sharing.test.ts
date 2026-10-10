@@ -66,7 +66,7 @@ import { parseV1 } from "./v1.js";
 
   // An existing route that names its peers is an operator being specific.
   // Widening it to everyone would send work to boxes they left out.
-  cfg.models.pinned = { backend: null, as: null, follow: false, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null, params: null, lane: null, stats: null, emulate: null, pool: null };
+  cfg.models.pinned = { backend: null, as: null, follow: false, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null, params: null, lane: null, whenHeld: null, stats: null, emulate: null, pool: null };
   link(cfg, "friend", "pinned", "pinned", "peer", true);
   assert.deepEqual(cfg.models.pinned!.peers, ["friend"], "an existing peer list is kept");
 

@@ -9,7 +9,7 @@ import type { Logger } from "./log.js";
 import { known, type ModelStats } from "./stats.js";
 import { getJson, send } from "./upstream.js";
 
-/** How often an activity path is read, and its timeout; sampled only while a page is open. */
+/** How often an activity path is read, and its timeout; sampled while a page is open, or always for a backend with a `hold`. */
 const ACTIVITY_POLL_MS = 2_000;
 const ACTIVITY_TIMEOUT_MS = 2_000;
 
@@ -27,6 +27,12 @@ function countField(body: unknown, field: string): number | null {
   return null;
 }
 
+/**
+ * How long an app may go unread and still count as up, for a `hold`: longer than the status
+ * staleness above, so a slow answer in the middle of a job does not hand its card away.
+ */
+const HOLD_GAP_MS = 30_000;
+
 /** How long we'll trust a quiet stream before going and asking. */
 const STALE_MS = 60_000;
 
@@ -35,6 +41,7 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 export class BackendState {
   private loadedIds: string[] = [];
   private loadingIds: string[] = [];
+  private readonly loadEndedAt = new Map<string, number>();
   private placements = new Map<string, Placement>();
   private placementFor: string = "";
   private catalogIds: string[] = [];
@@ -65,6 +72,10 @@ export class BackendState {
   private activityReading: { running: number; queued: number | null; at: number } | null = null;
   private activityAt = 0;
   private activityInFlight: Promise<void> | null = null;
+  /** When the app last answered its activity path, when it last had work, and when it began answering. */
+  private seenAt = 0;
+  private busyAt = 0;
+  private upAt = 0;
 
   private readonly k: Kind;
 
@@ -98,11 +109,13 @@ export class BackendState {
         // the app changing shape — not zero, and not a reading. Leave the last
         // good one to age out, exactly as a failed read does.
         if (running !== null) {
-          this.activityReading = {
-            running,
-            queued: decl.queued ? countField(body, decl.queued) : null,
-            at: Date.now(),
-          };
+          const queued = decl.queued ? countField(body, decl.queued) : null;
+          const now = Date.now();
+          this.activityReading = { running, queued, at: now };
+          // Only work counts as use: an idle app answering again, or for the first time, says nothing of who wants it.
+          if (running > 0 || (queued ?? 0) > 0) this.busyAt = now;
+          if (now - this.seenAt > HOLD_GAP_MS) this.upAt = now;
+          this.seenAt = now;
         }
       } catch {
         // Unreachable, timed out, or not JSON: cannot tell, never idle. The last
@@ -124,6 +137,18 @@ export class BackendState {
     return a.queued === null
       ? { running: a.running, ok: true }
       : { running: a.running, queued: a.queued, ok: true };
+  }
+
+  /** Is the app up, and was it in use within `idleMs`? False once it stops answering for HOLD_GAP_MS. */
+  holding(idleMs: number): boolean {
+    const now = Date.now();
+    return this.seenAt > 0 && now - this.seenAt <= HOLD_GAP_MS && now - this.busyAt < idleMs;
+  }
+
+  /** How long the app has reported nothing to do, counted from when it began answering if it has had no work since; null when it is not answering. */
+  quietMs(): number | null {
+    const now = Date.now();
+    return this.seenAt > 0 && now - this.seenAt <= HOLD_GAP_MS ? now - Math.max(this.busyAt, this.upAt) : null;
   }
 
   private useEvents: boolean;
@@ -238,7 +263,7 @@ export class BackendState {
   private apply(models: ModelStatus[]): void {
     const r = readingFromStatus(models.filter((m) => this.mine(m.id)));
     this.catalogIds = r.catalog;
-    this.loadingIds = r.loading;
+    this.setLoading(r.loading);
     this.setLoaded(r.loaded);
     // Placement is fetched from /running when the resident set changes, never on a timer.
     void this.learnPlacement();
@@ -264,7 +289,7 @@ export class BackendState {
 
     if (warm.status === "fulfilled" && warm.value !== null) {
       this.setLoaded(warm.value.loaded.filter((m) => this.mine(m)));
-      this.loadingIds = warm.value.loading.filter((m) => this.mine(m));
+      this.setLoading(warm.value.loading.filter((m) => this.mine(m)));
       if (warm.value.placements) this.placements = warm.value.placements;
     } else {
       // Missing warm endpoint isn't an error, it just means we never know
@@ -320,6 +345,18 @@ export class BackendState {
   /** Models loading off the disk now; empty also where the backend cannot tell. */
   loading(): string[] {
     return [...this.loadingIds];
+  }
+
+  private setLoading(ids: string[]): void {
+    const now = Date.now();
+    for (const id of this.loadingIds) if (!ids.includes(id)) this.loadEndedAt.set(id, now);
+    this.loadingIds = ids;
+  }
+
+  /** How long since `id` was last seen loading: 0 while it is, Infinity if it never was. */
+  sinceLoading(id: string): number {
+    if (this.loadingIds.includes(id)) return 0;
+    return Date.now() - (this.loadEndedAt.get(id) ?? -Infinity);
   }
 
   /** Refresh only if we have to. This is what the hot path calls. */

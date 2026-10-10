@@ -61,7 +61,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
   async function uiPayload(operator: string | null = null): Promise<Record<string, unknown>> {
     await peers.ensureFresh();
     // Declared activity paths are read only while a page is building data, never on a timer.
-    for (const b of pool.all()) if (b.cfg.activity) void b.state.sampleActivity(b.cfg.activity);
+    for (const b of pool.all()) void pool.sampleActivity(b);
     return {
       // Who this request signed in as, so the page can show it and offer a sign-out;
       // loopback and key callers are nobody in particular.
@@ -183,6 +183,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
             ...(b.state.watched() ? { answering: b.state.answering() } : {}),
             // Sent whenever declared, including unread (ok:false), which the page shows as unknown.
             ...(b.cfg.activity ? { activity: b.state.activity() } : {}),
+            // Which lanes this backend keeps off its hardware while its app is in use, and whether it does so now.
+            ...(b.cfg.hold ? { hold: { lanes: [...b.cfg.hold.lanes], idleMs: b.cfg.hold.idleMs, active: pool.holds().some((h) => h.backend === b.name && h.active), quietMs: b.state.quietMs() } } : {}),
             // Only a kind that unloads evicts; one that keeps its set resident has no thrash to warn about.
             evicts: b.state.canUnload(),
             slots: c.slots,
@@ -297,6 +299,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       resources: pool.resources(),
       // What the last few handoffs cost somebody.
       evictions: pool.evictions(),
+      // Hardware kept for an app hearth does not schedule; a client can read this to plan around it.
+      holds: pool.holds(),
       readyNow: [...readyNow].sort(),
       available: [...available].sort(),
       unknownWarm: [...unknownWarm].sort(),

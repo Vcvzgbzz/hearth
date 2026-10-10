@@ -1387,8 +1387,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
   }
 
-  async function chat(c: Call, model: string, payload: Record<string, unknown>): Promise<void> {
+  async function chat(c: Call, asked: string, payload: Record<string, unknown>): Promise<void> {
     const { res } = c;
+    let model = asked;
     // A peer's request gets served here and never routed onward. Two nodes
     // that each prefer the other would otherwise bounce a request back and
     // forth until something gave out.
@@ -1401,7 +1402,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
 
     // Peers get cfg.peerLane; local callers may send a `lane` (stripped before forwarding); a route's lane wins.
-    const lane =
+    let lane =
       fromPeer !== null
         ? cfg.peerLane
         : cfg.models[model]?.lane ??
@@ -1409,6 +1410,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
             ? payload.lane
             : Object.keys(cfg.scheduler.lanes)[0]!);
     delete payload.lane;
+
+    // A neighbour's hold keeps this lane off the model's card: run as the id named for that, in that id's lane.
+    const instead = fromPeer === null ? pool.whenHeld(model, lane) : null;
+    if (instead !== null) {
+      refuseDegraded(instead);
+      log.debug("route.held", { model, lane, as: instead });
+      model = instead;
+      lane = cfg.models[instead]?.lane ?? lane;
+    }
 
     const ctrl = new AbortController();
     res.on("close", () => {

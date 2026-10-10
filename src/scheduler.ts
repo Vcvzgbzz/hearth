@@ -59,6 +59,8 @@ export interface SchedulerOptions {
   arbiter?: ResourceArbiter;
   /** Clear neighbours' weights off the hardware once acquired, before the first job runs. A rejection fails the job. */
   evict?: () => Promise<void>;
+  /** Is this lane kept off our hardware right now by a neighbour's `hold`? Its jobs stay queued and are passed over. */
+  heldOff?: (lane: string) => boolean;
 }
 
 export interface JobSpec {
@@ -188,6 +190,7 @@ export class Scheduler {
   private readonly resources: readonly string[];
   private readonly arbiter?: ResourceArbiter;
   private readonly evict?: () => Promise<void>;
+  private readonly heldOff?: (lane: string) => boolean;
 
   private readonly queued: Job[] = [];
   private readonly running = new Set<Job>();
@@ -215,6 +218,7 @@ export class Scheduler {
     this.resources = opts.arbiter ? (opts.resources ?? []) : [];
     this.arbiter = this.resources.length > 0 ? opts.arbiter : undefined;
     this.evict = opts.evict;
+    this.heldOff = opts.heldOff;
     // A queue blocked on someone else's hardware wakes when it is released.
     this.arbiter?.onRelease(() => this.pump());
   }
@@ -307,16 +311,24 @@ export class Scheduler {
     return this.arbiter.mayTake(this.resources, this);
   }
 
-  /** Publish our oldest blocked job's enqueue time as our claim, or clear it. */
+  /** Publish our oldest blocked job's enqueue time as our claim, or clear it. A held-off job claims nothing: it is not waiting for a turn. */
   private updateClaim(): void {
     if (!this.arbiter) return;
-    if (this.holding || this.queued.length === 0) {
-      this.arbiter.claim(this, this.resources, null);
-      return;
-    }
     let oldest = Infinity;
-    for (const j of this.queued) if (j.enqueuedAt < oldest) oldest = j.enqueuedAt;
-    this.arbiter.claim(this, this.resources, oldest);
+    if (!this.holding) {
+      for (const j of this.queued) if (!this.held(j) && j.enqueuedAt < oldest) oldest = j.enqueuedAt;
+    }
+    this.arbiter.claim(this, this.resources, oldest === Infinity ? null : oldest);
+  }
+
+  /** Is this job's lane kept off our hardware by a neighbour's hold? A job that claims nothing is never held. */
+  private held(job: Job): boolean {
+    return job.claimHardware && this.heldOff !== undefined && this.heldOff(job.lane);
+  }
+
+  /** Look at the queue again: something outside this scheduler changed what may start. */
+  kick(): void {
+    this.pump();
   }
 
   /** Let the hardware go, and forget the eviction that belonged to that turn. */
@@ -365,6 +377,7 @@ export class Scheduler {
     // Hardware first; our own hold never blocks us. A job that claims nothing
     // (a canary probe) is not gated on it either — it is not going to use it.
     if (job.claimHardware && !this.hardwareFree()) return false;
+    if (this.held(job)) return false;
     if (this.laneFull(job)) return false;
     if (this.heldBy(job.model) >= this.limitFor(job.model)) return false;
     if (this.overPool(job)) return false;
@@ -512,8 +525,8 @@ export class Scheduler {
   }
 
   /**
-   * The best-scoring job if it can start, else null. A job blocked by its lane's ceiling is
-   * passed over, and on a coresident backend so is one blocked only by its own model's.
+   * The best-scoring job if it can start, else null. A job blocked by its lane's ceiling or a
+   * neighbour's hold is passed over, and on a coresident backend so is one blocked only by its own model's.
    */
   private next(): Job | null {
     const now = Date.now();
@@ -533,7 +546,7 @@ export class Scheduler {
       if (!best) return null;
       if (this.canAdmit(best)) return best;
       const ownCeiling =
-        this.laneFull(best) || (this.coresident && this.heldBy(best.model) >= this.limitFor(best.model));
+        this.held(best) || this.laneFull(best) || (this.coresident && this.heldBy(best.model) >= this.limitFor(best.model));
       if (!ownCeiling) return null;
       passed.add(best);
     }
@@ -691,7 +704,8 @@ export class Scheduler {
         const arm = () => {
           job.waitTimer = setTimeout(() => {
             if (job.state !== "queued") return;
-            if (this.lastStartAt > checked) {
+            // A held job waits on a neighbour's app, not on this backend: the guard does not run against it.
+            if (this.lastStartAt > checked || this.held(job as Job)) {
               checked = Date.now();
               arm();
               return;

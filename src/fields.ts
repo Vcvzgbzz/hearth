@@ -64,6 +64,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     idleMs: ms("How long this backend may go silent mid-answer.", "backendDefaults"),
     activity: { type: "object", scope: "activity", desc: "Where this backend reports its own busy state.", seed: { path: "/", running: "" } },
     resident: { type: "bool", desc: "Stays loaded beside the card's swapping model and is asked to yield when it needs the memory.", def: false },
+    hold: { type: "raw", desc: "`{ lanes, idleMs, seat? }`: while this backend's app has work (read off `activity`), keep these lanes off its hardware until it has been idle this long. `seat` is the id a model swapper loads the app under, so the hold starts as the seat loads." },
     routes: { type: "raw", desc: "Paths this backend answers besides chat, each with its lane and model." },
   },
   activity: {
@@ -94,6 +95,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     backend: { type: "ref", ref: "backends", desc: "Pin to a backend instead of resolving it from the catalogs." },
     follow: { type: "bool", desc: "Go out as whatever the pinned backend has loaded, else as `as`. Needs backend and as.", def: false },
     lane: { type: "ref", ref: "lanes", desc: "Lane this model's requests queue in, over the client's." },
+    whenHeld: { type: "ref", ref: "models", desc: "The id a chat request runs as while a neighbour's `hold` keeps its lane off this model's hardware. Unset waits." },
     peers: { type: "refs", ref: "peers", desc: "Only these peers may run it. Empty is any peer that maps it." },
     spilloverAt: { type: "number", min: 1, desc: "spillover only: go to a peer once this many jobs are queued here.", def: 1 },
     fallbackLocal: { type: "bool", desc: "Fall back to running here when no peer can take it.", def: true },
