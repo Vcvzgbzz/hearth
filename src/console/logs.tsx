@@ -47,7 +47,7 @@ const SAY: Record<string, (f: Record<string, unknown>) => string> = {
   "warm.failed": (f) => `Could not warm ${s(f.model)} on ${s(f.backend)}: ${s(f.error)}`,
   "config.saved": () => "Config saved",
   "config.patched": (f) => `Config edited${Array.isArray(f.restartPending) && f.restartPending.length ? `; restart to apply ${f.restartPending.join(", ")}` : ""}`,
-  "config.reloaded": () => "Config reloaded from disk",
+  "config.reloaded": (f) => `Config reloaded from disk${Array.isArray(f.restartPending) && f.restartPending.length ? `; restart to apply ${f.restartPending.join(", ")}` : ""}`,
   "config.invalid": (f) => `Config does not load: ${s(f.error)}. Still running the last good one`,
   "canary.degraded": (f) => `${s(f.model)} taken out of rotation: ${s(f.detail)}`,
   "canary.recovered": (f) => `${s(f.model)} back in rotation`,
