@@ -85,13 +85,15 @@ const cold = { queued: 0, free: 1, slots: 1, loaded: ["something-else"] };
 
 // --- an unmapped model is never routed -------------------------------------
 // The model map is the allowlist. A local-only variant stays home because it is
-// simply not in it, which is why config rejects a policy that can never fire.
+// simply not in it: a flow that sends it to a peer does not load, and an older
+// file's routing for it migrates to nothing.
 {
   assert.throws(
-    () => parseV1({ ...base, models: { "big-high": { policy: "peer" } } }),
-    /no peer maps/,
-    "a policy pointing at a model no peer maps must fail at startup",
+    () => parseV1({ ...base, flows: { "big-high": { inputs: ["big-high"], steps: [{ to: { peer: "friend" } }, { to: "big-high" }] } } }),
+    /sends "big-high" to friend, which does not map it/,
+    "a flow pointing a model at a peer that does not map it must fail at startup",
   );
+  assert.equal(parseV1({ ...base, models: { "big-high": { policy: "peer" } } }).flows["big-high"], undefined);
 }
 
 // --- fallbackLocal: false actually refuses ---------------------------------

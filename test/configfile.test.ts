@@ -58,14 +58,19 @@ peers:
       # my id: their id. Also the allowlist.
       borrowed: theirs
 
-models:
+flows:
   borrowed:
-    policy: peer
-    fallbackLocal: true
+    inputs: [borrowed]
+    steps:
+      - to: {peer: friend}
+      - to: borrowed
+
+models:
   # Past 80 columns on purpose: the writer's default would fold it across lines.
   long-one: {concurrency: 4, params: {thinking_token_budget: 2048}, pool: {tokens: 144000, output: 8192}, stats: {context: 131072}}
 `;
 
+const FULL = ORIGINAL;
 const comments = (t: string) => t.split("\n").filter((l) => l.includes("#")).map((l) => l.slice(l.indexOf("#"))).join("\n");
 
 type Status = { path: string | null; hash: string; restartPending: string[]; error: string | null };
@@ -112,7 +117,8 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   const back = loadConfig(cfgPath);
   assert.deepEqual(back.share, ["spare"], "no save step: the file already says it");
   assert.equal(back.peers[0]!.models.extra, "their-extra");
-  assert.equal(back.models.extra!.policy, "peer", "a link writes its route, not just the mapping");
+  assert.deepEqual(back.flows.extra!.steps[0]!.to, { peer: "friend", model: null }, "a link writes a flow that sends it there, not just the mapping");
+  assert.match(written, /^    inputs: \[borrowed\]\n    steps:\n      - to: \{peer: friend\}/m, "a flow nobody edited is left exactly as written");
   assert.equal(back.peers[0]!.models.borrowed, "theirs", "untouched entries stay untouched");
   assert.deepEqual(back.notes, { mine: "use for: \"quoted\" things" });
   assert.equal(await a.note("mine"), "use for: \"quoted\" things", "and the running node has it too");
@@ -145,7 +151,7 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   assert.match(both, /^lending:\n  models: \[mine, spare\]/m, "and ours is on top of it");
 
   // With no request at all, the watcher picks a hand edit up and the node runs it.
-  writeFileSync(cfgPath, readFileSync(cfgPath, "utf8").replace("models:\n  borrowed:", "models:\n  mine:\n    note: typed in vim\n  borrowed:"));
+  writeFileSync(cfgPath, readFileSync(cfgPath, "utf8").replace("\nmodels:\n", "\nmodels:\n  mine:\n    note: typed in vim\n"));
   await settle();
   assert.equal(await a.note("mine"), "typed in vim", "a hand edit applies without a restart or a click");
 
@@ -265,7 +271,7 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   const after = loadConfig(cfgPath);
   assert.deepEqual(after.share, ["mine", "spare"], "its share deltas are in the file");
   assert.equal(after.peers[0]!.models.extra, "their-extra");
-  assert.equal(after.models.extra!.fallbackLocal, false);
+  assert.deepEqual(after.flows.extra!.steps.map((s) => Object.keys(s.to)[0]), ["peer", "refuse"], "a route it held becomes the flow it described");
   assert.equal(after.notes?.mine, "from the sidecar");
   assert.ok(!existsSync(statePath) && existsSync(`${statePath}.migrated`), "and the sidecar is retired");
   assert.match(readFileSync(cfgPath, "utf8"), /# my id: their id\. Also the allowlist\./, "comments intact");
@@ -364,6 +370,8 @@ operator:
 /* ------------------------------------------ a rename changes the key and nothing else */
 
 {
+  // A flow that names the peer would have to be renamed with it; this file has none, so the rename stands alone.
+  const ORIGINAL = FULL.replace(/flows:\n[\s\S]*?\n\nmodels:/, "models:");
   writeFileSync(cfgPath, ORIGINAL);
   const a = await boot();
   const r = await a.patch({ ops: [{ path: ["peers", "friend"], rename: "gpu-east" }] });

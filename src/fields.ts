@@ -5,7 +5,7 @@
  */
 
 /** Where a setting's choices come from, read off the config being edited. */
-export type Ref = "models" | "lanes" | "resources" | "backends" | "peers";
+export type Ref = "models" | "lanes" | "resources" | "backends" | "peers" | "servers" | "actions";
 
 export type Field =
   | { type: "text" | "secret"; desc: string; def?: string }
@@ -21,14 +21,14 @@ export type Field =
   | { type: "raw"; desc: string };
 
 export type Scope =
-  | "node" | "listen" | "backendDefaults" | "backend" | "activity" | "resource" | "scheduler" | "lane"
+  | "node" | "listen" | "backendDefaults" | "backend" | "activity" | "resource" | "server" | "flow" | "action" | "scheduler" | "lane"
   | "model" | "stats" | "pool" | "peer" | "lending" | "borrowing" | "operator";
 
 const ms = (desc: string, def?: number | string, min?: number): Field =>
   ({ type: "ms", desc, ...(def !== undefined ? { def } : {}), ...(min !== undefined ? { min } : {}) });
 
 /** The top-level keys that are sections of their own rather than node settings. */
-export const SECTION_KEYS = ["backends", "resources", "models", "scheduler", "peers"] as const;
+export const SECTION_KEYS = ["backends", "resources", "servers", "models", "flows", "actions", "scheduler", "peers"] as const;
 
 export const FIELDS: Record<Scope, Record<string, Field>> = {
   node: {
@@ -39,9 +39,11 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     backendDefaults: { type: "object", scope: "backendDefaults", desc: "Defaults every backend takes unless it sets its own.", seed: {} },
     apiKeys: { type: "list", desc: "Keys allowed on /v1/*. Empty means loopback only; setting it means loopback needs a key too." },
     maxBodyBytes: { type: "number", min: 1024, desc: "Largest accepted request body, in bytes.", def: 33554432 },
+    modelHeader: { type: "bool", desc: "Send `x-hearth-model` on every chat answer: the id the request ran as. Turn off where callers should not see what is behind a name.", def: true },
     shutdownGraceMs: ms("How long a shutdown waits for requests in flight. 0 drops them.", 30000),
     operator: { type: "raw", desc: "The console login. Written by `hearth set-operator`." },
     historyFile: { type: "text", desc: "A file that keeps the console's day of history and recent logs across restarts. Unset keeps them in memory." },
+    layout: { type: "raw", desc: "Where the console's topology draws the nodes you have placed. Written by its editor." },
     stateFile: { type: "raw", desc: "A pre-2.0 console sidecar, folded into this file once at startup." },
     canary: { type: "raw", desc: "Ask named models a question with one right answer, on a schedule; a seat that answers 200 with nothing is taken out of rotation. Off unless set; restart-only." },
   },
@@ -55,7 +57,9 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     idleMs: ms("How long a backend may go silent mid-answer. 0 waits forever.", 600000),
   },
   backend: {
-    url: { type: "text", desc: "The OpenAI-compatible server hearth fronts." },
+    url: { type: "text", desc: "The OpenAI-compatible server hearth fronts. Or set server and port." },
+    server: { type: "ref", ref: "servers", desc: "The machine this backend runs on. Unset is this one." },
+    port: { type: "number", min: 1, desc: "With server and no url: the backend is http://<server host>:<port>." },
     kind: { type: "enum", options: ["llama-swap", "ollama", "single", "none"], desc: "Where warm state comes from.", def: "llama-swap" },
     resources: { type: "refs", ref: "resources", desc: "Hardware this backend uses. Backends on one exclusive card take turns." },
     serves: { type: "list", desc: "Model ids this backend serves. Declaring replaces discovery and acts as an allowlist." },
@@ -76,6 +80,26 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     kind: { type: "enum", options: ["gpu", "cpu", "other"], desc: "Picks the icon; gpu and other are exclusive unless shared.", def: "gpu" },
     shared: { type: "bool", desc: "Many backends at once, never arbitrated: CPUs, mostly.", def: false },
   },
+  server: {
+    host: { type: "text", desc: "The machine's address on your network: an IP or a hostname, no scheme or port." },
+  },
+  flow: {
+    note: { type: "text", desc: "What this flow is for." },
+    off: { type: "bool", desc: "Switched off: requests for its inputs run as themselves.", def: false },
+    sticky: { type: "ms", min: 1000, desc: "How long a conversation stays where this flow first sent it, so later turns keep the same model. Unset decides every turn afresh." },
+    inputs: { type: "refs", ref: "models", desc: "The ids whose requests enter this flow. An id enters at most one." },
+    steps: { type: "raw", desc: "Tried in order, first match wins: `when: {…}`, `to:` a model, `{ peer }`, `{ flow }`, `{ fastest: […] }` or `{ refuse }`, with optional `lane`, `params`, `max` (requests in flight at once) and `do:` (actions to set off). The last has no `when`." },
+  },
+  action: {
+    on: { type: "enum", options: ["decided", "finished", "failed"], desc: "When it runs: as the step decides, once the request has finished (either way), or only when it failed.", def: "decided" },
+    slowerThan: { type: "ms", min: 1000, desc: "Only for a request that took longer than this. It then runs once the request has finished, unless `on` says failed." },
+    every: { type: "ms", min: 1000, desc: "Run at most once in this long, however many requests name it. Unset runs every time." },
+    log: { type: "text", desc: "Write this line to the log. `{asked}`, `{model}`, `{caller}` and the other request facts are filled in." },
+    call: { type: "text", desc: "Send a request to this URL, without waiting on it. env:NAME keeps it out of the file." },
+    method: { type: "enum", options: ["POST", "PUT", "GET"], desc: "call only: how the URL is called.", def: "POST" },
+    headers: { type: "object", desc: "call only: headers to send. A value may be env:NAME.", seed: {} },
+    body: { type: "raw", desc: "call only: the JSON to send, with `{asked}` and the like filled in. Unset sends every request fact." },
+  },
   scheduler: {
     lanes: { type: "object", desc: "Named lanes and their base priority. Lower goes first.", seed: { chat: { priority: 0 } } },
     agePerSecond: { type: "number", min: 0, desc: "Priority earned per second waited, which is also the starvation bound.", def: 1 },
@@ -89,16 +113,11 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     maxWaitMs: ms("Fail a queued job once nothing on its backend has started for this long. A guard against a wedged backend.", undefined, 1000),
   },
   model: {
-    policy: { type: "enum", options: ["local", "peer", "spillover", "fastest"], desc: "Where requests for this model run.", def: "local" },
     note: { type: "text", desc: "What the model is for, shown to borrowers and as description on /v1/models." },
     as: { type: "ref", ref: "models", desc: "The id this one goes out as: an alias for another model." },
     backend: { type: "ref", ref: "backends", desc: "Pin to a backend instead of resolving it from the catalogs." },
     follow: { type: "bool", desc: "Go out as whatever the pinned backend has loaded, else as `as`. Needs backend and as.", def: false },
     lane: { type: "ref", ref: "lanes", desc: "Lane this model's requests queue in, over the client's." },
-    whenHeld: { type: "ref", ref: "models", desc: "The id a chat request runs as while a neighbour's `hold` keeps its lane off this model's hardware. Unset waits." },
-    peers: { type: "refs", ref: "peers", desc: "Only these peers may run it. Empty is any peer that maps it." },
-    spilloverAt: { type: "number", min: 1, desc: "spillover only: go to a peer once this many jobs are queued here.", def: 1 },
-    fallbackLocal: { type: "bool", desc: "Fall back to running here when no peer can take it.", def: true },
     concurrency: { type: "number", min: 1, desc: "Jobs this model may run at once, above or below its backend's.", def: "backend's" },
     shareAfterMs: ms("A turn joins running turns only once each has run this long. Matters above concurrency 1.", undefined, 0),
     videoTokens: { type: "number", min: 1, desc: "What one video costs when checking a request fits the context window.", def: 49152 },
@@ -154,6 +173,9 @@ export function scopeOf(path: (string | number)[]): Scope | null {
   if (a === "backends" && n === 2) return "backend";
   if (a === "backends" && c === "activity" && n === 3) return "activity";
   if (a === "resources" && n === 2) return "resource";
+  if (a === "servers" && n === 2) return "server";
+  if (a === "flows" && n === 2) return "flow";
+  if (a === "actions" && n === 2) return "action";
   if (a === "scheduler" && b === "lanes" && n === 3) return "lane";
   if (a === "models" && n === 2) return "model";
   if (a === "models" && c === "stats" && d === undefined) return "stats";

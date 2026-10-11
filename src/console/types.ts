@@ -29,6 +29,8 @@ export interface ModelStats {
 export interface Backend {
   name: string;
   url?: string;
+  /** The declared machine it runs on; null or absent is the one hearth is on. */
+  server?: string | null;
   kind?: string;
   loaded?: string[];
   /** Models being read off the disk right now; drawn only when the backend reports it. */
@@ -188,14 +190,30 @@ export interface ConfigStatus {
 }
 
 /** Where a request for one id may go, and whether it can fall back home if the peer cannot take it. */
+/** One step of a flow, as the file or the node holds it: `to` is a bare id or a map naming a peer, a flow, `fastest` or `refuse`. */
+export interface Step {
+  when?: Record<string, unknown> | null;
+  to?: unknown;
+  lane?: string | null;
+  params?: Record<string, unknown> | null;
+  /** The actions it sets off when it decides, by name. */
+  do?: string[];
+}
+
+/** A flow: the ids whose requests enter it, and the steps that decide where each goes. */
+export interface Flow {
+  inputs: string[];
+  steps: Step[];
+  /** Switched off: its names run as themselves. */
+  off?: boolean;
+  note?: string;
+  /** How long a conversation stays where the flow first sent it, in ms. */
+  sticky?: number;
+}
+
 export interface Routing {
-  policy: "local" | "peer" | "spillover" | "fastest";
-  /** Who may serve it, in preference order. Empty means anyone that maps it. */
-  peers: string[];
-  /** Fall back to the local backend when no peer can take it. */
-  fallbackLocal: boolean;
-  /** `spillover` only: go remote once this many jobs are queued here. */
-  spilloverAt: number;
+  /** The backend this id resolves to, when it runs here. */
+  backend?: string;
 }
 
 export interface Controls {
@@ -264,6 +282,14 @@ export interface UiData {
   calls?: Call[];
   /** Samples the server's ring holds, so the streamed page trims to the same window. */
   histKeep?: number;
+  /** Every flow in force, by name. */
+  flows?: Record<string, Flow>;
+  /** How many times each step of each flow has decided since the flows last changed. */
+  flowHits?: Record<string, number[]>;
+  /** Every action by name: its kind, and for a draft what it says or calls. */
+  actions?: Record<string, { kind: string; says?: string }>;
+  /** Saved positions by topology node id. */
+  layout?: Record<string, { x: number; y: number }>;
   /** The canary's verdict per model. Absent only on an older server's payload. */
   canary?: Canary;
 }

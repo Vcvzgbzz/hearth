@@ -104,7 +104,9 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `name` | hostname | how this node identifies itself to peers |
 | `listen.host` / `.port` | `127.0.0.1` / `4141` | widening the host is deliberate, see Security |
 | `backends.<name>` | — | a server hearth fronts, with its own queue. At least one. See below |
-| `backends.<name>.url` | — | the OpenAI-compatible server |
+| `backends.<name>.url` | — | the OpenAI-compatible server. Required unless `server` and `port` are set |
+| `backends.<name>.server` | this machine | the `servers` entry this backend runs on. See [Backends on another machine](#backends-on-another-machine) |
+| `backends.<name>.port` | — | with `server` and no `url`: the backend is `http://<server host>:<port>` |
 | `backends.<name>.kind` | `llama-swap` | where warm state comes from: `llama-swap`, `ollama`, `single`, `none` |
 | `backends.<name>.serves` | discover | model ids this backend serves. Declaring replaces discovery and acts as an allowlist |
 | `backends.<name>.concurrency` | `backendDefaults` | jobs at once on this backend |
@@ -115,6 +117,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.resident` | `false` | stays loaded beside the card's swapping model and is asked to yield when it needs the memory. See [Something small that lives on a card](#something-small-that-lives-on-a-card) |
 | `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. See [Backends that don't speak the OpenAI API](#backends-that-dont-speak-the-openai-api) |
 | `resources.<name>.kind` | `gpu` | `gpu`, `cpu` or `other`. Picks the icon; `gpu` and `other` are exclusive unless shared |
+| `servers.<name>.host` | — | a machine on your network that backends run on: an IP or hostname, no scheme or port |
 | `resources.<name>.shared` | `false` | many backends at once, never arbitrated: CPUs, mostly. See [Hardware that is not a card](#hardware-that-is-not-a-card) |
 | `backendDefaults.concurrency` | `1` | jobs at once per backend, unless it sets its own |
 | `backendDefaults.firstByteMs` | `900000` | how long a backend may take to start answering. Catches one that accepts the connection and then never answers, which would otherwise hold its slot — and its card — until a restart. `0` waits forever |
@@ -127,15 +130,23 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `scheduler.warmBonus` | `40` | priority discount for a model already loaded |
 | `scheduler.maxPerLane` | `100` | how long one lane's queue may get before new work is refused. Off-box jobs are bounded separately, on their own count |
 | `scheduler.maxPerCaller` | `0`, or `2` with apiKeys | queued-or-running jobs per caller per lane. Off without apiKeys, where every local caller is one identity |
-| `models.<id>` | — | routing policy per model. Anything unlisted stays local |
-| `models.<id>.policy` | `local` | where requests run: `local`, `peer`, `spillover` or `fastest`. See [Sharing capacity](#sharing-capacity) |
-| `models.<id>.peers` | any that maps it | only these peers may run it |
-| `models.<id>.spilloverAt` | `1` | `spillover` only: go to a peer once this many jobs are queued here |
-| `models.<id>.fallbackLocal` | `true` | run here when no peer can take it |
+| `models.<id>` | — | per-model settings. Where a model's requests go is a flow; see [Flows](#flows) |
 | `models.<id>.lane` | the client's | lane this model's requests queue in, over the one the client asked for |
-| `models.<id>.whenHeld` | unset | the id a chat request runs as while a neighbour's `hold` keeps its lane off this model's hardware; unset waits |
 | `models.<id>.as` | unset | the id this one goes out as: an alias for another model. See [Advertising a nicer id](#advertising-a-nicer-id-than-the-backend-uses) |
 | `models.<id>.params` | unset | request fields stamped on every call (`temperature`, `reasoning_effort`, …). See [One resident model, several ids](#one-resident-model-several-ids-different-defaults) |
+| `flows.<name>.inputs` | none | the ids whose requests enter this flow. An id enters at most one. See [Flows](#flows) |
+| `flows.<name>.steps` | — | where those requests go: tried in order, first match wins, the last always applies |
+| `flows.<name>.sticky` | unset | how long a conversation stays where this flow first sent it, in ms, so later turns keep the same model |
+| `flows.<name>.off` | `false` | switched off: requests for its inputs run as themselves |
+| `flows.<name>.note` | unset | what the flow is for |
+| `actions.<name>.log` | — | an action that writes this line to the log. See [Actions](#actions) |
+| `actions.<name>.call` | — | an action that sends a request to this URL. `env:NAME` keeps it out of the file |
+| `actions.<name>.method` | `POST` | `call` only: `POST`, `PUT` or `GET` |
+| `actions.<name>.headers` | none | `call` only: headers to send. A value may be `env:NAME` |
+| `actions.<name>.body` | every request fact | `call` only: the JSON to send |
+| `actions.<name>.on` | `decided` | when it runs: as the step `decided`, once the request has `finished` either way, or only when it `failed` |
+| `actions.<name>.slowerThan` | unset | only for a request that took longer than this many ms. It then runs once the request has finished, unless `on` says `failed` |
+| `actions.<name>.every` | unset | run at most once in this many ms, however many requests name it |
 | `models.<id>.emulate` | unset | `llama-server`: reshape the backend's answers into llama-server's format (`reasoning_content`, `timings`) for clients that expect it |
 | `models.<id>.note` | unset | what the model is for. Shown to borrowers and as `description` on `/v1/models`. A note alone routes nothing |
 | `canary` | unset | ask named models a question with one right answer, on a schedule, and take one that stops answering it out of rotation. Off unless configured; restart-only. See [Canary](#canary) |
@@ -164,6 +175,8 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
+| `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](#editing-on-the-graph); nodes without one are laid out |
+| `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](#flows) |
 | `historyFile` | unset | a file that keeps the console's day of history and its recent log lines across restarts, written every minute and at shutdown. Unset keeps them in memory |
 | `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
 
@@ -223,6 +236,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `X-Hearth-Job: <id>` | request header | the client's own id for this request (letters, digits, `._:-`, up to 128). It comes back as the job's `id` on `/queue` and `/queue/events`, so a client can match updates to its own work |
 | `X-Hearth-Queue: stream` | request header | on a streamed chat, open the stream while the request waits and send `: hearth-queue {"position":N}` comments (how many are ahead, the running turn included). OpenAI-style parsers skip comments. A failure after that arrives as an SSE `data: {"error": …}` frame, since the 200 is already sent |
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text |
+| `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
 | `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |
 | `/` | anyone | `GET` redirects to `/ui` |
@@ -390,7 +404,13 @@ models:
   summaries:
     backend: main
     lane: batch
-    whenHeld: summaries-small   # optional: run as this id meanwhile, instead of waiting
+flows:
+  summaries:                    # optional: run as another id meanwhile, instead of waiting
+    inputs: [summaries]
+    steps:
+      - when: { held: [summaries] }
+        to: summaries-small
+      - to: summaries
 ```
 
 The hold starts with the first reading that shows work, running or queued, and
@@ -402,10 +422,10 @@ idle for `idleMs`, or has stopped answering for half a minute. A backend with a
 While it lasts, a job in a held lane on any backend sharing that hardware stays
 queued and is passed over, so it never blocks the lanes behind it. The lane's
 `maxWaitMs` does not run against a held job: it waits out the hold, and has the
-whole of `maxWaitMs` again once the hold ends. A model with `whenHeld` does not
-wait: its request runs as the id named there, on that id's backend and in that
-id's lane, which is how background work moves to another card with a ceiling of
-its own. `whenHeld` covers a local caller's chat requests only: a held job that
+whole of `maxWaitMs` again once the hold ends. A model whose flow has a `held` step does
+not wait: its request runs as the id that step names, on that id's backend and
+in that id's lane, which is how background work moves to another card with a
+ceiling of its own. A flow covers a local caller's chat requests only: a held job that
 arrives on a `routes:` path, or from a peer, waits. `/network` lists every hold
 under `holds`, with `active` and how long the app has been quiet, for a client
 that wants to plan around it. Keep the `activity` path one that does not start
@@ -619,7 +639,13 @@ Five pages, and ⌘K jumps to anything on them:
 
 - **Topology**: this node, its backends, the hardware they share, and its peers,
   with requests drawn as they flow, over a strip of the last ten minutes. Click
-  anything for its details and controls.
+  anything for its details and controls. A **Router** under the node stands
+  between it and everything that can run a request, peers on one side and
+  hardware on the other; it is the node the Routing page starts from, and a
+  click opens that page. Untick **show the router** to draw the lines straight
+  from the node.
+- **Routing**: every model name, the rules some pass through, and where each
+  ends up, as a map you edit. See [Editing on the graph](#editing-on-the-graph).
 - **Models**: every model on one row: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once.
@@ -652,18 +678,20 @@ directly:
   them. Pausing lending empties what you lend, so peers see a healthy node
   offering nothing and stop choosing you, rather than a wall of 403s that looks
   like a revoked token. Pausing borrowing removes peers as routing candidates,
-  so a model with `fallbackLocal: false` refuses cleanly.
+  so a flow that ends in `refuse` once no peer can take it refuses cleanly.
 - **lent / held per model**, written into `lending.models`. You can hold back one
   model without pausing the rest, or lend one the file never listed. A model no
   backend here serves is refused — advertising it would 404 every request, and
   the peer's operator cannot tell that from a broken link.
 - **link / unlink** on a peer's model map, which writes both halves at once: the
-  mapping and the route. Unlinking the last peer for a model takes its route
-  with it — a `policy: peer` with nothing mapped can never fire again. A mapping on its own is only an allowlist entry, and a
-  link without a route is a model that looks reachable and quietly runs at home
-  forever. A model you also serve gets `policy: fastest` with a local fallback;
-  one you do not gets `policy: peer` and no fallback, since home is a backend
-  that has never heard of it.
+  mapping and a flow that uses it. Unlinking takes every step that sent the
+  model to that peer, and the flow with them once it has nowhere left to send
+  anything. A mapping on its own is only an allowlist entry, and a link without
+  a flow is a model that looks reachable and quietly runs at home forever. A
+  model you also serve starts as "whichever would start it soonest, here or
+  there"; one you do not starts as "that peer, else refuse", since home is a
+  backend that has never heard of it. A model a flow already takes keeps its
+  flow, which gains the peer. Change any of it on the Routing page.
 
 ### Editing the config from the page
 
@@ -678,6 +706,61 @@ When a change is waiting for a restart, the header offers **restart**. hearth
 finishes what is in flight, then exits with status `75` so a supervisor that
 restarts on failure (systemd's `Restart=on-failure`) brings it straight back,
 and the page reconnects. Without such a supervisor it only stops.
+
+### Editing on the graph
+
+The **Routing** page is a map of the routing you have set up, and it is where
+you change it. It shows only that: the names you send somewhere other than
+their own model, the rules they pass through, and the models and peers those
+end at. Every other name goes to its own model, which the node says in one
+line; **route a name** brings one onto the map.
+
+- **A name's dot** is where its line starts. Drag it onto another model or a
+  peer to send requests for that name there, onto a rule to have the rule
+  decide, or back onto its own model to undo. **add a new name** adds one
+  nothing serves yet, such as `auto`; it exists once it has been sent somewhere.
+- **+ rule** adds a routing rule: a flow drawn as a box whose lines read as
+  sentences, `If … send to …`, ending in `Otherwise …`. Start from a common
+  one (borrow an idle model, send images or long prompts somewhere else, stay
+  off a busy model, give one caller its own model) or from a blank. Click a
+  rule to edit it line by line in the panel beside the map.
+- **A line that cannot work is not drawn.** Routing decides chat requests, so
+  a name whose backend takes its requests on paths of its own (image
+  generation and the like) is marked **not chat** and has no dot, and a chat
+  line cannot end on such a model. A line for requests with images, with tools
+  or over a size is refused when its target is known not to take them, with the
+  reason. What a model takes is what you declare under `models.<id>.stats` or
+  what it reports once loaded; a model that has said nothing is not refused,
+  and its line carries a **?** until it has.
+- **+ action** adds something a line sets off beside sending the request on: a
+  log line, or a call to a URL. Drag a line's dot onto the action, or pick it
+  under the line's **⋯**, and a dashed line shows what runs it. See
+  [Actions](#actions).
+- **Drag a box** to arrange the map. Where you put things is saved with the
+  rest, under `layout:`; **tidy up** goes back to the automatic arrangement.
+- **Try a request** along the bottom asks the node where a request would go
+  under the map as you have it now, saved or not, lights the way it takes and
+  names the line that decided. **pretend…** lists the state your rules test
+  that cannot be arranged on demand (a model idle or just used, full, loaded,
+  needing a swap, its hardware held, a line at its limit, a time of day, a
+  caller, a lane) so each line can be tried.
+- **?** beside the buttons says what each thing on the map means. A rule or an
+  action is renamed by clicking its name in the panel, and the name follows
+  everywhere it is used.
+- **A number at the end of a line** is how many requests it has decided since
+  the rules last changed or the node started.
+- **In a rule's panel**: switch it off without deleting it, keep a conversation
+  on the model it started with, and leave a note on what it is for.
+
+Nothing is written while you edit. The strip along the top counts what you
+have changed and says what still needs attention; **undo** steps back, and
+**review & save** shows the change to the file as a diff, checks that it loads,
+and writes it only when you confirm. A draft survives a reload, and if the file
+changes underneath it your changes are carried over.
+
+The **Topology** page is the other picture: the machines, hardware and
+backends, and the requests in flight. It is watched, not edited; backends,
+hardware and servers are changed on the Config page.
 
 ### Where changes go
 
@@ -694,7 +777,7 @@ being deleted.
 
 Most of the config applies as soon as it is written: models and routes, sharing,
 notes, peers' model maps, api keys and peer tokens, and the deadlines and limits
-read per request. The rest — listen addresses, backends, resources, lanes, and
+read per request. The rest — listen addresses, backends, servers, resources, lanes, and
 adding or changing a peer — is written immediately but takes effect on the next
 restart, and the console lists those keys until then.
 
@@ -797,6 +880,40 @@ Nothing schedules *across* backends. hearth works out where a job belongs and
 queues it there, and that is all. This is not the multi-GPU scheduler, which is
 still out of scope — a job never gets placed somewhere other than where its
 model lives.
+
+### Backends on another machine
+
+A backend does not have to be on the machine hearth runs on. Name the other
+machines once under `servers:` and point backends at them:
+
+```yaml
+servers:
+  render: { host: 10.0.0.5 }
+
+resources:
+  gpu0: { kind: gpu }
+  gpu1: { kind: gpu }
+
+backends:
+  chat: { url: "http://127.0.0.1:8080", resources: [gpu0] }
+  image: { server: render, port: 7860, kind: none, resources: [gpu1] }
+```
+
+`image` is reached at `http://10.0.0.5:7860`. It is still one of this node's
+backends: one queue per backend, one set of lanes, one console, and its hardware
+is arbitrated like any other. The status page frames each machine around the
+hardware in it. Move the machine and you change one `host`.
+
+A backend that needs `https` or a path keeps its own `url` and names the
+`server` only to say where it is. A backend with no `server` is on this machine.
+Hardware belongs to one machine, so two backends on different machines naming
+the same exclusive resource is refused: give each machine's card its own name.
+
+Use a server for a machine on a network you control, where hearth can call the
+backend directly; requests go to it as plain HTTP unless its `url` says
+otherwise. Use a [peer](#sharing-capacity) for anything across the internet or
+run by someone else: a peer is another hearth with its own queue, tokens and
+limits.
 
 ### Backends that share a card
 
@@ -1085,6 +1202,168 @@ Worth knowing before you wire this up: vLLM usually takes a minute or more to
 come up under llama-swap, against seconds for a GGUF. Batching has to be winning
 you something for that to pay.
 
+### Flows
+
+A flow decides where a request goes. It names the ids it takes and a list of
+steps; each request for one of those ids goes to the first step that holds.
+
+```yaml
+flows:
+  pick:
+    inputs: [auto, chat-model]
+    steps:
+      - when: { images: true }
+        to: vision-model
+      - when: { tokensOver: 32000 }
+        to: { flow: heavy }
+        lane: batch
+      - when: { queuedUnder: 3 }
+        to: chat-model
+        params: { temperature: 0.2 }
+      - to: small-model
+
+  heavy:
+    steps:
+      - to: { peer: friend, model: big-model }
+      - to: big-model
+```
+
+**Inputs** are ids clients ask for. One may be a model a backend serves
+(`chat-model`: its requests now pass through the flow first) or a name nothing
+serves (`auto`: it exists only as a way in, and is listed on `/v1/models`).
+Only what a client asked for enters a flow. A step that names a model runs it
+as named, so `to: chat-model` inside the flow that takes `chat-model` means
+"let it through".
+
+**A step's `to`** is one of:
+
+| `to` | the request |
+|---|---|
+| `some-model` | runs here as that id, on the backend that serves it |
+| `{ peer: name }` | runs on that peer, as the id that was asked for; add `model:` for another of your ids. The peer must map the id under `peers.<name>.models` |
+| `{ flow: name }` | carries on in another flow. A flow that leads back to itself is refused at startup |
+| `{ fastest: [a, { peer: b }, …] }` | runs wherever it would start soonest, by queue depth and whether the model is loaded. A tie stays with the one listed first |
+| `{ refuse: "why" }` | is answered 503 with that reason |
+
+**A step's `when`** holds when every condition in it does:
+
+| condition | holds when |
+|---|---|
+| `images: true` / `tools: true` | the request carries images / tool definitions (`false` for the opposite) |
+| `tokensOver: n` / `tokensUnder: n` | the estimated prompt plus reserved output is over / under `n` |
+| `asked: [id]` | the client asked for one of these ids |
+| `caller: [name]` | the request came with the api key labelled `name`, or `local` for loopback without a key |
+| `lane: [name]` | the request is in one of these lanes |
+| `askedNot`, `callerNot`, `laneNot` | the opposite of those three: none of the names listed |
+| `time: { from: "22:00", to: "06:00" }` | the node's own clock is between the two, `from` included and `to` not. A `from` later than `to` runs through midnight |
+| `held: [id]` | a neighbour's `hold` is keeping the request's lane off that model's hardware |
+| `down: [peer]` | none of these peers can take it: down, not lending the id, or too small for the request |
+| `idle: { model: id, ms: n }` | nobody has used that model here for at least `n` ms: nothing queued or running for it, and nothing finished more recently. Every name for one model counts as that model. Work a flow sent to it does not count, so a rule that borrows an idle model does not end its own idleness. Leave `model` out to read the step's own target. After a restart every model counts as idle since startup, unless `historyFile` is set, which keeps when each was last used |
+| `warm: true` | the step's own target has the model loaded |
+| `ready: true` | running it on the step's own target needs no swap: the model is loaded there, or nothing else is loaded on its backend or on any backend sharing its exclusive hardware. For a peer this is the same as `warm` |
+| `free: true` | the step's own target has a free slot |
+| `queuedUnder: n` | fewer than `n` jobs are queued at the step's own target |
+
+So "use the big model only while nobody else has touched it for ten minutes"
+is one step:
+
+```yaml
+- when: { idle: { model: big-model, ms: 600000 } }
+  to: big-model
+- to: small-model
+```
+
+A step is also passed over when its target cannot take the request: a peer
+that is down or whose model is too small. So a step that only names a peer
+needs no `when`, and "try my friend, else run it here" is two lines. The last
+step has no `when` and somewhere that can always answer (a model, a flow or
+`refuse`), so every request gets a decision. If a peer fails before sending
+anything back, the flow is asked again without peers, and the request runs
+where that lands or the peer's error is returned. A backend here is treated
+the same way: when it cannot be reached or answers 5xx before anything has
+gone to the client, and the flow has another line that ends at a model here,
+the request runs there instead. With nowhere else to send it, the backend's
+own answer is relayed as it always was. A request already streaming its queue
+position stays where it is.
+
+`sticky: 1800000` on a flow keeps a conversation where its first turn went: a
+later turn (one that carries an assistant message) goes to the same model or
+peer for that long, whatever the steps would say now, as long as that place
+can still take it. A conversation is the caller, the id asked for and
+everything up to its first user message. Without it each turn is decided
+afresh, which suits one-shot calls and can move a chat between models midway.
+
+`off: true` parks a flow: requests for its inputs run as themselves, and
+another flow can still hand work to it.
+
+A step may set `max`, the most requests it takes at once: past that it is
+passed over and the request goes on down the list, so "borrow the big model,
+two at a time" is `max: 2`. A limit is reason enough for a step to have no
+`when`. The count is of requests whose response is still open.
+
+Every chat answer carries `x-hearth-model`, the id the request ran as, since
+one name may run as several. `modelHeader: false` leaves it off, for a node
+whose callers should not see what is behind a name.
+
+A step may set the `lane` the request queues in, which wins over the target's
+own and the client's, and `params` to stamp on the request; the target model's
+own `params` still apply over those.
+
+Work a peer borrows is served as asked and never enters a flow, so two nodes
+cannot bounce a request between them. Paths other than chat completions are
+not routed this way.
+
+#### Actions
+
+An action is something a step sets off beside routing: a line in the log, or a
+request to a URL. It is named once under `actions:` and a step lists the ones
+it runs under `do:`.
+
+```yaml
+actions:
+  note:
+    log: "{asked} ran as {model} for {caller}"
+  tell:
+    call: env:HOOK_URL
+    headers: { authorization: env:HOOK_TOKEN }
+    body: { text: "{asked} went to {model} ({reason})" }
+
+flows:
+  borrow:
+    inputs: [small-model]
+    steps:
+      - when: { idle: { model: big-model, ms: 600000 } }
+        to: big-model
+        do: [note, tell]
+      - to: small-model
+```
+
+An action runs when its step decides, a refusal included, and once per request.
+`on: finished` holds it until the request has ended, and `on: failed` runs it
+only when that went wrong; both add `{outcome}` (`ok` or `failed`), `{ms}` and
+`{error}` to what it is told, with `{queuedMs}` and `{ranMs}` splitting the
+time into waiting and running, and `{backend}` and `{model}` as they ended up.
+`slowerThan: 30000` keeps it for requests that took longer than that, and
+is itself a reason to wait for the end. `every: 60000` runs it at most once a minute.
+It never changes where the request goes and nothing waits on it: a URL that is
+slow, wrong or down gets a `flow.action_failed` line in the log and is given
+up on after five seconds.
+
+Text in `log`, and every string inside `body`, may use what the flow knew about
+the request: `{asked}` and `{model}` (the id the client named and the id it
+runs as), `{target}` (`local`, `peer` or `unavailable`), `{peer}`, `{lane}`,
+`{caller}`, `{tokens}`, `{images}`, `{tools}`, `{flow}` and `{line}` (the step
+that named the action), `{reason}`, `{node}`, `{action}`, `{backend}` and
+`{id}` (the request's id, when it has one). A `call` with no
+`body` sends all of those as one JSON object. A `log` line is written at info
+as `flow.action`, with the same facts as fields, so it shows on the Logs page.
+
+A model used to carry its own routing as `models.<id>.policy`, `peers`,
+`spilloverAt`, `fallbackLocal` and `whenHeld`. Those are refused now, with one
+line pointing at `hearth migrate`, which rewrites each as the flow it described
+under the model's id, keeps the comments, and leaves the file as it was beside
+it. Check a file with `hearth serve --check` afterwards.
+
 ### Advertising a nicer id than the backend uses
 
 Backends name models for their own convenience, and that naming leaks into your
@@ -1320,14 +1599,15 @@ peers:
     token: env:HEARTH_TOKEN_FRIEND   # you present this to them
     models:
       # my id: their id. Also the allowlist: a model that isn't mapped can
-      # never be sent to them, whatever the policy below says.
+      # never be sent to them, whatever a flow says.
       big-model: their-big-model
 
-models:
+flows:
   big-model:
-    policy: peer          # local | peer | spillover | fastest
-    peers: [friend]
-    fallbackLocal: true
+    inputs: [big-model]
+    steps:
+      - to: { peer: friend }   # try them first
+      - to: big-model          # else run it here
 ```
 
 Theirs, to accept it:
@@ -1376,14 +1656,15 @@ would actually serve you. That is protocol 2. Nodes still send the old node-leve
 numbers alongside it, so a v1 peer keeps working and simply gets scored the
 older, coarser way. No flag day.
 
-Policies:
+A model no flow takes never leaves. The common shapes of one that does, each a
+few steps of a [flow](#flows):
 
-| policy      | behaviour |
-|-------------|-----------|
-| `local`     | never leaves. The default for anything you don't list. |
-| `peer`      | prefer a peer, fall back home. |
-| `spillover` | local until `spilloverAt` jobs are queued, then a peer. |
-| `fastest`   | compare queue pressure. Ties stay home. |
+| to get | steps |
+|---|---|
+| a peer first, home as the fallback | `- to: { peer: friend }` then `- to: big-model` |
+| home until the queue is deep, then a peer | `- when: { queuedUnder: 2 }` with `to: big-model`, then the peer, then `big-model` |
+| whichever would start it soonest | `- to: { fastest: [big-model, { peer: friend }] }`. Ties stay home |
+| a peer or nothing | `- to: { peer: friend }` then `- to: { refuse: "not run here" }` |
 
 ### Knowing what a borrowed model can take
 

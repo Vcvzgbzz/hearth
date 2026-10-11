@@ -9,17 +9,18 @@
  * validates and exits, for ExecStartPre. `set-operator` writes the login credential into the
  * config: the file holds only a scrypt salt:hash of the password, which verifies and reveals
  * nothing. The previous file is backed up beside it, and a restart picks the login up.
- * `migrate` rewrites a v1 hearth.yaml into the v2 layout, keeping comments and a backup.
+ * `migrate` rewrites an older hearth.yaml into the current layout, keeping comments and a backup.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { parseArgs } from "node:util";
 
 import { ConfigError, loadConfig, parseConfig } from "./config.js";
+import { mayLeave } from "./route.js";
 import { writeFileAtomic } from "./configfile.js";
 import { LEVELS, createLogger, type Level } from "./log.js";
 import { hashPassword } from "./login.js";
-import { migrateDoc, v1Marker } from "./migrate.js";
+import { migrateDoc, routedMarker, v1Marker } from "./migrate.js";
 import { createNode } from "./server.js";
 import { getJson } from "./upstream.js";
 import { parseDocument } from "yaml";
@@ -109,15 +110,21 @@ peers: {}
 #     accept: env:HEARTH_FROM_FRIEND   # they present this to you
 #     models:
 #       # my id: their id. Also the allowlist: a model that isn't mapped can
-#       # never be sent to them, whatever the policy below says.
+#       # never be sent to them, whatever a flow below says.
 #       my-big-model: their-big-model
 #
-# models: routing policy and notes. Anything not listed here stays local.
+# models: per-model settings and notes.
 models: {}
 #   my-big-model:
-#     policy: peer        # local | peer | spillover | fastest
-#     peers: [friend]
 #     note: the 70B, for long documents
+#
+# flows: where requests go. An id no flow takes runs here as itself.
+# flows:
+#   my-big-model:
+#     inputs: [my-big-model]
+#     steps:
+#       - to: { peer: friend }      # try the peer first
+#       - to: my-big-model          # else run it here
 `;
 }
 
@@ -200,8 +207,8 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const raw = doc.toJS() as Record<string, unknown> | null;
-    if (!raw || v1Marker(raw) === null) {
-      console.log(`${configPath} is already in the v2 layout; nothing to do`);
+    if (!raw || (v1Marker(raw) === null && routedMarker(raw) === null)) {
+      console.log(`${configPath} is already in the current layout; nothing to do`);
       return;
     }
     let moved: string[];
@@ -223,11 +230,11 @@ async function main(): Promise<void> {
         process.exit(1);
       }
     }
-    const backup = `${configPath}.v1-${new Date().toISOString().slice(0, 10)}`;
+    const backup = `${configPath}.before-migrate-${new Date().toISOString().slice(0, 10)}`;
     writeFileSync(backup, text);
     writeFileAtomic(configPath, out);
     for (const line of moved) console.log(`  ${line}`);
-    console.log(`${configPath} is now v2; the v1 file is at ${backup}`);
+    console.log(`${configPath} is rewritten; the file as it was is at ${backup}`);
     return;
   }
 
@@ -246,7 +253,7 @@ async function main(): Promise<void> {
   }
 
   if (values.check) {
-    console.log(`config: ok (${cfg.peers.length} peer(s), ${Object.keys(cfg.models).length} routed model(s))`);
+    console.log(`config: ok (${cfg.peers.length} peer(s), ${Object.keys(cfg.flows).length} flow(s))`);
     return;
   }
 
@@ -268,9 +275,7 @@ async function main(): Promise<void> {
       peers: cfg.peers.map((p) => p.name),
       // Said out loud at startup on purpose. You should be able to see in one
       // line which prompts can leave this machine and which can arrive.
-      routedAway: Object.entries(cfg.models)
-        .filter(([, r]) => r.policy !== "local")
-        .map(([m]) => m),
+      routedAway: [...new Set(Object.values(cfg.flows).flatMap((f) => f.inputs))].filter((id) => mayLeave(cfg, id)),
       shared: cfg.share,
     });
     // Accurate rather than alarmist. Without apiKeys, anyone off loopback still

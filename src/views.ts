@@ -2,7 +2,8 @@
  * The read model: what /network, /control and the status page show, derived from live state
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
-import type { HearthConfig, RoutePolicy } from "./config.js";
+import type { HearthConfig } from "./config.js";
+import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
 import type { ConfigFile } from "./configfile.js";
@@ -50,11 +51,13 @@ export interface ViewDeps {
   proxying: ReadonlySet<{ id: string; backend: string; model: string | null }>;
   /** How the page must authenticate its writes. */
   writeMode: () => "open" | "key";
+  /** How many times each step of each flow has decided since the flows last changed. */
+  flowHits: () => Record<string, number[]>;
   /** The canary's state, and whether one is configured at all. */
   canary: () => CanaryView;
 }
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -106,25 +109,19 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       // time and the page trims to this, so its history stays the same length
       // as ours instead of growing for as long as the tab is open.
       histKeep: KEEP,
+      // Every flow in force.
+      flows: flowsOf(cfg),
+      flowHits: flowHits(),
+      // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
+      actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
+      // Where the operator placed topology nodes; the page lays out the rest.
+      layout: cfg.layout,
     };
   }
 
-  /** Advertised id -> how it routes, including runtime links. */
-  function routingView(): Record<string, {
-    policy: RoutePolicy; peers: string[]; fallbackLocal: boolean; spilloverAt: number;
-  }> {
-    const out: Record<string, {
-      policy: RoutePolicy; peers: string[]; fallbackLocal: boolean; spilloverAt: number;
-    }> = {};
-    for (const [id, m] of Object.entries(cfg.models)) {
-      out[id] = {
-        policy: m.policy,
-        peers: [...m.peers],
-        fallbackLocal: m.fallbackLocal,
-        spilloverAt: m.spilloverAt,
-      };
-    }
-    return out;
+  /** Advertised id -> the backend that serves it here. Where its requests go is `flows`. */
+  function routingView(): Record<string, { backend: string }> {
+    return Object.fromEntries(Object.keys(cfg.models).map((id) => [id, { backend: pool.for(id).name }]));
   }
 
   /** advertised id -> `as`, for every model that declares one. */
@@ -174,6 +171,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
           return {
             name: b.name,
             url: b.cfg.url,
+            server: b.cfg.server,
             kind: b.cfg.kind,
             // Whether it CAN report warm state. An empty loaded list from a
             // backend that cannot see is not the same claim as one from a

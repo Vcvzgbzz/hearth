@@ -7,9 +7,10 @@ import { pipeline } from "node:stream/promises";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
+import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
-import { peersMapping, WARM_LANE, type BackendConfig, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ConfigError, flowsFor, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
@@ -17,7 +18,7 @@ import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, h
 import { LogRing, type Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
-import { decide, type LocalLoad } from "./route.js";
+import { decide, mayLeave, resolve, type LocalLoad, type World } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
@@ -366,14 +367,21 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /** Sends a chat completion to a local backend, emulating another server's answers if the route asks. */
-  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal } & ReturnType<typeof backendDeadline>): Promise<number> {
+  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal } & ReturnType<typeof backendDeadline>, spare = false): Promise<number> {
     const emulate = cfg.models[model]?.emulate ?? null;
     const body = pool.outboundBody(model, payload);
     const sentAt = Date.now();
     const up = await send(`${url}/v1/chat/completions`, { json: emulate ? emulatedRequest(body) : body, ...opts });
+    // With somewhere else to run it, a backend's own failure is not relayed: the request moves on.
+    if (spare && up.status >= 500 && !res.headersSent) throw new BackendFailed(up.status, (await up.text()).slice(0, 200));
     if (emulate) return relayEmulated(up, res, forwardable(up.headers), sentAt);
     // Observed as it is relayed, never held back: see RelayWatch.
     return pipeThrough(up, res, canary?.watchRelay(model, pool.for(model).name, up.headers["content-type"]));
+  }
+
+  /** A backend answered 5xx before anything reached the client, while its flow had another place to send the request. */
+  class BackendFailed extends Refusal {
+    constructor(status: number, detail: string) { super(status, detail || `backend answered ${status}`, "server_error"); }
   }
 
   /** The text-completion paths a relayed answer is worth watching on, with or without an `/upstream/<model>` prefix. */
@@ -413,6 +421,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
     res.writeHead(up.status, {
       ...forwardable(up.headers),
+      // Ours, not a peer's own id for it: the name this node knows the model by.
+      ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}),
       "Content-Type": up.headers["content-type"] ?? "application/json",
       // Tell any proxy in front not to buffer, or a streamed answer arrives all
       // at once at the end and looks like a hang.
@@ -439,42 +449,270 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     };
   }
 
+  /**
+   * When each model was last in use here, for a flow's `idle`: someone asked for it by one of its
+   * names, here or from a peer. Kept by the id the backend knows it by, so every name for one model
+   * counts as that model. A request a flow sent there is not someone using it, or a rule that
+   * borrows an idle model would end its own idleness.
+   */
+  const lastUse = new Map<string, number>();
+  const bootAt = Date.now();
+  const open = new Map<string, number>();
+  /** Count a request that asked for this model as use of it until `res` closes. */
+  function using(model: string, res: ServerResponse): void {
+    const wire = pool.outboundId(model);
+    open.set(wire, (open.get(wire) ?? 0) + 1);
+    res.once("close", () => {
+      open.set(wire, (open.get(wire) ?? 1) - 1);
+      lastUse.set(wire, Date.now());
+    });
+  }
+
+  /** How many times each step of each flow has decided, since the flows last changed. */
+  const hits = new Map<string, number[]>();
+  let hitsFor = cfg.flows;
+  function countHits(path: readonly { flow: string; step: number }[]): void {
+    if (hitsFor !== cfg.flows) { hits.clear(); hitsFor = cfg.flows; }
+    for (const p of path) {
+      const row = hits.get(p.flow) ?? [];
+      row[p.step] = (row[p.step] ?? 0) + 1;
+      hits.set(p.flow, row);
+    }
+  }
+
+  /**
+   * Where a sticky flow sent each conversation, so its later turns go there too. A conversation
+   * is who is calling, the id they ask for and how it opens: everything up to its first user turn.
+   */
+  const placed = new Map<string, { end: FlowEnd; until: number }>();
+  const PLACED_MAX = 5000;
+  function conversation(caller: string, asked: string, payload: Record<string, unknown>): { key: string; later: boolean } | null {
+    const turns = Array.isArray(payload.messages) ? (payload.messages as { role?: unknown }[]) : [];
+    const first = turns.findIndex((m) => m?.role === "user");
+    if (first < 0) return null;
+    const key = createHash("sha256").update(`${caller}\0${asked}\0${JSON.stringify(turns.slice(0, first + 1))}`).digest("hex");
+    return { key, later: turns.some((m) => m?.role === "assistant") };
+  }
+
+  /** When each action last ran, for one that sets `every`. */
+  const ranAt = new Map<string, number>();
+  function act(name: string, action: Action, facts: ActionFacts): void {
+    const now = Date.now();
+    if (action.every > 0 && now - (ranAt.get(name) ?? -Infinity) < action.every) return;
+    ranAt.set(name, now);
+    runAction(action, facts, log);
+  }
+
+  /** How many requests each step that sets `max` has in flight, by `<flow>\0<step>`. */
+  const stepsBusy = new Map<string, number>();
+
+  /**
+   * Would running this model here need no swap? It is loaded, or nothing else is: not on its own
+   * backend, and not on any backend that shares exclusive hardware with it.
+   */
+  function ready(model: string): boolean {
+    const slot = pool.for(model);
+    const loaded = slot.state.loaded();
+    if (loaded.includes(model) || loaded.includes(pool.outboundId(model))) return true;
+    if (loaded.length > 0) return false;
+    const exclusive = new Set(pool.resources().filter((r) => !r.shared).map((r) => r.name));
+    const mine = slot.cfg.resources.filter((r) => exclusive.has(r));
+    return !pool.all().some((o) => o !== slot && o.cfg.resources.some((r) => mine.includes(r)) && o.state.loaded().length > 0);
+  }
+
+  /** What a flow reads about this node, for a request with these needs. */
+  function worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = cfg): World {
+    return {
+      cfg: from, peers, caller, lane, need,
+      local: (m) => localLoad(pool.for(m), m),
+      held: (m, l) => pool.heldOff(pool.for(m).cfg, l),
+      ready,
+      inFlight: (flow, step) => stepsBusy.get(`${flow}\0${step}`) ?? 0,
+      // A model nobody has used since startup has been idle since then.
+      idleMs: (m) => ((open.get(pool.outboundId(m)) ?? 0) > 0 ? 0 : Date.now() - (lastUse.get(pool.outboundId(m)) ?? bootAt)),
+    };
+  }
+
+  /**
+   * Where a request would go right now, without sending it: for the console's "try a request".
+   * `flows` and `actions` try unsaved sections in place of the ones in force, and `pretend` names
+   * models to read as idle, used, busy, warm or held, and `now` a time of day. No action is set off and nothing is counted.
+   */
+  async function routeFlowsTry(c: Call): Promise<void> {
+    try {
+      const b = await readJson(c.req);
+      const asked = typeof b.model === "string" ? b.model : "";
+      if (asked === "") throw new Refusal(400, "model is required: the id the request would ask for");
+      const lane = typeof b.lane === "string" && b.lane in cfg.scheduler.lanes ? b.lane : Object.keys(cfg.scheduler.lanes)[0]!;
+      let from: HearthConfig = cfg;
+      if (b.flows !== undefined) {
+        try {
+          const actions = b.actions === undefined ? cfg.actions : actionDecls(b.actions);
+          from = { ...cfg, actions, flows: flowsFor(b.flows, cfg, actions) };
+        } catch (e) {
+          if (e instanceof ConfigError) throw new Refusal(400, e.message);
+          throw e;
+        }
+      }
+      if (mayLeave(from, asked)) await peers.ensureFresh();
+      const need = { tokens: typeof b.tokens === "number" ? b.tokens : 0, images: b.images === true, tools: b.tools === true };
+      const real = worldFor(typeof b.caller === "string" ? b.caller : "local", from.models[asked]?.lane ?? lane, need, from);
+      // `pretend` stands in for state that cannot be arranged on demand: models named as idle, just used, busy, loaded or held.
+      const pretend = (typeof b.pretend === "object" && b.pretend !== null ? b.pretend : {}) as Record<string, unknown>;
+      const said = (k: string): string[] => (Array.isArray(pretend[k]) ? (pretend[k] as unknown[]).filter((x): x is string => typeof x === "string") : []);
+      const r = resolve(asked, {
+        ...real,
+        idleMs: (m) => (said("idle").includes(m) ? Number.MAX_SAFE_INTEGER : said("used").includes(m) ? 0 : real.idleMs!(m)),
+        held: (m, l) => said("held").includes(m) || real.held(m, l),
+        ready: (m) => !said("unready").includes(m) && (said("warm").includes(m) || ready(m)),
+        // `full` names steps to read as at their limit, each `<step>:<flow>`.
+        inFlight: (flow, step) => (said("full").includes(`${step}:${flow}`) ? Number.MAX_SAFE_INTEGER : real.inFlight!(flow, step)),
+        // `now` is a time of day to read the clock as, HH:MM.
+        ...(typeof pretend["now"] === "string" && /^\d\d:\d\d$/.test(pretend["now"]) ? { now: () => { const d = new Date(); d.setHours(Number((pretend["now"] as string).slice(0, 2)), Number((pretend["now"] as string).slice(3)), 0, 0); return d; } } : {}),
+        local: (m) => {
+          const l = real.local(m);
+          return { ...l, ...(said("busy").includes(m) ? { queued: Math.max(l.queued, 99), free: 0 } : {}), loaded: said("warm").includes(m) ? [...l.loaded, m] : l.loaded };
+        },
+      });
+      // What the backend it lands on is known to take, as a real request would be checked before it is queued.
+      const small = r.target === "local" ? unfit(pool.statsFor(r.model), need) : null;
+      json(c.res, 200, {
+        target: r.target, model: r.model, lane: r.lane, reason: r.reason, path: r.path, params: r.params, actions: r.actions.map((a) => a.name), ...(small ? { unfit: `${r.model} ${small}` } : {}),
+        ...(r.target === "peer" ? { peer: r.peer } : r.target === "local" ? { backend: pool.for(r.model).name } : {}),
+      });
+    } catch (e) {
+      fail(c.res, e);
+    }
+  }
+
+  /** Route a chat request and run it, then tell the actions that wait for how it ended. */
   async function dispatch(
     payload: Record<string, unknown>,
-    model: string,
-    lane: string,
+    asked: string,
+    askedLane: string,
     caller: string,
     res: ServerResponse,
     signal: AbortSignal,
     onPosition?: (position: number) => void,
     id?: string,
   ): Promise<void> {
-    // Refresh peer state only when a decision needs it, and only for models that may leave.
-    if (cfg.models[model] && cfg.models[model].policy !== "local") {
-      await peers.ensureFresh();
+    const ended: ((error: string | null) => void)[] = [];
+    let error: string | null = null;
+    try {
+      const status = await route(payload, asked, askedLane, caller, res, signal, ended, onPosition, id);
+      if (status >= 400) error = `backend answered ${status}`;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      throw e;
+    } finally {
+      for (const tell of ended) tell(error);
     }
+  }
 
-    // Which of our backends would serve this, and therefore whose queue and
-    // whose numbers the local half of the decision is about. A node with an
-    // idle embedder and a busy GPU has no single answer to "am I busy".
-    const local = pool.for(model);
-    // Per model, like the peer half two lines down. The backend's flat number
-    // says "free" while THIS model's slots are full, which keeps work home to
-    // queue behind itself when a peer could have started it.
-    // What this request asks for, so routing can skip a peer whose model is too
-    // small for it rather than sending the prompt across the network to be
-    // refused there.
+  /** Returns the status a local backend relayed, or 0 when a peer answered. */
+  async function route(
+    payload: Record<string, unknown>,
+    asked: string,
+    askedLane: string,
+    caller: string,
+    res: ServerResponse,
+    signal: AbortSignal,
+    ended: ((error: string | null) => void)[],
+    onPosition?: (position: number) => void,
+    id?: string,
+  ): Promise<number> {
+    // Refresh peer state only when a decision needs it, and only for requests that may leave.
+    if (mayLeave(cfg, asked)) await peers.ensureFresh();
+
+    // The flow reads each model on the backend that would serve it here: a node with an idle
+    // embedder and a busy GPU has no single answer to "am I busy". Per model, like a peer's
+    // numbers, since a backend's flat count says "free" while THIS model's slots are full.
+    // What this request asks for goes with it, so a peer whose model is too small is passed over
+    // rather than sent the prompt across the network to be refused there.
+    const talk = conversation(caller, asked, payload);
+    const world: World = {
+      ...worldFor(caller, askedLane, needsOf(payload, cfg.models[asked]?.videoTokens)),
+      // Only a later turn is held to where the conversation started; an opening turn is decided afresh.
+      ...(talk?.later ? { pinned: (flow: string) => { const at = placed.get(`${flow}\0${talk.key}`); return at && at.until > Date.now() ? at.end : undefined; } } : {}),
+    };
+    const startedAt = Date.now();
+    const flowsNow = cfg.flows;
+    const decision = resolve(asked, world);
+    // What the flow chose, which a fallback from a failed peer may change again.
+    let model = decision.model;
+    let lane = decision.lane;
+    let local = pool.for(model);
+    const land = (r: { model: string; lane: string; params: Record<string, unknown> }): void => {
+      model = r.model;
+      lane = r.lane;
+      local = pool.for(model);
+      Object.assign(payload, r.params);
+      // Our id for it, so the backend is asked for what the flow chose and not what the client named.
+      if (model !== asked) payload.model = model;
+      // The caller can read off which model answered, since one name may run as several; a node may keep that to itself.
+      if (cfg.modelHeader && !res.headersSent) res.setHeader("x-hearth-model", model);
+    };
+    land(decision);
+    // Each action a deciding step names is set off once per request, however many times it is re-routed:
+    // as the step decides, or once the request has ended for one that waits to hear how.
+    const fired = new Set<string>();
+    const fire = (r: typeof decision): void => {
+      countHits(r.path);
+      // A sticky flow remembers where it put this conversation, for its later turns.
+      const sticky = cfg.flows[r.path.at(-1)?.flow ?? ""]?.sticky;
+      if (talk && sticky !== undefined && r.target !== "unavailable") {
+        const key = `${r.path.at(-1)!.flow}\0${talk.key}`;
+        placed.delete(key);
+        placed.set(key, { end: r.target === "peer" ? { peer: r.peer, model: r.model } : { model: r.model }, until: Date.now() + sticky });
+        if (placed.size > PLACED_MAX) placed.delete(placed.keys().next().value!);
+      }
+      // A step with a limit counts this request against it until the response closes.
+      for (const p of r.path) {
+        if (flowsNow[p.flow]?.steps[p.step]?.max === undefined) continue;
+        const key = `${p.flow}\0${p.step}`;
+        stepsBusy.set(key, (stepsBusy.get(key) ?? 0) + 1);
+        res.once("close", () => { stepsBusy.set(key, (stepsBusy.get(key) ?? 1) - 1); });
+      }
+      for (const a of r.actions) {
+        const action = cfg.actions[a.name];
+        if (!action || fired.has(a.name)) continue;
+        fired.add(a.name);
+        const facts: ActionFacts = {
+          action: a.name, node: cfg.name, asked, model: r.model, target: r.target, peer: r.target === "peer" ? r.peer : "",
+          lane: r.lane, caller, tokens: world.need?.tokens ?? 0, images: world.need?.images ?? false, tools: world.need?.tools ?? false,
+          flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "",
+          backend: r.target === "local" ? pool.for(r.model).name : "", id: id ?? "", queuedMs: 0, ranMs: 0,
+        };
+        if (action.on === "decided") act(a.name, action, facts);
+        else ended.push((error) => {
+          const ms = Date.now() - startedAt;
+          if ((action.on === "failed" && error === null) || (action.slowerThan > 0 && ms <= action.slowerThan)) return;
+          // Where it ended up, which a failed backend or peer may have changed since the step decided.
+          const ran = t.startedAt > 0 ? Date.now() - t.startedAt : 0;
+          act(a.name, action, { ...facts, model, backend: ranOn, outcome: error === null ? "ok" : "failed", ms, error: error ?? "", queuedMs: ms - ran, ranMs: ran });
+        });
+      }
+    };
+    fire(decision);
+    if (model !== asked) {
+      refuseDegraded(model);
+      log.debug("route.flow", { asked, via: decision.via, as: model, reason: decision.reason });
+    } else if (decision.target === "local") {
+      using(model, res);
+    }
     const need = needsOf(payload, cfg.models[model]?.videoTokens);
-    const decision = decide(model, cfg, peers, localLoad(local, model), need);
 
     // What the local backend answered, for the log and the call history. A
     // relayed 400 — "this prompt does not fit" is the common one — is a failed
     // request that happens to carry a useful body.
     let localStatus = 0;
-    const runLocal = async (): Promise<void> => {
+    /** The backend here that last ran it, for an action told how it ended. */
+    let ranOn = "";
+    const runLocal = async (spare = false): Promise<void> => {
+      ranOn = local.name;
       await local.state.ensureFresh();
     // Our id and the route's params on the way to the backend; untouched when neither is set.
-      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg) });
+      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg) }, spare);
     };
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
@@ -482,38 +720,55 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     if (decision.target === "unavailable") {
       // Refusing is the point. The operator said this can't run here.
       logRequest(t, { model, lane, caller, target: "unavailable" }, false, decision.reason);
-      // "none can take it": a peer can be up, mapped and simply too small for this request.
-      throw new Refusal(503, `${model} runs only on a peer, and none can take it (${decision.reason})`, "server_error");
+      // The flow's own words: a refusal step's reason, with why a peer was passed over when one was.
+      throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
     }
 
     if (decision.target === "local") {
-    // Refused here only on reported limits, before queueing or evicting; the backend stays the authority.
-      const fitted = fitOutput(pool.statsFor(model), need, payload);
-      const tooMuch = unfit(pool.statsFor(model), fitted);
-      if (tooMuch !== null) {
-        logRequest(t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
-        throw new Refusal(400, `${model} ${tooMuch}`);
-      }
-      try {
-        await local.scheduler.submit(
-          { lane, model, caller, maxPerCaller: callerCap(null, cfg), signal, tokens: pool.poolTokens(model, fitted), onPosition, ...(id ? { id } : {}) },
-          async () => {
-            t.startedAt = Date.now();
-            await runLocal();
-          },
+      // A backend that fails before anything reaches the client is passed over like a peer that is down:
+      // the flow is asked again without it, and the request runs where that lands, here.
+      const failed = new Set<string>();
+      let why = decision.reason;
+      for (;;) {
+        const spare = (): ReturnType<typeof resolve> => resolve(asked, { ...world, noPeers: true, skip: new Set([...failed, model]) });
+        // Refused here only on reported limits, before queueing or evicting; the backend stays the authority.
+        const fitted = fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
+        const tooMuch = unfit(pool.statsFor(model), fitted);
+        if (tooMuch !== null) {
+          logRequest(t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
+          throw new Refusal(400, `${model} ${tooMuch}`);
+        }
+        try {
+          const elsewhere = spare().target === "local";
+          await local.scheduler.submit(
+            // A second try goes back through admission without re-applying the caller cap.
+            { lane, model, caller, ...(failed.size === 0 ? { maxPerCaller: callerCap(null, cfg), onPosition, ...(id ? { id } : {}) } : {}), signal, tokens: pool.poolTokens(model, fitted) },
+            async () => {
+              t.startedAt = Date.now();
+              await runLocal(elsewhere);
+            },
+          );
+        } catch (e) {
+          logRequest(t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e);
+          const mayMove = !res.headersSent && !signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal));
+          const next = mayMove ? spare() : null;
+          if (!next || next.target !== "local" || failed.has(next.model) || next.model === model) throw e;
+          log.warn("route.local_failed_trying_next", { asked, model, next: next.model, error: e instanceof Error ? e.message : String(e) });
+          failed.add(model);
+          land(next);
+          fire(next);
+          why = next.reason;
+          continue;
+        }
+        logRequest(
+          t,
+          { model, lane, caller, backend: local.name, target: "local", reason: why,
+            ...(localStatus >= 400 ? { status: localStatus } : {}) },
+          localStatus < 400,
+          localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
         );
-      } catch (e) {
-        logRequest(t, { model, lane, caller, backend: local.name, target: "local", reason: decision.reason }, false, e);
-        throw e;
+        return localStatus;
       }
-      logRequest(
-        t,
-        { model, lane, caller, backend: local.name, target: "local", reason: decision.reason,
-          ...(localStatus >= 400 ? { status: localStatus } : {}) },
-        localStatus < 400,
-        localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
-      );
-      return;
     }
 
     const peer = peers.config(decision.peer)!;
@@ -555,8 +810,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           await pipeThrough(up, res);
         } catch (e) {
           if (res.headersSent) throw e;
-          const route = cfg.models[model];
-          if (!route?.fallbackLocal) throw e;
+          // Where the flow sends it with peers out of the picture; only somewhere here will do.
+          const home = resolve(asked, { ...world, noPeers: true });
+          if (home.target !== "local") throw e;
+          land(home);
+          fire(home);
           // Nothing reached the client yet, so they'll never see this.
           log.warn("route.peer_failed_retrying_local", {
             model,
@@ -566,7 +824,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           fellBack = true;
           lastTarget = "local";
           // A local retry goes back through admission, without re-applying the caller cap.
-          await local.scheduler.submit({ lane, model, caller, signal, tokens: pool.poolTokens(model, need) }, runLocal);
+          await local.scheduler.submit({ lane, model, caller, signal, tokens: pool.poolTokens(model, need) }, () => runLocal());
         }
       },
     );
@@ -584,6 +842,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       !fellBack || localStatus < 400,
       fellBack && localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
     );
+    return fellBack ? localStatus : 0;
   }
 
   /** Requests being served now, for the drain in `close()`; counts requests, not queued jobs. */
@@ -747,6 +1006,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     { path: "/control", auth: "local", handler: routeControl },
     { path: "/restart", methods: ["POST"], auth: "local", handler: routeRestart },
     { path: "/config", methods: ["GET", "PATCH", "POST"], auth: "local", handler: routeConfig },
+    { path: "/flows/try", methods: ["POST"], auth: "local", handler: routeFlowsTry },
     { path: "/queue", auth: "local", handler: routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: routeQueueEvents },
 
@@ -1411,15 +1671,6 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
             : Object.keys(cfg.scheduler.lanes)[0]!);
     delete payload.lane;
 
-    // A neighbour's hold keeps this lane off the model's card: run as the id named for that, in that id's lane.
-    const instead = fromPeer === null ? pool.whenHeld(model, lane) : null;
-    if (instead !== null) {
-      refuseDegraded(instead);
-      log.debug("route.held", { model, lane, as: instead });
-      model = instead;
-      lane = cfg.models[instead]?.lane ?? lane;
-    }
-
     const ctrl = new AbortController();
     res.on("close", () => {
       if (!res.writableEnded) ctrl.abort();
@@ -1429,6 +1680,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       await dispatch(payload, model, lane, caller, res, ctrl.signal, positionStream(c.req, res, payload), jobId(c.req));
       return;
     }
+    // A peer running a model here is that model in use.
+    using(model, res);
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
     const serving = pool.for(model);
@@ -1911,6 +2164,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   const proxying = new Set<{ id: string; backend: string; model: string | null }>();
   const { uiPayload, networkView } = createViews({
     cfg, pool, peers, history, controls, config, shared, proxying, writeMode,
+    flowHits: () => (hitsFor === cfg.flows ? Object.fromEntries([...hits].map(([flow, row]) => [flow, Array.from(row, (n) => n ?? 0)])) : {}),
     // Drawn whether or not it is on, so "not configured" and "configured and
     // quiet" are not the same blank tile.
     canary: () => canary?.page() ?? { enabled: false, passive: false, recovery: false, models: {} },
@@ -1924,9 +2178,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function loadHistory(): void {
     if (!cfg.historyFile || !existsSync(cfg.historyFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown };
+      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown; lastUse?: unknown };
       history.restore(saved.history);
       logs.restore(saved.logs);
+      // When each model was last asked for, so a restart does not make everything look long idle.
+      for (const [m, at] of Object.entries(saved.lastUse ?? {})) if (typeof at === "number") lastUse.set(m, at);
     } catch (e) {
       log.warn("history.unreadable", { path: cfg.historyFile, error: String(e) });
     }
@@ -1935,7 +2191,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function saveHistory(): void {
     if (!cfg.historyFile) return;
     try {
-      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all() }));
+      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse) }));
       historyWarned = false;
     } catch (e) {
       // Once per failure streak: a read-only path must not fill the journal every minute.

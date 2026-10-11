@@ -420,11 +420,10 @@ const base = await new Promise<string>((ready) =>
 
 // --- where each id is allowed to go ----------------------------------------
 //
-// A peer mapping only says a request MAY leave this box. The policy says
-// whether it will, and `fallbackLocal` says what happens when the peer cannot
-// take it -- the difference between a slow request and a 404. Neither can be
-// read off the mapping, so the console can only state them if the server
-// sends them.
+// A peer mapping only says a request MAY leave this box. A flow says whether it
+// will, and what happens when the peer cannot take it -- the difference between
+// a slow request and a refusal. Neither can be read off the mapping, so the
+// console can only state them if the server sends the flows.
 {
   const routed = createNode(
     parseV1({
@@ -444,16 +443,12 @@ const base = await new Promise<string>((ready) =>
       ready(`http://127.0.0.1:${(routed.server.address() as AddressInfo).port}`)),
   );
   const rd = (await (await fetch(`${rbase}/ui/data`)).json()) as {
-    routing: Record<string, { policy: string; peers: string[]; fallbackLocal: boolean }>;
+    flows: Record<string, { inputs: string[]; steps: { to: Record<string, unknown> }[] }>;
   };
-  assert.equal(rd.routing.shared?.policy, "fastest");
-  assert.equal(rd.routing.shared?.fallbackLocal, true,
+  assert.deepEqual(rd.flows.shared?.steps.map((s) => s.to), [{ fastest: [{ model: "shared" }, { peer: "friend", model: null }] }],
     "a model we also serve keeps home as an option");
-  assert.equal(rd.routing.theirs?.policy, "peer");
-  assert.equal(rd.routing.theirs?.fallbackLocal, false,
-    "no local fallback is its own fact, not implied by the policy");
-  assert.deepEqual(rd.routing.theirs?.peers, ["friend"],
-    "the preference list goes with it, so the page can say when a mapping is not a candidate");
+  assert.deepEqual(rd.flows.theirs?.steps.map((s) => Object.keys(s.to)[0]), ["peer", "refuse"],
+    "no local fallback is its own step, so the page can say what happens when the peer cannot take it");
   await routed.close();
 }
 

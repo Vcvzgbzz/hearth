@@ -1,7 +1,7 @@
 /**
  * A backend can `hold:` its hardware for an app hearth forwards to but does not schedule. While
  * the app is in use (read off its `activity:` path) the named lanes of every backend sharing
- * that hardware stay queued, or run as `models.<id>.whenHeld`; other lanes take the card as
+ * that hardware stay queued, or run as a flow's `held` step names; other lanes take the card as
  * before. The hold ends once the app has been idle for `idleMs`, or stops answering.
  *
  *     npx tsx test/hold.test.ts
@@ -59,8 +59,8 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   const cfg = config("http://127.0.0.1:1", 60_000);
   assert.deepEqual(cfg.backends[1]!.hold, { lanes: ["memory"], idleMs: 60_000, seat: null }, "the block parses whole");
   assert.equal(cfg.backends[0]!.hold, null, "absent means null");
-  assert.equal(cfg.models["background"]!.whenHeld, "elsewhere");
-  assert.equal(cfg.models["waits"]!.whenHeld, null, "a model without one waits");
+  assert.deepEqual(cfg.flows["background"]!.steps.map((s) => [s.when, s.to]), [[{ held: ["background"] }, { model: "elsewhere" }], [null, { model: "background" }]], "a stand-in while held is a flow step");
+  assert.equal(cfg.flows["waits"], undefined, "a model without one waits");
 
   const app = (over: Record<string, unknown>) => () => parseV1({
     name: "t",
@@ -77,15 +77,6 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   assert.throws(app({ hold: { lanes: [], idleMs: 1000 } }), /at least one lane/, "a hold on no lane holds nothing");
   assert.throws(app({ hold: { lanes: ["chat"] } }), /idleMs is required/, "no default for how long idle is idle");
 
-  const model = (whenHeld: string, more: Record<string, unknown> = {}) => () => parseV1({
-    name: "t",
-    backend: { url: "http://127.0.0.1:1", kind: "none" },
-    models: { a: { as: "x", whenHeld }, b: { as: "y", ...more } },
-  });
-  assert.doesNotThrow(model("b"));
-  assert.throws(model("a"), /not another id under models/, "an id cannot stand in for itself");
-  assert.throws(model("missing"), /not another id under models/, "the stand-in must be declared");
-  assert.throws(model("b", { whenHeld: "a" }), /has a whenHeld of its own/, "no chains");
 }
 
 // --- scheduler: a held lane waits without holding up the others -------------
@@ -146,7 +137,6 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   const read = () => holder.state.sampleActivity(holder.cfg.activity!);
 
   assert.equal(pool.heldOff(card.cfg, "memory"), false, "an app nobody has heard from holds nothing");
-  assert.equal(pool.whenHeld("background", "memory"), null);
 
   // Up and idle is what a restart of hearth or of the app looks like: no one is using it.
   const idle = new BackendPool(cfg, silentLogger);
@@ -164,9 +154,6 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   assert.equal(pool.heldOff(card.cfg, "chat"), false, "only the lanes it names");
   assert.equal(pool.heldOff(pool.get("spare")!.cfg, "memory"), false, "only backends on its hardware");
   assert.equal(pool.heldOff(holder.cfg, "memory"), false, "never the holder itself");
-  assert.equal(pool.whenHeld("background", "memory"), "elsewhere", "a model that names a stand-in runs as it");
-  assert.equal(pool.whenHeld("waits", "memory"), null, "one that names none stays queued as itself");
-  assert.equal(pool.whenHeld("background", "chat"), null, "and only in a held lane");
   const [view] = pool.holds();
   assert.deepEqual({ backend: view!.backend, resources: view!.resources, lanes: view!.lanes, active: view!.active },
     { backend: "app", resources: ["gpu"], lanes: ["memory"], active: true });
@@ -174,7 +161,6 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
 
   await settle(200);
   assert.equal(pool.heldOff(card.cfg, "memory"), false, "idle for idleMs: the lanes may start again");
-  assert.equal(pool.whenHeld("background", "memory"), null);
   assert.equal(pool.holds()[0]!.active, false);
 
   // A job showing up renews it. The path is read at most every two seconds.

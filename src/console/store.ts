@@ -18,7 +18,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export type Page = "topology" | "models" | "queue" | "logs" | "config";
+export type Page = "topology" | "routing" | "models" | "queue" | "logs" | "config";
 export type Sel = { kind: "self" | "peer" | "backend" | "resource"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 
@@ -77,8 +77,18 @@ function disconnect(): void {
   }
 }
 
+// A tab nobody is looking at gives its stream back and takes it up again when it is looked at: a browser
+// allows a handful of connections to one site, and a stream per open tab would leave none for anything else.
+let wanted = false;
+document.addEventListener("visibilitychange", () => {
+  if (!wanted) return;
+  if (document.hidden) disconnect();
+  else if (es === null) connect();
+});
+
 export function connect(): void {
   disconnect();
+  wanted = true;
   let gotSnapshot = false;
   const load = async () => {
     try {
@@ -97,6 +107,8 @@ export function connect(): void {
   };
   // An immediate probe, so a login is offered at once rather than after the 4s fallback.
   void load();
+  // Opened in the background, a tab has what it needs to draw and takes its stream when it is first looked at.
+  if (document.hidden) return;
   es = new EventSource("/ui/events");
   es.addEventListener("snapshot", (e) => {
     gotSnapshot = true;

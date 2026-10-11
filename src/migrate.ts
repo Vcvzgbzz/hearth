@@ -1,9 +1,13 @@
 /**
- * hearth.yaml v1 → v2, on the YAML document so comments travel with the values they sit on.
- * v2 groups what v1 spread over the top level: lending:, borrowing:, backendDefaults:, one
- * entry per peer, and maps keyed by name for backends and peers.
+ * Older hearth.yaml layouts rewritten as the current one, on the YAML document so comments travel
+ * with the values they sit on. Two steps, each a no-op on a file that is already past it:
+ * v1 → v2 groups what v1 spread over the top level (lending:, borrowing:, backendDefaults:, one
+ * entry per peer, maps keyed by name), and a model's own routing settings become a flow.
  */
 import { Document, isMap, isScalar, isSeq, YAMLMap, type Node } from "yaml";
+
+import { MOVED_TO_FLOWS, rawFlow, type Flow } from "./config.js";
+import { routedFlow } from "./route.js";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -32,9 +36,59 @@ export function v1Marker(raw: Record<string, unknown>): string | null {
   return null;
 }
 
-/** Rewrite a v1 document in place; returns one line per change, for the CLI to print. */
+/** The first model that still routes by its own settings, named for the error, or null. */
+export function routedMarker(raw: Record<string, unknown>): string | null {
+  for (const [id, m] of Object.entries(isObj(raw.models) ? raw.models : {})) {
+    const key = isObj(m) ? MOVED_TO_FLOWS.find((k) => k in m) : undefined;
+    if (key) return `models.${id}.${key}`;
+  }
+  return null;
+}
+
+/**
+ * Each model's `policy`, `peers`, `spilloverAt`, `fallbackLocal` and `whenHeld` as the flow they
+ * described, under `flows:` by the model's id. The model keeps everything else it sets.
+ */
+function routesToFlows(doc: Document, done: string[]): void {
+  const raw = doc.toJS() as Record<string, unknown> | null;
+  const models = isObj(raw?.models) ? raw.models : {};
+  const peers = isObj(raw?.peers) ? raw.peers : {};
+  const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === "string" ? [v] : []);
+  // The peers an id can be sent to: the ones the model names, else every peer, that are borrowed from and map it.
+  const mapping = (id: string, named: string[]) => (named.length ? named : Object.keys(peers))
+    .filter((n) => isObj(peers[n]) && peers[n].url !== undefined && isObj(peers[n].models) && peers[n].models[id] !== undefined);
+  const routed = (id: string): Flow | null => {
+    const m = isObj(models[id]) ? models[id] : {};
+    const policy = (typeof m.policy === "string" ? m.policy : "local") as "local" | "peer" | "spillover" | "fastest";
+    return routedFlow(id, {
+      policy, peers: mapping(id, list(m.peers)), fallbackLocal: m.fallbackLocal !== false,
+      ...(typeof m.spilloverAt === "number" ? { spilloverAt: m.spilloverAt } : {}),
+    });
+  };
+  for (const [id, m] of Object.entries(models)) {
+    if (!isObj(m) || !MOVED_TO_FLOWS.some((k) => k in m)) continue;
+    let flow = routed(id);
+    if (typeof m.whenHeld === "string" && m.whenHeld !== "") {
+      // The stand-in keeps its own routing, as a request for it would.
+      const to = routed(m.whenHeld) ? { flow: m.whenHeld } : { model: m.whenHeld };
+      const held = { when: { held: [id] }, to, lane: null, params: null, do: [] };
+      flow = { inputs: [id], steps: [held, ...(flow?.steps ?? [{ when: null, to: { model: id }, lane: null, params: null, do: [] }])] };
+    }
+    if (flow) {
+      if (doc.hasIn(["flows", id])) throw new Error(`models.${id} routes by its own settings and flows.${id} already exists — fold one into the other, then migrate`);
+      doc.setIn(["flows", id], doc.createNode(rawFlow(flow)));
+    }
+    for (const k of MOVED_TO_FLOWS) doc.deleteIn(["models", id, k]);
+    const left = doc.getIn(["models", id], true);
+    if (isMap(left) && left.items.length === 0) doc.deleteIn(["models", id]);
+    done.push(flow ? `models.${id} routing → flows.${id}` : `models.${id}: routing that sent nothing anywhere, removed`);
+  }
+}
+
+/** Rewrite an older document in place; returns one line per change, for the CLI to print. */
 export function migrateDoc(doc: Document): string[] {
   const done: string[] = [];
+  const v1 = v1Marker((doc.toJS() ?? {}) as Record<string, unknown>) !== null;
   const move = (from: (string | number)[], to: (string | number)[]) => {
     const node = doc.getIn(from, true);
     if (node === undefined) return;
@@ -107,9 +161,11 @@ export function migrateDoc(doc: Document): string[] {
   const sched = doc.get("scheduler", true);
   if (isMap(sched) && sched.items.length === 0) doc.delete("scheduler");
 
-  // Moved keys land at the end; put the file back in reading order. Comments ride on their pairs.
+  routesToFlows(doc, done);
+
+  // Moved keys land at the end; put a v1 file back in reading order. Comments ride on their pairs.
   const top = doc.contents;
-  if (isMap(top)) {
+  if (v1 && isMap(top)) {
     const rank = (k: unknown) => {
       const i = ORDER.indexOf(String(isScalar(k) ? k.value : k));
       return i === -1 ? ORDER.length : i;
@@ -121,7 +177,7 @@ export function migrateDoc(doc: Document): string[] {
 
 /** v2's top level in the order a reader wants it: who this is, what it runs, how it shares. */
 const ORDER = [
-  "name", "listen", "resources", "backends", "backendDefaults", "models", "scheduler",
+  "name", "listen", "resources", "backends", "backendDefaults", "models", "flows", "actions", "scheduler",
   "peers", "lending", "borrowing", "apiKeys", "operator", "maxBodyBytes", "shutdownGraceMs", "stateFile",
 ];
 
@@ -146,7 +202,7 @@ function listToMap(doc: Document, key: string, done: string[]): void {
 
 /** The same rewrite on a plain object: test fixtures and anything else holding v1 as data. */
 export function migrate(raw: unknown): unknown {
-  if (!isObj(raw) || v1Marker(raw) === null) return raw;
+  if (!isObj(raw) || (v1Marker(raw) === null && routedMarker(raw) === null)) return raw;
   const doc = new Document(raw);
   migrateDoc(doc);
   return doc.toJS();

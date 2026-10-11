@@ -285,13 +285,6 @@ export class BackendPool {
     return s.state.sampleActivity(s.cfg.activity);
   }
 
-  /** The id a request for `model` in `lane` runs as while its lane is held off its hardware, or null to queue as itself. */
-  whenHeld(model: string, lane: string): string | null {
-    const to = this.cfg.models[model]?.whenHeld ?? null;
-    if (to === null) return null;
-    return this.heldOff(this.for(model).cfg, lane) ? to : null;
-  }
-
   /** Every declared hold and whether it is in force, for status surfaces and clients that plan around it. */
   holds(): { backend: string; resources: string[]; lanes: string[]; idleMs: number; active: boolean; quietMs: number | null }[] {
     return this.slots.filter((s) => s.cfg.hold !== null).map((s) => ({
@@ -434,6 +427,7 @@ export class BackendPool {
     // Named in `models:` — the operator said this id means something, and
     // `backend`/`as` may point it somewhere this check cannot see.
     if (this.cfg.models[model]) return false;
+    if (Object.values(this.cfg.flows).some((flow) => flow.inputs.includes(model))) return false;
     const wire = this.outboundId(model);
     for (const s of this.slots) {
       if (s.cfg.serves.length === 0) return false;
@@ -534,6 +528,8 @@ export class BackendPool {
     for (const id of this.followIds()) {
       if (out.has(this.cfg.models[id]!.as!)) out.add(id);
     }
+    // An id a flow takes is advertised whether or not a backend serves it: where it lands is decided per request.
+    for (const flow of Object.values(this.cfg.flows)) for (const id of flow.inputs) out.add(id);
     return [...out];
   }
 

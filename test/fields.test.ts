@@ -14,16 +14,20 @@ import { FIELDS, fieldAt, humanMs, nearest, scopeOf, seedOf, type Scope } from "
 const base = () => ({
   name: "t",
   resources: { gpu0: { kind: "gpu" } },
+  servers: { box: { host: "10.0.0.5" } },
+  flows: { pick: { inputs: ["m"], steps: [{ to: "m" }] } },
+  actions: { tell: { call: "http://127.0.0.1:1/hook" } },
   backends: { card: { url: "http://127.0.0.1:1", kind: "none", resources: ["gpu0"] } },
   scheduler: { lanes: { chat: { priority: 0 } } },
-  models: { m: { policy: "local" } },
+  models: { m: { concurrency: 1 } },
   peers: { p: { url: "http://127.0.0.1:2", token: "t", models: { m: "m" } } },
 });
 
 /** Where each scope lives in `base()`. */
 const AT: Record<Scope, (string | number)[]> = {
   node: [], listen: ["listen"], backendDefaults: ["backendDefaults"], backend: ["backends", "card"],
-  activity: ["backends", "card", "activity"], resource: ["resources", "gpu0"], scheduler: ["scheduler"],
+  activity: ["backends", "card", "activity"], resource: ["resources", "gpu0"], server: ["servers", "box"], flow: ["flows", "pick"], action: ["actions", "tell"],
+  scheduler: ["scheduler"],
   lane: ["scheduler", "lanes", "chat"], model: ["models", "m"], stats: ["models", "m", "stats"],
   pool: ["models", "m", "pool"], peer: ["peers", "p"], lending: ["lending"], borrowing: ["borrowing"],
   operator: ["operator"],
@@ -45,6 +49,10 @@ for (const [scope, fields] of Object.entries(FIELDS) as [Scope, (typeof FIELDS)[
   if (scope === "operator") continue;
   for (const [key, f] of Object.entries(fields)) {
     if (f.type === "raw") continue;
+    // A port is refused beside the url base() already gives its backend.
+    if (scope === "backend" && key === "port") continue;
+    // An action is one kind, and base() made this one a call.
+    if (scope === "action" && key === "log") continue;
     const doc = base() as Record<string, unknown>;
     // A nested block the base lacks starts as its own seed, as the editor adds it.
     const parent = fieldAt(AT[scope]);
@@ -60,7 +68,7 @@ for (const [scope, fields] of Object.entries(FIELDS) as [Scope, (typeof FIELDS)[
 // --- a key the table does not list is refused, with the one it was probably meant to be ---------
 {
   const typo = (patch: Record<string, unknown>) => () => parseConfig({ ...base(), ...patch });
-  assert.throws(typo({ models: { m: { polcy: "peer" } } }), /models\.m\.polcy is not a setting of models\.m — did you mean policy\?/);
+  assert.throws(typo({ models: { m: { lnae: "chat" } } }), /models\.m\.lnae is not a setting of models\.m — did you mean lane\?/);
   assert.throws(typo({ backends: { card: { url: "http://x:1", concurency: 2 } } }), /did you mean concurrency/);
   assert.throws(typo({ shutdownGraceMS: 5 }), /shutdownGraceMS is not a setting — did you mean shutdownGraceMs/);
   assert.throws(typo({ lending: { model: [] } }), /did you mean models/);
@@ -71,6 +79,7 @@ for (const [scope, fields] of Object.entries(FIELDS) as [Scope, (typeof FIELDS)[
 
 // --- scopes ----------------------------------------------------------------------------------
 assert.equal(scopeOf(["backends", "card"]), "backend");
+assert.equal(scopeOf(["servers", "box"]), "server");
 assert.equal(scopeOf(["lending"]), "lending");
 assert.equal(scopeOf(["models", "m", "params"]), null, "params is a free map");
 assert.equal(scopeOf(["peers", "p", "models"]), null, "and so is a peer's model map");

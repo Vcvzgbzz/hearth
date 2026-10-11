@@ -3,7 +3,8 @@ import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { UiData } from "./types.js";
-import { control, select, useStore } from "./store.js";
+import { useEdit } from "./editStore.js";
+import { control, go, select, useStore } from "./store.js";
 import { ago, Card, cx, Empty, mono, Pill, Switch, type Tone } from "./ui.js";
 
 const selfOf = (d: UiData) => d.net.nodes.find((n) => n.self)!;
@@ -61,6 +62,8 @@ export function CanaryAlert() {
 export function Inspector() {
   const d = useStore((s) => s.data)!;
   const sel = useStore((s) => s.sel);
+  const draft = useEdit((s) => s.draft);
+  const editable = draft !== null;
   if (!sel) return null;
   const self = selfOf(d);
   let title = sel.id;
@@ -77,12 +80,16 @@ export function Inspector() {
     );
   } else if (sel.kind === "backend") {
     const b = (self.backends ?? []).find((x) => x.name === sel.id);
+    // Where it sits and what it uses are read off the draft, so a move shows before it is saved.
+    const entry = draft ? (draft.backends as Record<string, { server?: string; resources?: string[] }> | undefined)?.[sel.id] : undefined;
+    const drafted = entry ? { server: entry.server ?? "", resources: entry.resources ?? [] } : null;
     if (b) body = (
       <>
         <Row k="kind">{b.kind}{b.evicts ? " · swaps models" : ""}</Row>
         <Row k="address"><span className={mono}>{b.url}</span></Row>
+        <Row k="runs on">{drafted ? `${drafted.server || "this machine"}${(drafted.server || "") !== (b.server ?? "") ? " (unsaved)" : ""}` : b.server ?? "this machine"}</Row>
         <Row k="slots"><span className="tabular">{(b.slots ?? 0) - (b.free ?? 0)} of {b.slots ?? 0} busy · {b.queued ?? 0} queued</span></Row>
-        <Row k="hardware">{(b.resources ?? []).join(", ") || "none declared"}</Row>
+        <Row k="hardware">{drafted ? `${drafted.resources.join(", ") || "none"}${drafted.resources.join() !== (b.resources ?? []).join() ? " (unsaved)" : ""}` : (b.resources ?? []).join(", ") || "none declared"}</Row>
         <Row k="loaded">{(b.loaded ?? []).join(", ") || (b.knowsWarm === false ? "cannot tell" : "nothing")}</Row>
         {(b.routes ?? []).length > 0 && <Row k="paths">{b.routes!.map((r) => <div key={r.path} className={mono}>{r.path}</div>)}</Row>}
         <Row k="serves">{(b.serves ?? []).join(", ")}</Row>
@@ -132,13 +139,17 @@ export function Inspector() {
   }
 
   return (
-    <aside className="absolute inset-y-3 right-3 z-10 w-[340px] overflow-auto rounded-xl border border-line bg-panel p-4 shadow-xl">
+    <aside className="w-[340px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-10">
       <div className="mb-2 flex items-center">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind}</div>
           <div className="text-base font-semibold">{title}</div>
         </div>
-        <button className="ml-auto text-dim hover:text-fg" aria-label="close" onClick={() => select(null)}><X size={16} /></button>
+        {/* What it is doing is here; what it is set to is the same node's settings. */}
+        {editable && (sel.kind === "backend" || sel.kind === "peer") && (
+          <button className="ml-auto rounded-md border border-line px-2 py-1 text-[11px] hover:bg-muted" onClick={() => go("config")}>settings</button>
+        )}
+        <button className={cx("text-dim hover:text-fg", !(editable && (sel.kind === "backend" || sel.kind === "peer")) && "ml-auto")} aria-label="close" onClick={() => select(null)}><X size={16} /></button>
       </div>
       {body ?? <Empty>gone</Empty>}
     </aside>

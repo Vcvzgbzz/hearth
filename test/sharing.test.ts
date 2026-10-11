@@ -66,9 +66,10 @@ import { parseV1 } from "./v1.js";
 
   // An existing route that names its peers is an operator being specific.
   // Widening it to everyone would send work to boxes they left out.
-  cfg.models.pinned = { backend: null, as: null, follow: false, policy: "peer", peers: ["friend"], spilloverAt: 1, fallbackLocal: true, concurrency: null, params: null, lane: null, whenHeld: null, stats: null, emulate: null, pool: null };
   link(cfg, "friend", "pinned", "pinned", "peer", true);
-  assert.deepEqual(cfg.models.pinned!.peers, ["friend"], "an existing peer list is kept");
+  const once = JSON.stringify(cfg.flows.pinned);
+  link(cfg, "friend", "pinned", "pinned", "peer", true);
+  assert.equal(JSON.stringify(cfg.flows.pinned), once, "a flow that already sends there is left as it is");
 
   assert.throws(() => link(cfg, "nobody", "x", "x", "peer", false), /not a configured peer/,
     "peers are added in the file, not here");
@@ -88,8 +89,8 @@ import { parseV1 } from "./v1.js";
       models: { shared: { policy: "peer", peers: ["a"] } },
     });
     unlink(two, "a", "shared");
-    assert.equal(two.models.shared, undefined,
-      "the route named only the peer we unlinked, so it is retired");
+    assert.equal(two.flows.shared, undefined,
+      "the flow sent it only to the peer we unlinked, so it is retired");
     assert.equal(two.peers[1]!.models.shared, "shared", "the other peer keeps its mapping");
   }
 
@@ -106,7 +107,7 @@ import { parseV1 } from "./v1.js";
       models: { shared: { policy: "peer", peers: ["a", "b"] } },
     });
     unlink(three, "a", "shared");
-    assert.deepEqual(three.models.shared!.peers, ["b"], "only the unlinked peer comes out");
+    assert.deepEqual(three.flows.shared!.steps.map((s) => s.to), [{ peer: "b", model: null }, { model: "shared" }], "only the unlinked peer comes out");
   }
 
   // A route carries facts about YOUR machine too. Deleting the whole entry on
@@ -123,7 +124,7 @@ import { parseV1 } from "./v1.js";
       models: { "vllm-model": { policy: "peer", backend: "gpu", batch: 32 } },
     });
     unlink(rich, "a", "vllm-model");
-    assert.equal(rich.models["vllm-model"]!.policy, "local", "it stops going away");
+    assert.equal(rich.flows["vllm-model"], undefined, "it stops going away");
     assert.equal(rich.models["vllm-model"]!.concurrency, 32, "and keeps what was never about the peer");
     assert.equal(rich.models["vllm-model"]!.backend, "gpu");
   }
@@ -139,7 +140,7 @@ import { parseV1 } from "./v1.js";
       models: { small: { policy: "peer", stats: { context: 4096 } } },
     });
     unlink(declared, "a", "small");
-    assert.equal(declared.models.small!.policy, "local");
+    assert.equal(declared.flows.small, undefined);
     assert.equal(declared.models.small!.stats?.context, 4096, "the declared window survives an unlink");
   }
 

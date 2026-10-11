@@ -1,5 +1,5 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, LogOut, Moon, Network, ScrollText, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
@@ -8,11 +8,15 @@ import { CanaryAlert, History, Inspector, Models, Queue } from "./pages.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
 import { go, login, logout, restartNode, select, useStore, type Page } from "./store.js";
+import { EditBar, EditRail, Menu, Picker, TryStrip } from "./editor.js";
+import { changed, useEdit } from "./editStore.js";
+import { Routing } from "./Routing.js";
 import { Topology } from "./Topology.js";
 import { Button, Card, cx, Pill } from "./ui.js";
 
 const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
+  { id: "routing", label: "Routing", icon: Split },
   { id: "models", label: "Models", icon: Boxes },
   { id: "queue", label: "Queue", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
@@ -31,7 +35,10 @@ function useTheme(): [boolean, () => void] {
 
 function ConfigPill() {
   const c = useStore((s) => s.data?.config);
+  // What is on the Topology page and not yet written counts: "saved" is only true of the file.
+  const unsaved = useEdit(changed);
   if (!c) return null;
+  if (unsaved > 0 && !c.error) return <button onClick={() => go("routing")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
   const tone = c.error ? "bad" : c.restartPending.length ? "warn" : "ok";
   const text = c.error ? "config does not load" : c.restartPending.length ? `restart to apply ${c.restartPending.length}` : c.path ? "saved" : "in memory";
   return (
@@ -325,9 +332,26 @@ export default function App() {
         ) : page === "topology" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">
             <Activity />
-            <Card className="relative min-h-[420px] flex-1 overflow-hidden">
-              <Topology />
+            <Card className="flex min-h-[420px] flex-1 overflow-hidden">
+              {/* A panel sits beside the picture, never over it: what was clicked stays in view. */}
+              <div className="relative min-w-0 flex-1"><Topology /></div>
               <Inspector />
+            </Card>
+          </div>
+        ) : page === "routing" ? (
+          <div className="flex min-h-0 flex-1 flex-col p-5">
+            <Card className="flex min-h-[420px] flex-1 flex-col overflow-hidden">
+              <div className="flex min-h-0 flex-1">
+                <div className="relative min-w-0 flex-1">
+                  {/* Its own instance: the two pictures share nothing but the node they draw. */}
+                  <Routing />
+                  <EditBar />
+                  <Picker />
+                  <Menu />
+                </div>
+                <EditRail />
+              </div>
+              <TryStrip />
             </Card>
           </div>
         ) : page === "logs" ? (

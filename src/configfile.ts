@@ -14,7 +14,8 @@ import { basename, dirname } from "node:path";
 import { isMap, isScalar, parseDocument, type Document } from "yaml";
 
 import { Refusal } from "./admit.js";
-import { ConfigError, parseConfig, peersMapping, type HearthConfig, type ModelRoute, type RoutePolicy } from "./config.js";
+import { ConfigError, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { routedFlow } from "./route.js";
 import type { Logger } from "./log.js";
 
 /** Keys the running node reads per call, so a new value takes effect on the next request. */
@@ -22,7 +23,7 @@ const LIVE_KEYS = [
   "models", "share", "notes", "apiKeys", "apiKeyLabels", "apiKeyModels", "peerTokens",
   "peerRateLimit", "peerLane", "peerMaxConcurrent", "maxBodyBytes", "peerFreshMs", "peerDownMs",
   "peerStaleMs", "peerFirstByteMs", "backendFirstByteMs", "backendIdleMs", "coldPenalty", "shutdownGraceMs",
-  "operator",
+  "operator", "layout", "flows", "actions", "modelHeader",
 ] as const satisfies readonly (keyof HearthConfig)[];
 
 /** Restart-only internal keys whose hearth.yaml name differs, for "restart to apply …". */
@@ -40,10 +41,6 @@ export function deepFreeze(v: unknown): void {
 /** Keys that never count as a change to the node. */
 const IGNORED = new Set<string>(["configPath", "stateFile"]);
 
-const DEFAULT_ROUTE: ModelRoute = {
-  backend: null, as: null, follow: false, policy: "local", peers: [], spilloverAt: 1, whenHeld: null,
-  fallbackLocal: true, concurrency: null, params: null, lane: null, stats: null, emulate: null, pool: null,
-};
 
 /** One edit to the YAML document: set `value` at `path`, or delete it. */
 export interface ConfigOp {
@@ -181,7 +178,10 @@ export function writeFileAtomic(path: string, text: string): void {
 
 /* ------------------------------------------------- edits on a parsed draft */
 
-/** Map one of our ids to a peer's and route it there; a route naming its peers gains this one, never widens. */
+/**
+ * Map one of our ids to a peer's and send its requests there. An id no flow takes yet gets one in
+ * the shape `policy` names; one that is already routed keeps its flow, which gains this peer.
+ */
 export function link(cfg: HearthConfig, peer: string, mine: string, theirs: string, policy: RoutePolicy, fallbackLocal: boolean): void {
   const p = cfg.peers.find((x) => x.name === peer);
   if (!p) {
@@ -191,39 +191,57 @@ export function link(cfg: HearthConfig, peer: string, mine: string, theirs: stri
     );
   }
   if (mine === "" || theirs === "") throw new ConfigError(null, "both model ids are required");
-  const prev = cfg.models[mine];
   p.models[mine] = theirs;
-  const peers = prev && prev.peers.length > 0 && !prev.peers.includes(peer) ? [...prev.peers, peer] : (prev?.peers ?? []);
-  cfg.models[mine] = { ...DEFAULT_ROUTE, ...prev, policy, peers, fallbackLocal };
+  const taken = Object.values(cfg.flows).find((f) => f.inputs.includes(mine));
+  if (!taken) {
+    const flow = routedFlow(mine, { policy, peers: [peer], fallbackLocal });
+    // A name already used by a flow that takes other ids gets one beside it.
+    let name = mine;
+    for (let n = 2; name in cfg.flows; n++) name = `${mine}-${n}`;
+    if (flow) cfg.flows[name] = flow;
+    return;
+  }
+  const sends = (e: FlowEnd) => "peer" in e && e.peer === peer && (e.model ?? mine) === mine;
+  if (taken.steps.some((s) => ("fastest" in s.to ? s.to.fastest.some(sends) : !("flow" in s.to) && !("refuse" in s.to) && sends(s.to)))) return;
+  // Beside the peers it already tries: in the choice of the fastest when there is one, else as a step ahead of the last.
+  const choice = taken.steps.find((s) => "fastest" in s.to);
+  if (choice && "fastest" in choice.to) choice.to.fastest.push({ peer, model: mine });
+  else taken.steps.splice(-1, 0, { when: null, to: { peer, model: mine }, lane: null, params: null, do: [] });
 }
 
-/** Remove a mapping, and retire any route nothing it names still maps; an emptied peer list is dead, not open. */
+/** Remove a mapping, and with it every step that sent the id to that peer. */
 export function unlink(cfg: HearthConfig, peer: string, mine: string): void {
   const p = cfg.peers.find((x) => x.name === peer);
   if (!p) throw new ConfigError(null, `"${peer}" is not a configured peer`);
   delete p.models[mine];
-  const route = cfg.models[mine];
-  if (route && route.peers.includes(peer)) {
-    const rest = route.peers.filter((n) => n !== peer);
-    if (rest.length === 0) retireRoute(cfg, mine);
-    else route.peers = rest;
-  }
-  pruneDeadRoutes(cfg);
+  pruneUnmapped(cfg);
 }
 
-/** Stop a route sending work away: delete it if it is only a policy, else demote it to local and keep its settings. */
-function retireRoute(cfg: HearthConfig, id: string): void {
-  const r = cfg.models[id];
-  if (!r) return;
-  const onlyAPolicy = r.backend === null && r.as === null && r.concurrency === null && r.spilloverAt === 1
-    && r.params === null && r.lane === null && r.stats === null;
-  if (onlyAPolicy) delete cfg.models[id];
-  else cfg.models[id] = { ...r, policy: "local", peers: [] };
-}
-
-function pruneDeadRoutes(cfg: HearthConfig): void {
-  for (const [id, route] of Object.entries(cfg.models)) {
-    if (route.policy !== "local" && peersMapping(id, route.peers, cfg.peers).length === 0) retireRoute(cfg, id);
+/**
+ * Take out of every flow what a peer can no longer be sent: a step or a candidate for an id that
+ * peer does not map. A flow left doing nothing but running its own id here, or refusing it, goes.
+ */
+function pruneUnmapped(cfg: HearthConfig): void {
+  const maps = (peer: string, id: string) => cfg.peers.find((x) => x.name === peer)?.models[id] !== undefined;
+  for (const [name, flow] of Object.entries(cfg.flows)) {
+    const before = JSON.stringify(flow);
+    // An id this flow takes that a peer step can no longer be sent as goes back to running as itself.
+    const open = flow.steps.flatMap((s) => ("fastest" in s.to ? s.to.fastest : "flow" in s.to || "refuse" in s.to ? [] : [s.to])).filter((e): e is Extract<FlowEnd, { peer: string }> => "peer" in e && e.model === null);
+    if (flow.inputs.length > 1) flow.inputs = flow.inputs.filter((id) => open.every((e) => maps(e.peer, id)));
+    const dead = (e: FlowEnd) => "peer" in e && (e.model === null ? flow.inputs.some((id) => !maps(e.peer, id)) : !maps(e.peer, e.model));
+    flow.steps = flow.steps.flatMap((s): Flow["steps"] => {
+      if ("flow" in s.to || "refuse" in s.to) return [s];
+      if (!("fastest" in s.to)) return dead(s.to) ? [] : [s];
+      const left = s.to.fastest.filter((e) => !dead(e));
+      return left.length === 0 ? [] : [{ ...s, to: left.length === 1 ? left[0]! : { fastest: left } }];
+    });
+    if (JSON.stringify(flow) === before) continue;
+    const idle = flow.steps.every((s) => "refuse" in s.to || (!("flow" in s.to) && !("fastest" in s.to) && !("peer" in s.to) && flow.inputs.includes(s.to.model) && s.do.length === 0 && s.params === null && s.lane === null));
+    if (flow.steps.length === 0 || flow.inputs.length === 0 || idle) { delete cfg.flows[name]; continue; }
+    // What is left still has to end in a step that always applies.
+    const last = flow.steps.at(-1)!;
+    flow.steps[flow.steps.length - 1] = { ...last, when: null };
+    delete flow.steps[flow.steps.length - 1]!.max;
   }
 }
 
@@ -241,7 +259,7 @@ export function setShare(cfg: HearthConfig, model: string, on: boolean): void {
 
 /**
  * Write what changed between two parsed configs into the YAML document, touching only the share
- * list, peers' model maps, routes' policy/peers/fallbackLocal, and notes — the fields edits move.
+ * list, peers' model maps, flows, and notes — the fields edits move.
  */
 function writeDiff(doc: Document, before: HearthConfig, after: HearthConfig, where: string): void {
   /** Replace a list, keeping its flow or block style. */
@@ -268,22 +286,15 @@ function writeDiff(doc: Document, before: HearthConfig, after: HearthConfig, whe
     }
   }
 
-  for (const id of new Set([...Object.keys(before.models), ...Object.keys(after.models)])) {
-    const was = before.models[id];
-    const now = after.models[id];
-    if (!now) {
-      // A retired route keeps its note: the note describes the model, not where it runs.
-      if (was) for (const k of Object.keys(was)) if (k !== "note") doc.deleteIn(["models", id, k]);
-      dropIfEmpty(id);
-      continue;
+  for (const name of new Set([...Object.keys(before.flows), ...Object.keys(after.flows)])) {
+    const now = after.flows[name];
+    if (same(before.flows[name], now)) continue;
+    if (now) doc.setIn(["flows", name], doc.createNode(rawFlow(now)));
+    else {
+      doc.deleteIn(["flows", name]);
+      const left = doc.getIn(["flows"], true) as { items?: unknown[] } | undefined;
+      if (left && Array.isArray(left.items) && left.items.length === 0) doc.delete("flows");
     }
-    if (was && was.policy === now.policy && was.fallbackLocal === now.fallbackLocal && same(was.peers, now.peers)) continue;
-    doc.setIn(["models", id, "policy"], now.policy);
-    if (now.peers.length) setList(["models", id, "peers"], now.peers);
-    else doc.deleteIn(["models", id, "peers"]);
-    // Only when not the default, so the file does not accumulate restatements.
-    if (now.fallbackLocal) doc.deleteIn(["models", id, "fallbackLocal"]);
-    else doc.setIn(["models", id, "fallbackLocal"], false);
   }
 
   const wasNotes = before.notes ?? {};
@@ -629,12 +640,14 @@ export class ConfigFile {
           else p.models[mine] = theirs;
         }
       }
+      // A route the sidecar held becomes the flow it described, for an id nothing routes yet.
       for (const [id, r] of Object.entries(saved.routes ?? {})) {
-        if (r === null) delete d.models[id];
-        else d.models[id] = { ...DEFAULT_ROUTE, ...d.models[id], ...r };
+        if (r === null || Object.values(d.flows).some((f) => f.inputs.includes(id)) || id in d.flows) continue;
+        const flow = routedFlow(id, { policy: r.policy, peers: peersMapping(id, r.peers, d.peers), fallbackLocal: r.fallbackLocal });
+        if (flow) d.flows[id] = flow;
       }
       for (const [m, text] of Object.entries(saved.notes ?? {})) setNote(d, m, text);
-      pruneDeadRoutes(d);
+      pruneUnmapped(d);
     };
     try {
       this.update(fold);

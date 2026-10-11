@@ -5,11 +5,16 @@ import { parse as parseYaml } from "yaml";
 
 import { EMULATIONS, type Emulation } from "./emulate.js";
 import { KINDS, type KindName } from "./kinds.js";
+import { actionDecls, type Action } from "./actions.js";
 import { FIELDS, nearest, SECTION_KEYS, type Scope } from "./fields.js";
 import { v1Marker } from "./migrate.js";
 import { known, NOTE_MAX, type ModelStats } from "./stats.js";
 
+/** The shapes of flow a newly borrowed model can start as; see `routedFlow`. */
 export type RoutePolicy = "local" | "peer" | "spillover" | "fastest";
+
+/** Settings a model once routed by, each now a step of a flow. Refused, with the command that rewrites them. */
+export const MOVED_TO_FLOWS = ["policy", "peers", "spilloverAt", "fallbackLocal", "whenHeld"] as const;
 
 export interface PeerConfig {
   name: string;
@@ -34,6 +39,11 @@ export interface ResourceDecl {
   kind: "gpu" | "cpu" | "other";
   /** Several backends may use it at once; filtered out before the scheduler sees it. */
   shared: boolean;
+}
+
+/** A machine on the local network that backends run on. It names where work goes; admission never reads it. */
+export interface ServerDecl {
+  host: string;
 }
 
 /**
@@ -80,6 +90,8 @@ export interface BackendConfig {
   name: string;
   /** The OpenAI-compatible server this backend fronts. */
   url: string;
+  /** The `servers` entry this backend runs on; null is the machine hearth is on. */
+  server: string | null;
   /** Where warm state comes from. */
   kind: WarmSource;
   /**
@@ -118,7 +130,7 @@ export interface BackendConfig {
  * for `idleMs`. Other lanes take the card as before.
  */
 export interface HoldDecl {
-  /** The lanes kept waiting, or sent to `models.<id>.whenHeld`. */
+  /** The lanes kept waiting; a flow's `held` condition sends them somewhere else meanwhile. */
   lanes: string[];
   /** How long the app must stay idle before the lanes may start again. */
   idleMs: number;
@@ -142,6 +154,86 @@ export interface ResidentDecl {
   resume: string | null;
 }
 
+/**
+ * What a flow step tests. Every condition present must hold. `warm`, `free` and `queuedUnder`
+ * read the step's own target; the rest read the request and the node.
+ */
+export interface FlowWhen {
+  images?: boolean;
+  tools?: boolean;
+  /** Estimated prompt plus reserved output, strictly over or under. */
+  tokensOver?: number;
+  tokensUnder?: number;
+  /** The id the client asked for, when several enter one flow. */
+  asked?: string[];
+  /** An api key's label, or `local` for loopback without a key. */
+  caller?: string[];
+  lane?: string[];
+  /** One of these ids has its hardware held against the request's lane; see HoldDecl. */
+  held?: string[];
+  /** None of these peers can take the request: down, not lending the id, or too small for it. */
+  down?: string[];
+  /**
+   * `model` has had no work here for at least `ms`: nothing queued or running now, and nothing
+   * finished more recently. A null `model` reads the step's own target.
+   */
+  idle?: { model: string | null; ms: number };
+  warm?: boolean;
+  free?: boolean;
+  queuedUnder?: number;
+  /**
+   * Running it on the step's own target needs no swap: the model is loaded there, or nothing
+   * else is loaded on its backend or on the exclusive hardware that backend uses.
+   */
+  ready?: boolean;
+  /** The opposite of `asked`, `caller` and `lane`: none of these. */
+  askedNot?: string[];
+  callerNot?: string[];
+  laneNot?: string[];
+  /** The node's own clock is between these, `HH:MM` each; `from` later than `to` runs through midnight. */
+  time?: { from: string; to: string };
+}
+
+/** Somewhere a request can run: here as `model`, or on `peer` as its id for `model` (null: the id asked for). */
+export type FlowEnd = { model: string } | { peer: string; model: string | null };
+
+/** Where a step sends a request: to run, into another flow, to whichever of several would start it soonest, or nowhere. */
+export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string };
+
+/** One step of a flow: when its conditions hold and its target can take the request, the request goes there. */
+export interface FlowStep {
+  /** null always holds. */
+  when: FlowWhen | null;
+  to: FlowTo;
+  /** The lane it queues in, over the target's own and the client's. */
+  lane: string | null;
+  /** Request fields stamped before the target model's own `params`. */
+  params: Record<string, unknown> | null;
+  /** Actions set off when this step decides, by their names under `actions:`. */
+  do: string[];
+  /** The most requests this step may have in flight at once; past it the step is passed over. */
+  max?: number;
+}
+
+/**
+ * `flows.<name>`: how requests for its `inputs` are routed. Steps are tried in order and the
+ * first that holds wins; the last always can. Only what a client asked for enters a flow:
+ * a step that names a model runs it as named.
+ */
+export interface Flow {
+  inputs: string[];
+  steps: FlowStep[];
+  /** Switched off: requests for its inputs run as themselves. Another flow can still hand work to it. */
+  off?: true;
+  /** What it is for, in the operator's words. */
+  note?: string;
+  /**
+   * How long a conversation stays where this flow first sent it, in ms. A later turn of the same
+   * conversation goes there again while it can take it, whatever the steps would say now.
+   */
+  sticky?: number;
+}
+
 export interface ModelRoute {
   /** Which backend serves it. null means "work it out from the catalogs".
    *  Naming one is how you break a tie when two backends offer the same id. */
@@ -154,13 +246,6 @@ export interface ModelRoute {
    * gets swapped by hand: a fixed id would swap the card back on every request.
    */
   follow: boolean;
-  policy: RoutePolicy;
-  /** Who may serve it, in preference order. Empty means anyone that maps it. */
-  peers: string[];
-  /** `spillover` only: go remote once this many jobs are queued here. */
-  spilloverAt: number;
-  /** Fall back to the local backend if no peer can take it. */
-  fallbackLocal: boolean;
   /**
    * Request fields stamped on every chat completion for this id, after `as` and over the
    * client's own, so several ids can front one resident model with different defaults.
@@ -169,11 +254,6 @@ export interface ModelRoute {
   params: Record<string, unknown> | null;
   /** The lane every request for this id queues in, over the client's; null lets the client choose. */
   lane: string | null;
-  /**
-   * The id a request for this one runs as while a neighbour's `hold` keeps its lane off this
-   * model's hardware; null leaves it queued until the hold ends.
-   */
-  whenHeld: string | null;
   /** What this model can take when nothing can be asked; observed values win field by field. */
   stats: ModelStats | null;
   /** Reshapes this id's backend answers into another server's format; see emulate.ts. */
@@ -256,6 +336,8 @@ export interface CanaryConfig {
 export interface HearthConfig {
   /** Declared hardware by name; an undeclared name is an exclusive `gpu`. */
   resources: Record<string, ResourceDecl>;
+  /** Other machines on the local network, by name. Empty when every backend is addressed by `url`. */
+  servers: Record<string, ServerDecl>;
   /** The file this config was loaded from, or null when built in memory (which cannot be saved). */
   configPath: string | null;
   /**
@@ -265,6 +347,14 @@ export interface HearthConfig {
   stateFile: string | null;
   /** Where the console's day of history and recent logs survive a restart; null keeps them in memory. */
   historyFile: string | null;
+  /** How requests are routed, by flow name. Ids no flow takes as an input run where they are served. */
+  flows: Record<string, Flow>;
+  /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
+  modelHeader: boolean;
+  /** `actions:`: what a flow step can set off beside routing, by name. */
+  actions: Record<string, Action>;
+  /** Where the console draws a topology node the operator has placed, by node id; the rest are laid out. */
+  layout: Record<string, { x: number; y: number }>;
   /** What this node calls itself when talking to peers. */
   name: string;
   listen: { host: string; port: number };
@@ -379,12 +469,12 @@ export class ConfigError extends Error {
   }
 }
 
-function bad(path: string | null, text: string): ConfigError {
+export function bad(path: string | null, text: string): ConfigError {
   return new ConfigError(path, path !== null && !text.startsWith(path) ? `${path} ${text}` : text);
 }
 
 /** Refuse a key this place does not take: a typo would otherwise load as the default, silently. */
-function only(rec: Record<string, unknown>, allowed: Scope | readonly string[], where: string): void {
+export function only(rec: Record<string, unknown>, allowed: Scope | readonly string[], where: string): void {
   const keys = typeof allowed === "string" ? Object.keys(FIELDS[allowed]) : allowed;
   for (const k of Object.keys(rec)) {
     if (keys.includes(k)) continue;
@@ -396,7 +486,7 @@ function only(rec: Record<string, unknown>, allowed: Scope | readonly string[], 
 /** `env:NAME` indirection, so tokens live in the environment and the config
  *  stays committable. A missing variable is fatal, because starting up with an
  *  empty token means every peer call 401s and nothing says why. */
-function resolveSecret(value: string, where: string): string {
+export function resolveSecret(value: string, where: string): string {
   if (!value.startsWith("env:")) return value;
   const name = value.slice(4);
   const got = process.env[name];
@@ -404,14 +494,14 @@ function resolveSecret(value: string, where: string): string {
   return got;
 }
 
-function asRecord(v: unknown, where: string): Record<string, unknown> {
+export function asRecord(v: unknown, where: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) {
     throw bad(where, "must be a mapping");
   }
   return v as Record<string, unknown>;
 }
 
-function str(v: unknown, where: string, fallback?: string): string {
+export function str(v: unknown, where: string, fallback?: string): string {
   if (v === undefined) {
     if (fallback !== undefined) return fallback;
     throw bad(where, "is required");
@@ -470,9 +560,175 @@ function declaredStats(raw: unknown, id: string): ModelStats | null {
  * `models.<id>.params`: flat request fields to stamp. `model`, `messages`, `stream` and `lane`
  * are refused, since stamping them breaks the request.
  */
-function modelParams(raw: unknown, id: string): Record<string, unknown> | null {
+/** `layout:`: a position per topology node id. Ids that no longer exist are kept and ignored. */
+function layoutDecl(raw: unknown): Record<string, { x: number; y: number }> {
+  const out: Record<string, { x: number; y: number }> = {};
+  for (const [id, v] of Object.entries(asRecord(raw ?? {}, "layout"))) {
+    const at = asRecord(v, `layout.${id}`);
+    only(at, ["x", "y"], `layout.${id}`);
+    out[id] = { x: num(at.x, `layout.${id}.x`, 0), y: num(at.y, `layout.${id}.y`, 0) };
+  }
+  return out;
+}
+
+const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, or a refusal. */
+function flowTo(raw: unknown, at: string): FlowTo {
+  if (typeof raw === "string" && raw.trim() !== "") return { model: raw.trim() };
+  const o = asRecord(raw, at);
+  only(o, ["model", "peer", "flow", "fastest", "refuse"], at);
+  const said = ["peer", "flow", "fastest", "refuse"].filter((k) => o[k] !== undefined);
+  if (said.length > 1 || (said.length === 1 && said[0] !== "peer" && o.model !== undefined)) {
+    throw bad(at, "must say one thing: a model, a peer, a flow, fastest or refuse");
+  }
+  if (o.refuse !== undefined) return { refuse: str(o.refuse, `${at}.refuse`) };
+  if (o.flow !== undefined) return { flow: str(o.flow, `${at}.flow`) };
+  if (o.fastest !== undefined) {
+    if (!Array.isArray(o.fastest) || o.fastest.length < 2) throw bad(`${at}.fastest`, "must list at least two places to choose between");
+    return {
+      fastest: o.fastest.map((e, i) => {
+        const end = flowTo(e, `${at}.fastest[${i}]`);
+        if ("flow" in end || "fastest" in end || "refuse" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
+        return end;
+      }),
+    };
+  }
+  if (o.peer !== undefined) return { peer: str(o.peer, `${at}.peer`), model: o.model === undefined ? null : str(o.model, `${at}.model`) };
+  return { model: str(o.model, `${at}.model`) };
+}
+
+/** A flow as hearth.yaml writes it: the shortest form of each step, with nothing that is only a default. */
+export function rawFlow(flow: Flow): Record<string, unknown> {
+  const end = (e: FlowEnd): unknown => ("peer" in e ? (e.model === null ? { peer: e.peer } : { peer: e.peer, model: e.model }) : e.model);
+  return {
+    ...(flow.note !== undefined ? { note: flow.note } : {}),
+    ...(flow.off ? { off: true } : {}),
+    ...(flow.sticky !== undefined ? { sticky: flow.sticky } : {}),
+    inputs: [...flow.inputs],
+    steps: flow.steps.map((s) => ({
+      ...(s.when !== null ? { when: s.when } : {}),
+      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to ? s.to : end(s.to),
+      ...(s.max !== undefined ? { max: s.max } : {}),
+      ...(s.lane !== null ? { lane: s.lane } : {}),
+      ...(s.params !== null ? { params: s.params } : {}),
+      ...(s.do.length > 0 ? { do: [...s.do] } : {}),
+    })),
+  };
+}
+
+/** Can this target be passed over when it cannot take the request? Only a peer can be down. */
+const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
+
+/** Check a `flows:` section against a running config, as loading the file would. */
+export function flowsFor(raw: unknown, cfg: HearthConfig, actions: Record<string, unknown> = cfg.actions): Record<string, Flow> {
+  return flowDecls(raw, cfg.scheduler.lanes, cfg.peers, actions);
+}
+
+/** `flows:`, checked whole: every name resolves, every flow ends in an answer, and none leads back to itself. */
+function flowDecls(
+  raw: unknown, lanes: Record<string, unknown>, peers: readonly PeerConfig[], actions: Record<string, unknown>,
+): Record<string, Flow> {
+  const flows: Record<string, Flow> = {};
+  const entry = new Map<string, string>();
+  const inLanes = (l: string, where: string) => {
+    if (!(l in lanes)) throw bad(where, `names lane "${l}", which is not in scheduler.lanes (${Object.keys(lanes).join(", ")})`);
+  };
+  for (const [name, v] of Object.entries(asRecord(raw ?? {}, "flows"))) {
+    const at = `flows.${name}`;
+    const decl = asRecord(v, at);
+    only(decl, "flow", at);
+    const inputs = strList(decl.inputs, `${at}.inputs`);
+    for (const id of inputs) {
+      const other = entry.get(id);
+      if (other !== undefined) throw bad(`${at}.inputs`, `names "${id}", which already enters flows.${other}`);
+      entry.set(id, name);
+    }
+    const rawSteps = decl.steps;
+    if (!Array.isArray(rawSteps) || rawSteps.length === 0) throw bad(`${at}.steps`, "must be a list of steps, the last one a bare `to:`");
+    const steps = rawSteps.map((r, i): FlowStep => {
+      const here = `${at}.steps[${i}]`;
+      const step = asRecord(r, here);
+      only(step, ["when", "to", "lane", "params", "do", "max"], here);
+      if (step.to === undefined) throw bad(`${here}.to`, "is required");
+      const to = flowTo(step.to, `${here}.to`);
+      let when: FlowWhen | null = null;
+      if (step.when !== undefined && step.when !== null) {
+        const w = asRecord(step.when, `${here}.when`);
+        only(w, WHEN_KEYS, `${here}.when`);
+        when = {};
+        for (const k of ["images", "tools", "warm", "free", "ready"] as const) if (w[k] !== undefined) when[k] = bool(w[k], `${here}.when.${k}`, false);
+        for (const k of ["tokensOver", "tokensUnder", "queuedUnder"] as const) if (w[k] !== undefined) when[k] = count(w[k], `${here}.when.${k}`, 0, k === "tokensOver" ? 0 : 1);
+        for (const k of ["asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "held", "down"] as const) if (w[k] !== undefined) when[k] = strList(typeof w[k] === "string" ? [w[k]] : w[k], `${here}.when.${k}`);
+        for (const l of [...(when.lane ?? []), ...(when.laneNot ?? [])]) inLanes(l, `${here}.when.lane`);
+        if (w.time !== undefined) {
+          const time = asRecord(w.time, `${here}.when.time`);
+          only(time, ["from", "to"], `${here}.when.time`);
+          when.time = { from: str(time.from, `${here}.when.time.from`), to: str(time.to, `${here}.when.time.to`) };
+          for (const k of ["from", "to"] as const) if (!CLOCK.test(when.time[k])) throw bad(`${here}.when.time.${k}`, "must be a time of day as HH:MM, like 22:00");
+        }
+        for (const p of when.down ?? []) if (!peers.some((x) => x.name === p)) throw bad(`${here}.when.down`, `names "${p}", which is not a peer you borrow from (one with a url)`);
+        if (w.idle !== undefined) {
+          const idle = asRecord(w.idle, `${here}.when.idle`);
+          only(idle, ["model", "ms"], `${here}.when.idle`);
+          when.idle = { model: idle.model === undefined ? null : str(idle.model, `${here}.when.idle.model`), ms: atLeast(idle.ms, `${here}.when.idle.ms`, 0, 0) };
+          if (idle.ms === undefined) throw bad(`${here}.when.idle.ms`, "is required: how long it must have been idle, in ms");
+        }
+        const ownTarget = when.warm !== undefined || when.free !== undefined || when.queuedUnder !== undefined || when.ready !== undefined || when.idle?.model === null;
+        if (ownTarget && !("model" in to)) {
+          throw bad(`${here}.when`, "tests warm, free, queuedUnder, ready or idle, which read a model or a peer — this step goes somewhere else (give idle a model)");
+        }
+        if (Object.keys(when).length === 0) when = null;
+      }
+      const last = i === rawSteps.length - 1;
+      const max = step.max === undefined ? undefined : count(step.max, `${here}.max`, 1);
+      if (last && max !== undefined) throw bad(`${here}.max`, "cannot be set on the last step, which must always apply");
+      if (last && (when !== null || skippable(to))) {
+        throw bad(`${at}.steps`, "must end with a step that always applies: no `when`, and somewhere that can always answer (a model, a flow or refuse)");
+      }
+      if (!last && when === null && max === undefined && !skippable(to)) throw bad(here, "has no `when`, so the steps after it can never be reached");
+      for (const end of "fastest" in to ? to.fastest : "peer" in to ? [to] : []) {
+        if (!("peer" in end)) continue;
+        const peer = peers.find((x) => x.name === end.peer);
+        if (!peer) throw bad(`${here}.to`, `names peer "${end.peer}", which is not a peer you borrow from (one with a url)`);
+        for (const id of end.model === null ? inputs : [end.model]) {
+          if (peer.models[id] === undefined) throw bad(`${here}.to`, `sends "${id}" to ${end.peer}, which does not map it — add it to peers.${end.peer}.models`);
+        }
+      }
+      const lane = str(step.lane, `${here}.lane`, "");
+      if (lane !== "") inLanes(lane, `${here}.lane`);
+      const doing = step.do === undefined ? [] : strList(typeof step.do === "string" ? [step.do] : step.do, `${here}.do`);
+      for (const a of doing) if (!(a in actions)) throw bad(`${here}.do`, `names action "${a}", which is not under actions:`);
+      return { when, to, lane: lane === "" ? null : lane, params: modelParams(step.params, name, `${here}.params`), do: doing, ...(max !== undefined ? { max } : {}) };
+    });
+    flows[name] = {
+      inputs, steps,
+      ...(bool(decl.off, `${at}.off`, false) ? { off: true as const } : {}),
+      ...(str(decl.note, `${at}.note`, "") !== "" ? { note: str(decl.note, `${at}.note`) } : {}),
+      ...(decl.sticky !== undefined ? { sticky: atLeast(decl.sticky, `${at}.sticky`, 0, 1000) } : {}),
+    };
+  }
+  for (const [name, flow] of Object.entries(flows)) {
+    flow.steps.forEach((step, i) => {
+      if ("flow" in step.to && flows[step.to.flow] === undefined) {
+        throw bad(`flows.${name}.steps[${i}].to`, `names flow "${step.to.flow}", which is not under flows:`);
+      }
+    });
+    const walk = (at: string, seen: string[]): void => {
+      for (const step of flows[at]!.steps) {
+        if (!("flow" in step.to)) continue;
+        if (step.to.flow === name) throw bad(`flows.${name}`, `leads back to itself: ${[...seen, at, name].join(" → ")}`);
+        if (!seen.includes(step.to.flow)) walk(step.to.flow, [...seen, at]);
+      }
+    };
+    walk(name, []);
+  }
+  return flows;
+}
+
+function modelParams(raw: unknown, id: string, where = `models.${id}.params`): Record<string, unknown> | null {
   if (raw === undefined || raw === null) return null;
-  const where = `models.${id}.params`;
   const rec = asRecord(raw, where);
   for (const k of ["model", "messages", "stream", "lane"]) {
     if (k in rec) {
@@ -712,6 +968,19 @@ function trimUrl(u: string, where: string): string {
   return u.replace(/\/+$/, "");
 }
 
+/** A backend's address: its own `url`, else `http://<its server's host>:<port>`. */
+function backendUrl(entry: Record<string, unknown>, at: string, host: string | null): string {
+  if (entry.url !== undefined) {
+    if (entry.port !== undefined) throw bad(`${at}.port`, "is set beside url — keep one: url already carries a port");
+    return trimUrl(str(entry.url, `${at}.url`), `${at}.url`);
+  }
+  if (entry.port === undefined) throw bad(`${at}.url`, "is required, or set server and port");
+  if (host === null) throw bad(`${at}.port`, "needs server: a port alone says nothing about which machine");
+  const port = count(entry.port, `${at}.port`, 0, 1);
+  // A bare IPv6 address takes brackets in a URL.
+  return `http://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
+}
+
 /** Peers a route may use that map `id`, in preference order; an empty `named` means every peer. */
 export function peersMapping(id: string, named: readonly string[], peers: readonly PeerConfig[]): string[] {
   const order = named.length > 0 ? named : peers.map((p) => p.name);
@@ -877,15 +1146,32 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
   }
 
+  const servers: Record<string, ServerDecl> = {};
+  for (const [name, raw] of Object.entries(asRecord(root.servers ?? {}, "servers"))) {
+    const at = `servers.${name}`;
+    const entry = asRecord(raw, at);
+    only(entry, "server", at);
+    const host = str(entry.host, `${at}.host`).trim();
+    if (host === "" || /[\s/]/.test(host)) {
+      throw bad(`${at}.host`, `must be an IP or hostname with no scheme, port or path (got ${JSON.stringify(host)})`);
+    }
+    servers[name] = { host };
+  }
+
   const backends: BackendConfig[] = [];
   if (root.backends === undefined) throw bad("backends", "is required: name at least one server for hearth to front");
   for (const [name, b] of Object.entries(asRecord(root.backends, "backends"))) {
     const at = `backends.${name}`;
     const entry = asRecord(b, at);
     only(entry, "backend", at);
+    const server = str(entry.server ?? "", `${at}.server`) || null;
+    if (server !== null && servers[server] === undefined) {
+      throw bad(`${at}.server`, `names "${server}", which is not in servers`);
+    }
     backends.push({
       name,
-      url: trimUrl(str(entry.url, `${at}.url`), `${at}.url`),
+      url: backendUrl(entry, at, server === null ? null : servers[server]!.host),
+      server,
       kind: warmSource(entry, at),
       serves: strList(entry.serves, `${at}.serves`),
       concurrency: count(entry.concurrency, `${at}.concurrency`, defaultConcurrency, 1),
@@ -917,6 +1203,23 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
   }
   const backendNames = new Set(backends.map((b) => b.name));
+  // One card is in one machine: backends taking turns for it from two would arbitrate nothing real.
+  const cardOn = new Map<string, BackendConfig>();
+  for (const b of backends) {
+    for (const r of b.resources) {
+      if (resourceDecls[r]?.shared) continue;
+      const first = cardOn.get(r);
+      if (first === undefined) cardOn.set(r, b);
+      else if (first.server !== b.server) {
+        const on = (x: BackendConfig) => (x.server === null ? "this machine" : `server "${x.server}"`);
+        throw new ConfigError(
+          "backends",
+          `backends "${first.name}" (${on(first)}) and "${b.name}" (${on(b)}) both use ${r} — ` +
+            `hardware on two machines needs two names`,
+        );
+      }
+    }
+  }
   // A resident on shared hardware (or none) would never be asked to yield, which is its only job.
   for (const b of backends) {
     if (b.resident && !b.resources.some((r) => !resourceDecls[r]?.shared)) {
@@ -1046,13 +1349,15 @@ export function parseConfig(raw: unknown): HearthConfig {
       models: map,
     });
   }
-  const names = new Set(peers.map((p) => p.name));
 
   const models: Record<string, ModelRoute> = {};
   const modelsRaw = root.models === undefined ? {} : asRecord(root.models, "models");
   const notes: Record<string, string> = {};
   for (const [id, v] of Object.entries(modelsRaw)) {
     const entry = asRecord(v, `models.${id}`);
+    for (const k of MOVED_TO_FLOWS) {
+      if (entry[k] !== undefined) throw bad(`models.${id}.${k}`, "is routing, which now lives under flows: — run `hearth migrate` to rewrite this file, with a backup");
+    }
     only(entry, "model", `models.${id}`);
     if (entry.note !== undefined) {
       const note = str(entry.note, `models.${id}.note`).trim();
@@ -1061,26 +1366,6 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
     // A note alone describes a model; it is not a route.
     if (entry.note !== undefined && Object.keys(entry).length === 1) continue;
-    const policy = str(entry.policy, `models.${id}.policy`, "local") as RoutePolicy;
-    if (!["local", "peer", "spillover", "fastest"].includes(policy)) {
-      throw bad(`models.${id}.policy`, `is "${policy}" — expected local, peer, spillover or fastest`);
-    }
-    const named = strList(entry.peers, `models.${id}.peers`);
-    for (const n of named) {
-      if (!names.has(n)) {
-        throw bad(`models.${id}.peers`, `names "${n}", which is not a peer you borrow from (one with a url)`);
-      }
-    }
-    // Catching it here instead of at request time is the reason this validation
-    // exists at all. A policy that can never fire is a typo.
-    if (policy !== "local") {
-      if (peersMapping(id, named, peers).length === 0) {
-        throw bad(
-          `models.${id}.policy`, `is "${policy}" but no peer maps "${id}" — ` +
-            `add it to a peer's models mapping, or set policy: local`,
-        );
-      }
-    }
     const pinned = str(entry.backend, `models.${id}.backend`, "");
     if (pinned !== "" && !backendNames.has(pinned)) {
       throw bad(
@@ -1101,7 +1386,6 @@ export function parseConfig(raw: unknown): HearthConfig {
     if (emulate !== "" && !(EMULATIONS as readonly string[]).includes(emulate)) {
       throw bad(`models.${id}.emulate`, `is "${emulate}"; known: ${EMULATIONS.join(", ")}`);
     }
-    const whenHeld = str(entry.whenHeld, `models.${id}.whenHeld`, "");
     const lane = str(entry.lane, `models.${id}.lane`, "");
     if (lane !== "" && !(lane in lanes)) {
       throw bad(
@@ -1113,14 +1397,9 @@ export function parseConfig(raw: unknown): HearthConfig {
       backend: pinned === "" ? null : pinned,
       as: alias === "" ? null : alias,
       follow,
-      policy,
-      peers: named,
-      spilloverAt: count(entry.spilloverAt, `models.${id}.spilloverAt`, 1, 1),
-      fallbackLocal: bool(entry.fallbackLocal, `models.${id}.fallbackLocal`, true),
       concurrency: modelConcurrency(entry, id),
       params,
       lane: lane === "" ? null : lane,
-      whenHeld: whenHeld === "" ? null : whenHeld,
       stats: declaredStats(entry.stats, id),
       emulate: emulate === "" ? null : (emulate as Emulation),
       pool: modelPool(entry.pool, id),
@@ -1130,18 +1409,6 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
     if (entry.videoTokens !== undefined) {
       models[id].videoTokens = count(entry.videoTokens, `models.${id}.videoTokens`, 1);
-    }
-  }
-
-  // Checked once every model is known: a target that is itself redirected would make the answer depend on order.
-  for (const [id, route] of Object.entries(models)) {
-    if (route.whenHeld === null) continue;
-    const to = models[route.whenHeld];
-    if (route.whenHeld === id || to === undefined) {
-      throw bad(`models.${id}.whenHeld`, `is "${route.whenHeld}", which is not another id under models:`);
-    }
-    if (to.whenHeld !== null) {
-      throw bad(`models.${id}.whenHeld`, `names "${route.whenHeld}", which has a whenHeld of its own -- name the id the request should end up on`);
     }
   }
 
@@ -1170,6 +1437,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     operator = { user, passHash };
   }
 
+  const actions = actionDecls(root.actions);
   // A removed key is refused, not ignored: ignoring it would close the page's port with no word why.
   return {
     name: str(root.name, "name", "hearth"),
@@ -1177,8 +1445,13 @@ export function parseConfig(raw: unknown): HearthConfig {
     configPath: null,
     stateFile: str(root.stateFile, "stateFile", "") || null,
     historyFile: str(root.historyFile, "historyFile", "") || null,
+    layout: layoutDecl(root.layout),
+    modelHeader: bool(root.modelHeader, "modelHeader", true),
+    flows: flowDecls(root.flows, lanes, peers, actions),
+    actions,
     listen: mainListen,
     resources: resourceDecls,
+    servers,
     backends,
     scheduler: {
       concurrency: defaultConcurrency,

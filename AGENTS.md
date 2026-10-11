@@ -9,10 +9,15 @@ comment is read by strangers. Write for them.
 - `src/scheduler.ts`, `src/pool.ts`, `src/resources.ts`: admission, per-backend
   queues, shared hardware
 - `src/route.ts`, `src/peers.ts`: local vs peer routing, peer health
+- `src/actions.ts`: what a flow step can set off beside routing; one entry
+  per kind
 - `src/config.ts`, `src/fields.ts`, `src/configfile.ts`: parsing, the settings
   table, live edits to hearth.yaml
 - `src/kinds.ts`: what each backend `kind` supports
-- `src/console/`: the React status page and config editor (built to `dist/`)
+- `src/console/`: the React status page and config editor (built to `dist/`).
+  The routing map is `Routing.tsx` (layout), `flowNodes.tsx` (one view per
+  kind of node) and `draft.ts` (`NODES`: what drawing a line from or onto each
+  kind changes in the file)
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 
