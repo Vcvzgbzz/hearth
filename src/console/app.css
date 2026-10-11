@@ -81,7 +81,7 @@ body {
 .react-flow__handle { opacity: 0; pointer-events: none; }
 /* An outlet of a routing node: drag from it to say where that branch sends work. */
 .react-flow__node-flow .react-flow__handle-right, .react-flow__node-fastest .react-flow__handle-right,
-.react-flow__node-hub .react-flow__handle-right, .react-flow__node-caller .react-flow__handle-right { opacity: 1; pointer-events: all; cursor: crosshair; }
+.react-flow__node-hub .react-flow__handle-right, .react-flow__node-caller .react-flow__handle-left { opacity: 1; pointer-events: all; cursor: crosshair; }
 .react-flow__node-flow .react-flow__handle-left.target, .react-flow__node-fastest .react-flow__handle.target,
 .react-flow__node-refuse .react-flow__handle.target { opacity: 1; }
 .react-flow__connection-path { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 6 5; }

@@ -64,7 +64,7 @@ const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
         <span className="ml-auto"><Dot tone={data.busy ? "accent" : "info"} pulse={data.busy} /></span>
       </div>
       <div className="mt-0.5 truncate text-[11px] text-dim">{data.name === "local" ? "this machine" : "api key"} · {data.router === null ? "default rules" : `router ${data.router}`}</div>
-      <Handle type="source" position={Position.Right} isConnectable={data.editable} style={{ right: -6 }}
+      <Handle type="source" position={Position.Left} isConnectable={data.editable} style={{ left: -6 }}
               className={cx("!h-3.5 !w-3.5 !border-2 !border-panel", data.router === null ? "!bg-info" : "!bg-accent", !data.editable && "!pointer-events-none")} />
     </div>
   );
@@ -141,7 +141,22 @@ const GhostNode = memo(function GhostNode({ data }: NodeProps<Node<Ghost>>) {
   );
 });
 
-const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode, caller: CallerNode };
+/** This node as the frame its callers stand in: requests arrive here from them, and go on to a router. */
+type Home = { title: string; sub: string; selected?: boolean };
+
+const HomeNode = memo(function HomeNode({ data }: NodeProps<Node<Home>>) {
+  return (
+    <div className={cx("h-full w-full rounded-3xl border bg-panel/40", data.selected ? "border-accent ring-2 ring-accent/25" : "border-line")}>
+      <div className="px-4 pt-2.5 text-[12px]">
+        <div className="flex items-center gap-2"><Flame size={13} className="shrink-0 text-accent" /><span className="truncate font-semibold">{data.title}</span></div>
+        <div className="truncate text-[11px] text-dim">{data.sub} · requests from</div>
+      </div>
+      <Handle type="source" id="down" position={Position.Bottom} isConnectable={false} />
+    </div>
+  );
+});
+
+const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode, caller: CallerNode, home: HomeNode };
 
 type Pulse = { key: string; back: boolean; t: number };
 /** `wire`: a route, drawn to be followed. `lit`: the way a tried request takes, or the line under the pointer. */
@@ -233,6 +248,9 @@ export const edgeTypes = { flow: FlowEdge };
 
 const W = 200;
 const H = 64;
+/** How tall a caller's card is drawn, and the head of the frame the callers stand in. */
+const CALLER = 54;
+const HOME = 56;
 const GAP = 12;
 /** A hardware group: the padding around its backends and the height of its title. */
 const PAD = 14;
@@ -384,12 +402,16 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
     });
     edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local) } });
   }
-  nodes.unshift({
+  const load = `${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`;
+  // With its callers known, this node is the frame they stand in, over the router their requests go on to.
+  const home = router && who ? who.callers.length : 0;
+  const tall = HOME + home * (CALLER + GAP) - GAP + PAD;
+  nodes.unshift(home ? {
+    id: "self", type: "home", position: { x: X.self - PAD, y: mid - H / 2 - 56 - tall }, style: { width: W + PAD * 2, height: tall },
+    data: { title: self.name, sub: load, selected: is("self", self.name) } satisfies Home,
+  } : {
     id: "self", type: "card", position: { x: X.self, y: mid - H / 2 - (router ? H + 56 : 0) },
-    data: {
-      title: self.name, icon: <Flame size={14} className="text-accent" />, tone: "accent", selected: is("self", self.name),
-      sub: `${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`,
-    } satisfies Card,
+    data: { title: self.name, icon: <Flame size={14} className="text-accent" />, tone: "accent", selected: is("self", self.name), sub: load } satisfies Card,
   });
 
   // Each peer gets a block tall enough for its offer: linked models first, then what is only on offer.
@@ -418,12 +440,11 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
         } satisfies Card,
       });
     });
-    // Callers stand over the peers, each with a line to the router its requests go by.
-    const base = Math.min(py, mid - H / 2) - 40;
+    // Each caller stands inside this node's frame, with a line to the router its requests go by.
     who.callers.forEach((c, i) => {
       const own = names.find((n) => who.routers[n]!.callers.includes(c)) ?? null;
       const jobs = d.q.jobs.filter((j) => j.state === "running" && (j.caller === c || j.caller === `key:${c}`)).map((j) => j.id);
-      nodes.push({ id: `caller:${c}`, type: "caller", position: { x: X.peer, y: base - (who.callers.length - i) * (H + GAP) }, data: { name: c, router: own, busy: jobs.length > 0, editable: true } satisfies Caller });
+      nodes.push({ id: `caller:${c}`, type: "caller", parentId: "self", extent: "parent" as const, position: { x: PAD, y: HOME + i * (CALLER + GAP) }, data: { name: c, router: own, busy: jobs.length > 0, editable: true } satisfies Caller });
       edges.push({
         id: `e:caller:${c}`, source: `caller:${c}`, target: own === null ? "router" : `router:${own}`, type: "flow",
         data: { jobs, pulses: pulsesFor(`e:caller:${c}`, jobs), color: own === null ? "var(--info)" : "var(--accent)" },

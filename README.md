@@ -1458,9 +1458,9 @@ setting for testing a model without wondering whether something else answered.
 A step's `max`, a flow's `sticky` and the line counts are kept by flow name, so
 two routers with a flow of the same name share them; only `flows:` is counted.
 
-The Topology page draws each caller (every labelled api key, and `local`) with
-a line to the router its requests go by, and each router under the default
-one. Drag a caller's dot onto a router to give it that rulebook, or onto the
+The Topology page draws this node as a frame with its callers inside (every
+labelled api key, and `local`), each with a line to the router its requests go
+by, and each router under the default one. Drag a caller's dot onto a router to give it that rulebook, or onto the
 default router to take it back; the change joins the routing draft and is
 published from the Routing page. Clicking a router opens its rules there.
 
