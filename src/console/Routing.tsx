@@ -18,7 +18,7 @@ import { useStore } from "./store.js";
 type Editing = { /** The router whose rules these are; null for the default one. */ router: string | null; /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
 
 /** Widths and heights the layout steps by. A node drawn beside a rule is `SIDE` tall, plus a row per place for a fastest-of. */
-const RULE = { width: 570, head: 36, row: 32 };
+const RULE = { width: 640, head: 36, row: 32 };
 const SIDE = { refuse: 66, fastest: 70, place: 28, action: 70 };
 const GAP = 24;
 

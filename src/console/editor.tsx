@@ -554,7 +554,7 @@ function Lines({ name, flow }: { name: string; flow: Doc }) {
         return (
           <div key={i} className="rounded-lg border border-line bg-bg/40 p-2.5">
             <div className="flex items-start gap-2">
-              <span className="pt-1 text-[12px] font-medium">{i === last ? "Otherwise" : "If"}</span>
+              <span className="pt-1 text-[12px] font-medium">{i === last ? "Otherwise" : i === 0 ? "If" : "Else if"}</span>
               {i < last && <div className="min-w-0 flex-1 pt-0.5 text-[12px]"><Conds when={obj(r.when)} models={refs.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (x) => ({ ...x, when: w }))} /></div>}
               {i < last && (
                 <span className="ml-auto flex shrink-0 gap-1 pt-1 text-dim">
