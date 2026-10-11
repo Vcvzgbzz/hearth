@@ -1946,7 +1946,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const rules = rulesFor(who).flows;
       const taker = Object.values(rules).find((f) => !f.off && f.takes?.includes(held?.path ?? pathname));
       const name = held?.name ?? viaBody ?? taker?.inputs[0] ?? routed!.rule.model;
-      const r = resolve(name, worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined));
+      const r = resolve(name, { ...worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined), path: held?.path ?? pathname });
       const refuse = (status: number, why: string) => fail(res, new Refusal(status, why, status === 404 ? "invalid_request_error" : "server_error"));
       if (r.unlisted) return refuse(404, r.reason);
       // A type that says which paths it takes is not offered on any other.
@@ -1962,6 +1962,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           routed = pool.forPath(pathname);
           if (!routed) return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${held.path}`);
         } else if (viaBody !== undefined && body) {
+          // The model the flow picked has to be one this path can run: its backend's own, or its fallback's.
+          const spare = routed!.rule.fallback ? pool.get(routed!.rule.fallback.backend) : undefined;
+          if (!pool.owns(routed!.slot, r.model) && !(spare && pool.owns(spare, r.model))) {
+            return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${pathname}`);
+          }
           viaBody = r.model;
           body = isForm ? replaceMultipartField(body, contentType, "model", r.model) ?? body : withModel(body, r.model) ?? body;
         } else if (r.model !== routed!.rule.model) {

@@ -730,4 +730,52 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   backend.close();
 }
 
+// --- one type over several paths ------------------------------------------------------------------------
+// A step can test which path the request arrived on, and a model a flow picks that the path cannot run is refused.
+{
+  const got: unknown[] = [];
+  const backend = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      try { if (req.method === "POST") got.push((JSON.parse(Buffer.concat(chunks).toString()) as { model?: unknown }).model); } catch { /* no body */ }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+  });
+  await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
+  const both = ["/v1/embeddings", "/v1/rerank"];
+  const shape = (first: string) => ({
+    backends: {
+      embed: { url, kind: "none", serves: ["emb"], routes: [{ path: "/v1/embeddings", model: "emb", lane: "chat" }] },
+      rank: { url, kind: "none", serves: ["rk"], routes: [{ path: "/v1/rerank", model: "rk", lane: "chat" }] },
+    },
+    scheduler: { lanes: { chat: { priority: 0 } } },
+    flows: {
+      Utility: { takes: both, inputs: ["Utility"], steps: [{ when: { path: first }, to: "emb" }, { when: { path: ["/v1/rerank"] }, to: "rk" }, { to: { refuse: "no" } }] },
+      Pick: { takes: both, inputs: ["Pick"], steps: [{ when: { variant: "e" }, to: "emb" }, { to: "rk" }] },
+      rest: { inputs: ["*"], steps: [{ to: { refuse: "not offered" } }] },
+    },
+  });
+  assert.throws(() => parseConfig(shape("/v1/nowhere")), /when\.path names "\/v1\/nowhere", which no backend declares under routes/);
+  const node = createNode(parseConfig(shape("/v1/embeddings")), silentLogger);
+  const at = await new Promise<string>((ready) =>
+    node.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(node.server.address() as AddressInfo).port}`)));
+  const post = async (path: string, model: string) => { const r = await fetch(`${at}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, input: "x" }) }); return { status: r.status, text: await r.text() }; };
+
+  // The same name runs as a different model on each path it arrives on.
+  assert.deepEqual([(await post("/v1/embeddings", "Utility")).status, got.at(-1)], [200, "emb"]);
+  assert.deepEqual([(await post("/v1/rerank", "Utility")).status, got.at(-1)], [200, "rk"]);
+  // A variant that picks a model the path cannot run is refused, and nothing is sent in its place.
+  assert.deepEqual([(await post("/v1/embeddings", "Pick:e")).status, got.at(-1)], [200, "emb"]);
+  const sent = got.length;
+  const wrong = await post("/v1/rerank", "Pick:e");
+  assert.deepEqual([wrong.status, got.length], [503, sent]);
+  assert.match(wrong.text, /Pick:e is not being run: its flow sends it to emb, which does not answer \/v1\/rerank/);
+  await node.close();
+  backend.closeAllConnections();
+  backend.close();
+}
+
 console.log("flows.test.ts ok");

@@ -191,6 +191,8 @@ export interface FlowWhen {
    * type `ImageGen` in its `realism` variant. A request with no variant matches none of these.
    */
   variant?: string[];
+  /** The path the request arrived on is one of these, each as a backend declares it under `routes:`. A chat request matches none. */
+  path?: string[];
   /** The opposite of `asked`, `caller` and `lane`: none of these. */
   askedNot?: string[];
   callerNot?: string[];
@@ -592,7 +594,7 @@ function layoutDecl(raw: unknown): Record<string, { x: number; y: number }> {
   return out;
 }
 
-const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
+const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "path", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, or a refusal. */
@@ -750,8 +752,9 @@ function flowDecls(
         when = {};
         for (const k of ["images", "tools", "warm", "free", "ready"] as const) if (w[k] !== undefined) when[k] = bool(w[k], `${here}.when.${k}`, false);
         for (const k of ["tokensOver", "tokensUnder", "queuedUnder"] as const) if (w[k] !== undefined) when[k] = count(w[k], `${here}.when.${k}`, 0, k === "tokensOver" ? 0 : 1);
-        for (const k of ["variant", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "held", "down"] as const) if (w[k] !== undefined) when[k] = strList(typeof w[k] === "string" ? [w[k]] : w[k], `${here}.when.${k}`);
+        for (const k of ["variant", "path", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "held", "down"] as const) if (w[k] !== undefined) when[k] = strList(typeof w[k] === "string" ? [w[k]] : w[k], `${here}.when.${k}`);
         for (const l of [...(when.lane ?? []), ...(when.laneNot ?? [])]) inLanes(l, `${here}.when.lane`);
+        for (const p of when.path ?? []) if (!routed.includes(p)) throw bad(`${here}.when.path`, `names "${p}", which no backend declares under routes: (${routed.join(", ") || "none"})`);
         for (const v of when.variant ?? []) if (v === "" || v.includes(":")) throw bad(`${here}.when.variant`, `names "${v}": a variant is a plain word, asked for as <name>:<variant>`);
         if (w.time !== undefined) {
           const time = asRecord(w.time, `${here}.when.time`);

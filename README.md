@@ -1295,6 +1295,7 @@ as named, so `to: chat-model` inside the flow that takes `chat-model` means
 | `images: true` / `tools: true` | the request carries images / tool definitions (`false` for the opposite) |
 | `tokensOver: n` / `tokensUnder: n` | the estimated prompt plus reserved output is over / under `n` |
 | `variant: [name]` | the name was asked for in one of these variants: `LLM:fast` is the type `LLM` in its `fast` variant. See [Types](#types) |
+| `path: [path]` | the request arrived on one of these paths, each as a backend declares it under `routes:`. A chat request matches none. Lets one type run a different model on each path it takes |
 | `asked: [id]` | the client asked for one of these ids |
 | `caller: [name]` | the request came with the api key labelled `name`, or `local` for loopback without a key |
 | `lane: [name]` | the request is in one of these lanes |
@@ -1413,6 +1414,26 @@ and `/v1/models` lists each beside its type. A variant no step tests is not
 offered, so a mistyped one is refused with the ones that exist and never
 quietly answered as the plain type. A name a flow takes as written is itself,
 colon and all.
+
+**A type can span several paths.** `takes:` may list more than one, and a step
+tests which the request arrived on with `path:`:
+
+```yaml
+flows:
+  Utility:
+    takes: ["/v1/embeddings", "/v1/rerank"]
+    inputs: [Utility]
+    steps:
+      - when: { path: ["/v1/embeddings"] }
+        to: my-embedder
+      - when: { path: ["/v1/rerank"] }
+        to: my-reranker
+      - to: { refuse: "nothing answers that here" }
+```
+
+A model a flow picks has to be one the path can run: one its backend serves, or
+its route's `fallback` backend does. Otherwise the request is refused with a
+503 naming both, and nothing runs in its place.
 
 **A different operation is a different type.** Editing an image arrives on
 another path than generating one, so it is `ImageEdit` with its own `takes`. A

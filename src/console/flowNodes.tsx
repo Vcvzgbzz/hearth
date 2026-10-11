@@ -27,6 +27,7 @@ export const CONDS: Cond[] = [
   { key: "tokensOver", kind: "num", before: "the prompt is over", after: "tokens", seed: 8000, about: "the request" },
   { key: "tokensUnder", kind: "num", before: "the prompt is under", after: "tokens", seed: 8000, about: "the request" },
   { key: "variant", kind: "list", before: "the variant is", hint: "e.g. realism, for Name:realism", about: "the request" },
+  { key: "path", kind: "list", before: "the path is", hint: "e.g. /v1/embeddings", about: "the request" },
   { key: "asked", kind: "list", before: "they asked for", hint: "model names", about: "the request" },
   { key: "askedNot", kind: "list", before: "they did not ask for", hint: "model names", about: "the request" },
   { key: "caller", kind: "list", before: "the caller is", hint: "key label, or local", about: "the request" },

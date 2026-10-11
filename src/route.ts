@@ -31,6 +31,8 @@ export interface World {
   need?: Need;
   caller: string;
   lane: string;
+  /** The path the request arrived on, as a backend declares it; absent for chat. */
+  path?: string;
   /** Load on the backend that serves a model here. */
   local: (model: string) => LocalLoad;
   /** Is this model's hardware held against this lane? */
@@ -224,6 +226,7 @@ export function resolve(named: string, w: World): Resolution {
     && (c.tokensUnder === undefined || need.tokens < c.tokensUnder)
     && (c.asked === undefined || c.asked.includes(asked))
     && (c.variant === undefined || (variant !== null && c.variant.includes(variant)))
+    && (c.path === undefined || (w.path !== undefined && c.path.includes(w.path)))
     // A key's caller is `key:<label>`; a step names the label.
     && (c.caller === undefined || c.caller.some((n) => n === w.caller || `key:${n}` === w.caller))
     && (c.lane === undefined || c.lane.includes(lane))
