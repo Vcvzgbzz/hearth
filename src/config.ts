@@ -661,8 +661,8 @@ export const DEFAULT_ROUTER = "default";
 
 /**
  * `routers.<name>`: a rulebook used in place of `flows:` for the callers `callers:` gives it.
- * `strict` also switches off a backend route's own fallback for them, so a request runs where
- * its rule says or fails.
+ * `strict` switches off a flow's next line after a failure and a backend route's own fallback
+ * for them, so a request runs where its line says or fails.
  */
 export interface Router {
   strict: boolean;

@@ -778,4 +778,51 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   backend.close();
 }
 
+// --- a rule that takes a path survives a failed backend as a chat rule does ----------------------------
+// When the backend a line chose fails before anything reaches the client, the flow's next line that
+// ends at a model this path can run takes the request; a line may name a model on another backend.
+{
+  const got: unknown[] = [];
+  const backend = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      try { if (req.method === "POST") got.push((JSON.parse(Buffer.concat(chunks).toString()) as { model?: unknown }).model); } catch { /* no body */ }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
+  const lines = [{ when: { variant: "fast" }, to: "speak" }, { to: "speak-cpu" }];
+  const node = createNode(parseConfig({
+    apiKeys: [{ key: "k-app", label: "app" }, { key: "k-test", label: "tester" }],
+    backends: {
+      // Nothing listens here, and its route names no fallback: only the flow can save a request sent to it.
+      gpu: { url: "http://127.0.0.1:1", kind: "none", serves: ["voice"], routes: [{ path: "/v1/audio/speech", model: "voice", lane: "chat" }] },
+      cpu: { url, kind: "none" },
+    },
+    models: { speak: { backend: "gpu", as: "voice" }, "speak-cpu": { backend: "cpu", as: "voice" } },
+    scheduler: { lanes: { chat: { priority: 0 } } },
+    flows: { TTS: { takes: "/v1/audio/speech", inputs: ["TTS"], steps: lines }, rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] } },
+    routers: { direct: { strict: true, flows: { TTS: { takes: "/v1/audio/speech", inputs: ["TTS"], steps: lines }, rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] } } } },
+    callers: { tester: "direct" },
+  }), silentLogger);
+  const at = await new Promise<string>((ready) =>
+    node.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(node.server.address() as AddressInfo).port}`)));
+  const post = async (key: string, model: string) => (await fetch(`${at}/v1/audio/speech`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, input: "x" }) })).status;
+
+  // A line that names a model on another backend runs there, under the id that backend knows it by.
+  assert.deepEqual([await post("k-app", "TTS"), got.at(-1)], [200, "voice"]);
+  // The first line's backend is down: the next line takes it.
+  const before = got.length;
+  assert.deepEqual([await post("k-app", "TTS:fast"), got.length], [200, before + 1]);
+  // A strict router's callers get the model the line names, or its failure.
+  assert.ok((await post("k-test", "TTS:fast")) >= 500);
+  assert.equal(got.length, before + 1, "and nothing ran in its place");
+  await node.close();
+  backend.closeAllConnections();
+  backend.close();
+}
+
 console.log("flows.test.ts ok");

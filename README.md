@@ -176,7 +176,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
-| `routers.<name>` | none | A rulebook besides `flows:`: `flows` in the same shape, and `strict: true` to switch off backend route fallbacks for its callers. See [Routers](#routers). |
+| `routers.<name>` | none | A rulebook besides `flows:`: `flows` in the same shape, and `strict: true` so a request runs on the model its line names or fails. See [Routers](#routers). |
 | `callers.<who>` | none | Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default`. |
 | `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](#editing-on-the-graph); nodes without one are laid out |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](#flows) |
@@ -1338,6 +1338,13 @@ the request runs there instead. With nowhere else to send it, the backend's
 own answer is relayed as it always was. A request already streaming its queue
 position stays where it is.
 
+A flow that `takes` a path survives the same way: its next line that ends at a
+model the path can run takes the request, and after the last of those the
+route's own `fallback`. A line may name a model on another backend when that
+backend declares the same path, or declares none. A path with the model in it
+(`/upstream/{model}/...`) is matched to its backend by that name and is not
+asked again.
+
 `sticky: 1800000` on a flow keeps a conversation where its first turn went: a
 later turn (one that carries an assistant message) goes to the same model or
 peer for that long, whatever the steps would say now, as long as that place
@@ -1485,8 +1492,10 @@ rules in `flows:` would have done with it, and nothing else is offered to it.
 A caller is listed its own router's names on `/v1/models`. Each router needs its
 own flow for `*`, as `flows:` does, and none may be called `default`.
 
-`strict: true` also switches off a backend route's `fallback` for a router's
-callers, so a request runs on the model its rule names or fails. That is the
+`strict: true` switches off every way a request can end up somewhere else for
+a router's callers: a flow's next line after a failure, on chat and on paths,
+and a backend route's `fallback`. A request runs on the model its line names or
+fails. That is the
 setting for testing a model without wondering whether something else answered.
 
 A step's `max`, a flow's `sticky` and the line counts are kept by flow name, so

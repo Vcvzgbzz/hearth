@@ -754,7 +754,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const failed = new Set<string>();
       let why = decision.reason;
       for (;;) {
-        const spare = (): ReturnType<typeof resolve> => resolve(asked, { ...world, noPeers: true, skip: new Set([...failed, model]) });
+        // A strict router's callers get the model its line names or its failure, so for them nothing is left to ask for.
+        const spare = (): ReturnType<typeof resolve> => (routerOf(caller)?.strict
+          ? { ...decision, target: "unavailable" as const, reason: "its router never falls back" }
+          : resolve(asked, { ...world, noPeers: true, skip: new Set([...failed, model]) }));
         // Refused here only on reported limits, before queueing or evicting; the backend stays the authority.
         const fitted = fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
         const tooMuch = unfit(pool.statsFor(model), fitted);
@@ -1942,11 +1945,30 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // asked for by the flow that takes it, else by the model its route names.
     let routed = pool.forPath(pathname);
     const held = pool.named(pathname);
+    // For a request a flow decided: the name it went by, how to ask its flow again without what just failed,
+    // and the backend its line named when that is not the one that declares the path.
+    let flowed: string | null = null;
+    let again: ((failed: readonly string[]) => ReturnType<typeof resolve>) | null = null;
+    let runOn: BackendSlot | undefined;
+    let picked: string | undefined;
+    /**
+     * The backend that can run a model on this path: the one that declares the path, its route's
+     * fallback, or another that serves the model and either declares the path too or declares none.
+     */
+    const placeOf = (model: string): BackendSlot | undefined => {
+      if (!routed) return undefined;
+      // The model a route names is its backend's whether or not the backend lists it.
+      if (model === routed.rule.model || pool.owns(routed.slot, model)) return routed.slot;
+      const fb = routed.rule.fallback ? pool.get(routed.rule.fallback.backend) : undefined;
+      if (fb && pool.owns(fb, model)) return fb;
+      return pool.all().find((b) => pool.owns(b, model) && (b.cfg.routes.length === 0 || b.cfg.routes.some((x) => x.path === pathname)));
+    };
     if (c.peer === null && (held !== undefined || routed?.rule.queue === true)) {
       const rules = rulesFor(who).flows;
       const taker = Object.values(rules).find((f) => !f.off && f.takes?.includes(held?.path ?? pathname));
       const name = held?.name ?? viaBody ?? taker?.inputs[0] ?? routed!.rule.model;
-      const r = resolve(name, { ...worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined), path: held?.path ?? pathname });
+      const world: World = { ...worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined), path: held?.path ?? pathname };
+      const r = resolve(name, world);
       const refuse = (status: number, why: string) => fail(res, new Refusal(status, why, status === 404 ? "invalid_request_error" : "server_error"));
       if (r.unlisted) return refuse(404, r.reason);
       // A type that says which paths it takes is not offered on any other.
@@ -1961,17 +1983,23 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           path = pathname;
           routed = pool.forPath(pathname);
           if (!routed) return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${held.path}`);
-        } else if (viaBody !== undefined && body) {
-          // The model the flow picked has to be one this path can run: its backend's own, or its fallback's.
-          const spare = routed!.rule.fallback ? pool.get(routed!.rule.fallback.backend) : undefined;
-          if (!pool.owns(routed!.slot, r.model) && !(spare && pool.owns(spare, r.model))) {
-            return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${pathname}`);
+        } else {
+          // The model the flow picked has to be one this path can run, here or on another backend.
+          const at = placeOf(r.model);
+          if (!at) return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${pathname}`);
+          if (at !== routed!.slot) runOn = at;
+          picked = r.model;
+          // A body that named what it asked for names the model instead; one that named nothing is left as it came.
+          if (viaBody !== undefined && body) {
+            viaBody = r.model;
+            body = isForm ? replaceMultipartField(body, contentType, "model", r.model) ?? body : withModel(body, r.model) ?? body;
           }
-          viaBody = r.model;
-          body = isForm ? replaceMultipartField(body, contentType, "model", r.model) ?? body : withModel(body, r.model) ?? body;
-        } else if (r.model !== routed!.rule.model) {
-          return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, and ${pathname} is answered by ${routed!.rule.model}`);
         }
+      }
+      // A path with the model in it is matched to its backend by that name, so only the others can be asked again.
+      if (!held && r.path.length > 0) {
+        flowed = name;
+        again = (failed) => resolve(name, { ...world, noPeers: true, skip: new Set(failed) });
       }
     }
 
@@ -2071,28 +2099,42 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           }
           logRequest(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, true);
         };
-        // A strict router's callers get the backend the route names, or its failure.
-        const fb = routerOf(who)?.strict ? undefined : routed.rule.fallback;
+        // A strict router's callers get the model its line names or its failure: no next line, no route fallback.
+        const strict = routerOf(who)?.strict === true;
+        const fb = strict ? undefined : routed.rule.fallback;
         const spare = fb ? pool.get(fb.backend) : undefined;
-        if (!fb || !spare) {
-          await run(target, model, outBody, false);
-        } else if (asked !== undefined && asked !== model && pool.owns(spare, asked)) {
-          // Asked for by an id only the fallback serves: that is a choice, not a failure.
-          await run(spare, asked, outBody, false);
-        } else {
+        // A line that names a model on another backend runs there; a name only the fallback serves is a choice, not a failure.
+        let to = runOn ?? (spare && asked !== undefined && asked !== model && pool.owns(spare, asked) ? spare : target);
+        let as = to === target ? model : picked ?? asked ?? model;
+        let sendBody = outBody;
+        const failed: string[] = [];
+        let fellBack = to === spare;
+        const renamed = (m: string): Buffer | undefined => {
+          // A form names its model in a field, which is rewritten as a JSON body's is.
+          const wire = pool.outboundId(m);
+          return isForm && body ? replaceMultipartField(body, contentType, "model", wire) ?? body : withModel(body, wire);
+        };
+        for (;;) {
+          // What is left if this fails before anything reaches the client: the flow's next line that ends at a
+          // model this path can run, as a chat flow's would, and after the last of those the route's own fallback.
+          const next = !strict && again ? again([...failed, as]) : null;
+          const line = next && next.target === "local" && next.model !== as && !failed.includes(next.model) ? placeOf(next.model) : undefined;
+          const more = line ? { slot: line, model: next!.model, line: next }
+            : spare && fb && !fellBack ? { slot: spare, model: fb.model, line: null } : null;
           try {
-            await run(target, model, outBody, true);
+            await run(to, as, sendBody, more !== null);
+            break;
           } catch (e) {
             // A full lane is back-pressure, a closed socket has nobody to answer, and a started reply cannot be restarted.
-            if (e instanceof QueueFullError || ctrl.signal.aborted || res.headersSent) throw e;
-            log.warn("route.fallback", {
-              path, from: target.name, to: spare.name, model: fb.model,
+            if (!more || e instanceof QueueFullError || ctrl.signal.aborted || res.headersSent) throw e;
+            log.warn(more.line ? "route.next_line" : "route.fallback", {
+              path, from: to.name, to: more.slot.name, model: more.model,
               detail: e instanceof Error ? e.message : String(e),
             });
-            // A form names its model in a field, which is rewritten as a JSON body's is.
-            const wire = pool.outboundId(fb.model);
-            const spareBody = isForm && body ? replaceMultipartField(body, contentType, "model", wire) ?? body : withModel(body, wire);
-            await run(spare, fb.model, spareBody, false);
+            failed.push(as);
+            if (more.line && flowed !== null) settle(more.line, flowed, who);
+            else fellBack = true;
+            [to, as, sendBody] = [more.slot, more.model, renamed(more.model)];
           }
         }
       } else if (routed) {
