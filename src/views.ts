@@ -3,7 +3,7 @@
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
 import type { Row } from "./usage.js";
-import type { HearthConfig } from "./config.js";
+import type { HearthConfig, KeyRule } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
@@ -48,6 +48,8 @@ export interface KeyInfo {
   /** What it used today (UTC) and over the days that are kept. */
   today: Row;
   month: Row;
+  /** When it expires and what it is limited to; null for a bare key. */
+  rule: KeyRule | null;
 }
 
 /** A caller that is not a key: this machine with none, or a peer. */

@@ -297,12 +297,32 @@ function UsedCell({ used }: { used?: Used }) {
   );
 }
 
+type Rule = NonNullable<NonNullable<UiData["keys"]>[number]["rule"]>;
+
+/** What bounds a key, in a few words; red once it has run out or run past its day. */
+function limitsOf(rule: Rule | null | undefined, today?: Used) {
+  if (!rule) return "—";
+  const gone = rule.expires !== null && Date.now() >= rule.expires;
+  const spent = rule.tokensPerDay > 0 && (today?.in ?? 0) + (today?.out ?? 0) >= rule.tokensPerDay;
+  const parts = [
+    rule.requestsPerMinute > 0 ? `${short(rule.requestsPerMinute)} req/min` : null,
+    rule.tokensPerDay > 0 ? `${short(rule.tokensPerDay)} tokens/day` : null,
+    // The last day it works, as the file has it.
+    rule.expires !== null ? `${gone ? "expired" : "until"} ${new Date(rule.expires - 1).toISOString().slice(0, 10)}` : null,
+  ].filter(Boolean);
+  if (parts.length === 0) return "—";
+  return <span className={gone || spent ? "text-bad" : undefined} title={spent ? "today's tokens are used up; it works again at midnight UTC" : undefined}>{parts.join(" · ")}</span>;
+}
+
 export function Keys() {
   const keys = useStore((s) => s.data!.keys ?? []);
   const others = useStore((s) => s.data!.others ?? []);
   const catalog = useStore((s) => s.data!.catalog);
   const [label, setLabel] = useState("");
   const [scope, setScope] = useState("");
+  const [expires, setExpires] = useState("");
+  const [perMinute, setPerMinute] = useState("");
+  const [perDay, setPerDay] = useState("");
   const [shown, setShown] = useState<{ label: string; key: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -311,13 +331,17 @@ export function Keys() {
     if (l === "" || busy) return;
     setBusy(true);
     const models = scope.split(",").map((s) => s.trim()).filter(Boolean);
-    const key = await mintKey(l, models.length > 0 ? models : null);
+    const limits = { ...(Number(perMinute) > 0 ? { requestsPerMinute: Math.floor(Number(perMinute)) } : {}), ...(Number(perDay) > 0 ? { tokensPerDay: Math.floor(Number(perDay)) } : {}) };
+    const key = await mintKey(l, models.length > 0 ? models : null, { ...(expires ? { expires } : {}), ...(Object.keys(limits).length ? { limits } : {}) });
     setBusy(false);
     if (key !== null) {
       setShown({ label: l, key });
       setCopied(false);
       setLabel("");
       setScope("");
+      setExpires("");
+      setPerMinute("");
+      setPerDay("");
     }
   };
   const copy = async (key: string) => {
@@ -339,6 +363,7 @@ export function Keys() {
             <th className="px-4 py-2 font-medium">label</th>
             <th className="px-4 py-2 font-medium">id</th>
             <th className="px-4 py-2 font-medium">may run</th>
+            <th className="px-4 py-2 font-medium">limits</th>
             <th className="px-4 py-2 font-medium">today</th>
             <th className="px-4 py-2 font-medium">31 days</th>
             <th className="px-4 py-2 text-right font-medium">last seen</th>
@@ -351,6 +376,7 @@ export function Keys() {
               <td className="px-4 py-2">{k.label !== "" ? k.label : <span className="text-dim">unlabeled</span>}</td>
               <td className={cx("px-4 py-2 text-dim", mono)}>{k.id}</td>
               <td className="px-4 py-2 text-dim">{k.models === null || k.models.length === 0 ? "everything" : k.models.join(", ")}</td>
+              <td className="px-4 py-2 text-dim">{limitsOf(k.rule, k.today)}</td>
               <td className="tabular px-4 py-2"><UsedCell used={k.today} /></td>
               <td className="tabular px-4 py-2"><UsedCell used={k.month} /></td>
               <td className={cx("tabular px-4 py-2 text-right", k.lastSeen === null ? "text-dim" : "text-fg")}>{k.lastSeen === null ? "never" : ago(k.lastSeen)}</td>
@@ -369,6 +395,7 @@ export function Keys() {
               <td className="px-4 py-2 text-dim">{o.caller === "local" ? "this machine, no key" : o.caller.startsWith("peer:") ? `peer ${o.caller.slice(5)}` : o.caller}</td>
               <td className="px-4 py-2 text-dim">—</td>
               <td className="px-4 py-2 text-dim">—</td>
+              <td className="px-4 py-2 text-dim">—</td>
               <td className="tabular px-4 py-2"><UsedCell used={o.today} /></td>
               <td className="tabular px-4 py-2"><UsedCell used={o.month} /></td>
               <td /><td />
@@ -382,6 +409,14 @@ export function Keys() {
                className="h-8 w-40 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         <input value={scope} onChange={(e) => setScope(e.target.value)} placeholder="models, comma-separated (blank = everything)"
                className="h-8 w-72 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
+        <input value={perMinute} onChange={(e) => setPerMinute(e.target.value)} type="number" min={0} placeholder="req / min" aria-label="requests a minute, blank for no limit"
+               className="h-8 w-24 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
+        <input value={perDay} onChange={(e) => setPerDay(e.target.value)} type="number" min={0} placeholder="tokens / day" aria-label="tokens a day, blank for no limit"
+               className="h-8 w-28 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
+        <label className="flex items-center gap-1.5 text-[11px] text-dim">expires
+          <input value={expires} onChange={(e) => setExpires(e.target.value)} type="date" aria-label="the last day it works, blank for never"
+                 className="h-8 rounded-md border border-line bg-bg px-2 text-[12px] text-fg focus:border-accent focus:outline-none" />
+        </label>
         <button disabled={busy || label.trim() === ""} onClick={() => void mint()}
                 className="h-8 rounded-md bg-accent px-3 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40">
           {busy ? "minting…" : "mint a key"}

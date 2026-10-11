@@ -138,7 +138,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   // ConfigFile swaps the live keys in whole and everything reads those per call; the rest changes
   // only with a restart, so an accidental write throws instead of going stale.
   for (const part of [cfg.listen, cfg.backends, cfg.scheduler, cfg.resources,
-                      cfg.apiKeys, cfg.apiKeyLabels, cfg.apiKeyModels, cfg.peerTokens]) deepFreeze(part);
+                      cfg.apiKeys, cfg.apiKeyLabels, cfg.apiKeyModels, cfg.apiKeyRules, cfg.peerTokens]) deepFreeze(part);
   // One state and one queue per backend. Pushed over SSE where the backend
   // supports it, polled where it doesn't.
   const pool = new BackendPool(cfg, log);
@@ -212,6 +212,31 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         : null,
     });
     if (refused) throw refused;
+    withinLimits(c.caller);
+  }
+
+  /** When each limited key last asked, for its requests-a-minute limit. */
+  const asked = new Map<string, number[]>();
+
+  /** Hold a key to its limits: so many requests a minute, so many tokens a UTC day. Counts the request it lets through. */
+  function withinLimits(caller: string): void {
+    if (!caller.startsWith("key:")) return;
+    const i = cfg.apiKeys.findIndex((k, n) => "key:" + (cfg.apiKeyLabels[n] || keyId(k)) === caller);
+    const rule = cfg.apiKeyRules[i];
+    if (!rule) return;
+    if (rule.tokensPerDay > 0) {
+      const used = usage.total(caller, 1);
+      if (used.in + used.out >= rule.tokensPerDay) throw new Refusal(429, `this key has used its ${rule.tokensPerDay} tokens for today (UTC)`, "rate_limit_error");
+    }
+    if (rule.requestsPerMinute > 0) {
+      const now = Date.now();
+      const recent = (asked.get(caller) ?? []).filter((t) => now - t < 60_000);
+      if (recent.length >= rule.requestsPerMinute) {
+        asked.set(caller, recent);
+        throw new Refusal(429, `this key is limited to ${rule.requestsPerMinute} requests a minute`, "rate_limit_error");
+      }
+      asked.set(caller, [...recent, now]);
+    }
   }
 
   /** A peer's hourly budget, spent before its body is even read. */
@@ -318,6 +343,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     let i = 0;
     for (const k of cfg.apiKeys) {
       if (secretEq(given, k)) {
+        // Past its day, a key is no key.
+        const expires = cfg.apiKeyRules[i]?.expires ?? null;
+        if (expires !== null && Date.now() >= expires) return null;
         const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
         keySeen.set(caller, Date.now());
         return { caller, models: cfg.apiKeyModels[i] ?? null };
@@ -1499,7 +1527,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   const keysView = (): KeyInfo[] =>
     cfg.apiKeys.map((k, i) => {
       const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
-      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: usage.total(caller, 1), month: usage.total(caller, KEEP_DAYS) };
+      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: usage.total(caller, 1), month: usage.total(caller, KEEP_DAYS), rule: cfg.apiKeyRules[i] ?? null };
     });
 
   /** Whoever else used this node in the last month: this machine with no key, and peers. */
@@ -1567,6 +1595,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         const key = "hkey_" + randomBytes(20).toString("hex");
         const entry: Record<string, unknown> = { key, label };
         if (models !== null && models.length > 0) entry.models = models;
+        // The file's own parser judges these, as it would had they been typed there.
+        if (typeof body.expires === "string" && body.expires !== "") entry.expires = body.expires;
+        if (typeof body.limits === "object" && body.limits !== null && Object.keys(body.limits).length > 0) entry.limits = body.limits;
         const commit = config.patch({ ops: [{ path: ["apiKeys", cfg.apiKeys.length], value: entry }] });
         log.info("keys.minted", { label, id: keyId(key), caller: c.caller });
         json(c.res, 200, { key, label, models, restartPending: commit.restartPending });
@@ -2200,6 +2231,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     try {
       // `queue: false` routes (progress, job lists) go straight through.
       if (routed?.rule.queue) {
+        withinLimits(who);
         const { lane } = routed.rule;
         // Two models can share one routed path; each queues as itself.
         const model = pool.routedModel(routed.slot, routed.rule, asked);

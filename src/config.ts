@@ -416,6 +416,8 @@ export interface HearthConfig {
    * key to chat and `/v1/models` for exactly those routed ids.
    */
   apiKeyModels: (string[] | null)[];
+  /** When each key stops working and how much it may use, index-aligned with `apiKeys`. */
+  apiKeyRules: KeyRule[];
   /** Tokens peers present to us, by peer name (`peers.<name>.accept`). Kept separate from apiKeys so
    *  peer traffic is attributable and can be capped on its own. */
   peerTokens: Record<string, string>;
@@ -904,19 +906,28 @@ function strList(v: unknown, where: string): string[] {
   return v as string[];
 }
 
+/** What bounds one key. 0 is no limit; `expires` is the first moment it no longer works, or null for never. */
+export interface KeyRule {
+  expires: number | null;
+  requestsPerMinute: number;
+  tokensPerDay: number;
+}
+const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0 };
+
 /** `apiKeys:` entries: a bare secret, or `{ key, label }`. Labels are shown wherever caller ids are. */
 function apiKeyList(
   v: unknown, where: string, routeIds: Set<string>,
-): { keys: string[]; labels: string[]; models: (string[] | null)[] } {
-  if (v === undefined) return { keys: [], labels: [], models: [] };
+): { keys: string[]; labels: string[]; models: (string[] | null)[]; rules: KeyRule[] } {
+  if (v === undefined) return { keys: [], labels: [], models: [], rules: [] };
   if (!Array.isArray(v)) throw bad(where, "must be a list");
   const keys: string[] = [];
   const labels: string[] = [];
   const models: (string[] | null)[] = [];
+  const rules: KeyRule[] = [];
   // Both refuse a duplicate, and neither message ever names the secret.
   const seenKey = new Map<string, number>();
   const seenLabel = new Map<string, number>();
-  const take = (key: string, label: string, at: string, scope: string[] | null = null): void => {
+  const take = (key: string, label: string, at: string, scope: string[] | null = null, rule: KeyRule = NO_RULE): void => {
     // The first match wins in localCaller, so a repeated secret makes every
     // later entry unreachable — including its label, which would then be a name
     // the operator sees in the config and never in a log.
@@ -940,6 +951,7 @@ function apiKeyList(
     keys.push(key);
     labels.push(label);
     models.push(scope);
+    rules.push(rule);
   };
   v.forEach((raw, i) => {
     const at = `${where}[${i}]`;
@@ -948,7 +960,7 @@ function apiKeyList(
       return;
     }
     const entry = asRecord(raw, at);
-    only(entry, ["key", "label", "models"], at);
+    only(entry, ["key", "label", "models", "expires", "limits"], at);
     const key = resolveSecret(str(entry.key, `${at}.key`), `${at}.key`);
     // A blank label is a typo, not "no label" — the string form is how you say
     // no label — so it is refused rather than silently falling back to the hash.
@@ -967,9 +979,24 @@ function apiKeyList(
         }
       }
     }
-    take(key, label, at, scope);
+    // A day, and the key works through the end of it (UTC).
+    let expires: number | null = null;
+    if (entry.expires !== undefined) {
+      const day = str(entry.expires, `${at}.expires`);
+      const t = /^\d{4}-\d{2}-\d{2}$/.test(day) ? Date.parse(`${day}T00:00:00Z`) : NaN;
+      if (Number.isNaN(t)) throw bad(`${at}.expires`, `must be a day as YYYY-MM-DD (got ${day})`);
+      expires = t + 86_400_000;
+    }
+    const limits = entry.limits === undefined ? {} : asRecord(entry.limits, `${at}.limits`);
+    only(limits, ["requestsPerMinute", "tokensPerDay"], `${at}.limits`);
+    const cap = (k: "requestsPerMinute" | "tokensPerDay"): number => {
+      const n = num(limits[k], `${at}.limits.${k}`, 0);
+      if (!Number.isInteger(n) || n < 0) throw bad(`${at}.limits.${k}`, "must be a whole number, 0 or more");
+      return n;
+    };
+    take(key, label, at, scope, { expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay") });
   });
-  return { keys, labels, models };
+  return { keys, labels, models, rules };
 }
 
 /** A path that can match a request: absolute, no query string. Shared by `routes:` and `activity:`. */
@@ -1525,7 +1552,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
   }
 
-  const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels } =
+  const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels, rules: apiKeyRules } =
     apiKeyList(root.apiKeys, "apiKeys", new Set(Object.keys(models)));
 
   const mainListen = {
@@ -1581,6 +1608,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     apiKeys,
     apiKeyLabels,
     apiKeyModels,
+    apiKeyRules,
     peerTokens,
     operator,
     share: strList(lending.models, "lending.models"),

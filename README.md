@@ -172,7 +172,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `borrowing.downMs` | `30000` | how long a failed probe is remembered, so an outage doesn't make every local request pay the timeout |
 | `borrowing.pollMs` / `.staleMs` | `60000` / `60000` | background floor that warms the cache. The real mechanism is on-demand |
 | `borrowing.coldPenalty` | `2` | what a model load is worth to `fastest`, in queued-jobs-equivalent |
-| `apiKeys` | `[]` | keys allowed on `/v1/*`. Empty means loopback only. Setting it means loopback needs a key too, including any local tool you point at this. An entry may be `{ key, label }` to name a caller — see below |
+| `apiKeys` | `[]` | keys allowed on `/v1/*`. Empty means loopback only. Setting it means loopback needs a key too, including any local tool you point at this. An entry may be `{ key, label }` to name a caller, and may carry `models`, `expires` and `limits` — see below |
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
@@ -221,6 +221,19 @@ apiKeys:
   - { key: env:VOICE_KEY, label: voice, models: [voice] }      # chat on one id, nothing else
 ```
 
+A key can **expire** and be **limited**. `expires` is a day, and the key works
+through the end of it (UTC); after that it is refused like any unknown key.
+`limits` holds it to so many requests a minute and so many tokens a UTC day,
+counted in and out; a request over either is answered `429`. Leave one out, or
+set it to 0, for no limit. The token count is the one [`/usage`](#endpoints)
+reports, so it is the backend's own where its answer carries one and an
+estimate where it does not.
+
+```yaml
+apiKeys:
+  - { key: env:GUEST_KEY, label: guest, expires: 2030-06-30, limits: { requestsPerMinute: 20, tokensPerDay: 200000 } }
+```
+
 For the caller that only has a model picker and runs on the softest box you
 own: its key leaking must cost you one model at one priority, not the GPU. The
 ids must be routes in `models:` — the lane and params that route carries are
@@ -241,7 +254,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
 | `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
-| `/keys/mint`, `/keys/revoke` | local | `POST { label, models? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
+| `/keys/mint`, `/keys/revoke` | local | `POST { label, models?, expires?, limits? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
 | `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
 | `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, headers?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
@@ -659,8 +672,8 @@ Five pages, and ⌘K jumps to anything on them:
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
   evicted from its row.
-- **Keys**: every api key by label, what it may run, what it used today and
-  over 31 days, and when it last spoke to this node. Mint one (shown once) or revoke one by its label.
+- **Keys**: every api key by label, what it may run, its limits and expiry,
+  what it used today and over 31 days, and when it last spoke to this node. Mint one (shown once) or revoke one by its label.
 - **Queue**: jobs in flight, and finished requests per model with how long they
   waited and ran, over the last ten minutes or the last day; a row opens to
   its individual calls. The day view adds

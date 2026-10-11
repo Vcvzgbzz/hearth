@@ -20,7 +20,7 @@ import type { Logger } from "./log.js";
 
 /** Keys the running node reads per call, so a new value takes effect on the next request. */
 const LIVE_KEYS = [
-  "models", "share", "notes", "apiKeys", "apiKeyLabels", "apiKeyModels", "peerTokens",
+  "models", "share", "notes", "apiKeys", "apiKeyLabels", "apiKeyModels", "apiKeyRules", "peerTokens",
   "peerRateLimit", "peerLane", "peerMaxConcurrent", "maxBodyBytes", "peerFreshMs", "peerDownMs",
   "peerStaleMs", "peerFirstByteMs", "backendFirstByteMs", "backendIdleMs", "coldPenalty", "shutdownGraceMs",
   "operator", "layout", "flows", "routers", "callers", "actions", "modelHeader",
@@ -30,7 +30,7 @@ const LIVE_KEYS = [
 const YAML_NAME: Record<string, string> = { peerPollMs: "borrowing.pollMs" };
 
 /** Live keys that stay frozen once applied, as the fixed config is. */
-const FROZEN_LIVE = new Set<string>(["apiKeys", "apiKeyLabels", "apiKeyModels", "peerTokens", "operator"]);
+const FROZEN_LIVE = new Set<string>(["apiKeys", "apiKeyLabels", "apiKeyModels", "apiKeyRules", "peerTokens", "operator"]);
 
 export function deepFreeze(v: unknown): void {
   if (v === null || typeof v !== "object" || Object.isFrozen(v)) return;

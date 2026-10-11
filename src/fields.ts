@@ -37,7 +37,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     lending: { type: "object", scope: "lending", desc: "What peers may run here, and how much of it.", seed: { models: [] } },
     borrowing: { type: "object", scope: "borrowing", desc: "How this node reads and waits on its peers.", seed: {} },
     backendDefaults: { type: "object", scope: "backendDefaults", desc: "Defaults every backend takes unless it sets its own.", seed: {} },
-    apiKeys: { type: "list", desc: "Keys allowed on /v1/*. Empty means loopback only; setting it means loopback needs a key too." },
+    apiKeys: { type: "list", desc: "Keys allowed on /v1/*. Empty means loopback only; setting it means loopback needs a key too. An entry may carry a label, the models it may run, a day it expires and limits." },
     maxBodyBytes: { type: "number", min: 1024, desc: "Largest accepted request body, in bytes.", def: 33554432 },
     modelHeader: { type: "bool", desc: "Send `x-hearth-model` on every chat answer: the id the request ran as. Turn off where callers should not see what is behind a name.", def: true },
     shutdownGraceMs: ms("How long a shutdown waits for requests in flight. 0 drops them.", 30000),
