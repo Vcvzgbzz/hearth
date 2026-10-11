@@ -396,6 +396,43 @@ export function nodeOf(node: string): { kind: NodeKind; id: string } {
   return { kind: NODES[cut < 0 ? node : node.slice(0, cut)] ?? {}, id: cut < 0 ? "" : node.slice(cut + 1) };
 }
 
+/** A node as the room it takes on the map. */
+export type Box = { id: string; x: number; y: number; w: number; h: number };
+
+/**
+ * Where each box sits once none overlaps another: taken top to bottom, a box that would lie on one
+ * above it moves down past it. `carry` names the boxes drawn beside another, which move with it.
+ */
+export function spread(boxes: Box[], carry: Map<string, string[]> = new Map(), gap = 12): Map<string, number> {
+  const ys = new Map(boxes.map((b) => [b.id, b.y]));
+  const settled: Box[] = [];
+  for (const b of [...boxes].sort((p, q) => p.y - q.y)) {
+    let y = ys.get(b.id)!;
+    for (let hit; (hit = settled.find((s) => b.x < s.x + s.w + gap && s.x < b.x + b.w + gap && y < s.y + s.h + gap && s.y < y + b.h + gap));) y = hit.y + hit.h + gap;
+    const by = y - ys.get(b.id)!;
+    if (by !== 0) for (const rider of carry.get(b.id) ?? []) if (!settled.some((s) => s.id === rider)) ys.set(rider, (ys.get(rider) ?? 0) + by);
+    ys.set(b.id, y);
+    settled.push({ ...b, y });
+  }
+  return ys;
+}
+
+/**
+ * Where each of `ends` sits in its column: beside the middle of the lines that reach it, in that
+ * order, `step` apart at least, so lines run across and seldom cross. `from` is where each line leaves.
+ */
+export function beside(ends: string[], from: (end: string) => number[], step: number): Map<string, number> {
+  const mid = (id: string) => { const ys = from(id); return ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : Infinity; };
+  const out = new Map<string, number>();
+  let next = 0;
+  for (const [id, y] of ends.map((id) => [id, mid(id)] as const).sort((a, b) => a[1] - b[1])) {
+    const at = Math.max(next, Number.isFinite(y) ? Math.round(y - step / 2) : next);
+    out.set(id, at);
+    next = at + step;
+  }
+  return out;
+}
+
 /** Remember where a node was put, to the pixel: a layout is a picture, not a measurement. */
 export const placed = (doc: Doc, id: string, at: { x: number; y: number }): Doc =>
   put(doc, "layout", id, { x: Math.round(at.x), y: Math.round(at.y) });

@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -293,6 +293,19 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual([arranged(down), arranged(put), arranged(tidied(put)), ordered(tidied(put).layout as never, ["auto", "image"])], [false, true, false, ["image", "auto"]]);
   assert.equal(tidied(placed(doc(), "routing/flow:pick", { x: 5, y: 5 })).layout, undefined);
   assert.doesNotThrow(() => parseConfig(withRest(put, "asked")));
+}
+
+// --- boxes that fit together ------------------------------------------------------------------------
+{
+  // A box that would lie on one above it moves down past it, and takes what is drawn beside it along; one clear of it stays.
+  const ys = spread([
+    { id: "a", x: 0, y: 0, w: 100, h: 50 }, { id: "b", x: 50, y: 30, w: 100, h: 50 }, { id: "b-side", x: 300, y: 40, w: 50, h: 20 },
+    { id: "c", x: 500, y: 30, w: 100, h: 50 }, { id: "d", x: 60, y: 90, w: 100, h: 20 },
+  ], new Map([["b", ["b-side"]]]), 10);
+  assert.deepEqual(Object.fromEntries(ys), { a: 0, b: 60, "b-side": 70, c: 30, d: 120 });
+  // Ends sit level with the lines that reach them, in that order, never closer than a step; one no line reaches goes last.
+  const from: Record<string, number[]> = { low: [300, 340], high: [20], mid: [40], none: [] };
+  assert.deepEqual(Object.fromEntries(beside(["low", "high", "mid", "none"], (id) => from[id]!, 50)), { high: 0, mid: 50, low: 295, none: 345 });
 }
 
 // --- what is written is the change and nothing else -------------------------------------------------

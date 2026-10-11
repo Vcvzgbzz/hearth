@@ -6,7 +6,7 @@
 import { applyNodeChanges, Background, Controls, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, directTo, draftView, factsOf, list, nodeOf, ordered, refusal, restOf, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, beside as besideLines, directTo, draftView, factsOf, list, nodeOf, ordered, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried } from "./editStore.js";
 import { contextMenu } from "./editor.js";
 import { HUE, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type RefuseBox, type SwitchBox } from "./flowNodes.js";
@@ -155,7 +155,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   const rides = new Map<string, string[]>();
   let lowest = hubHeight + GAP;
   for (let col = 0; col < columns; col++) {
-    const here = flows.filter(([n]) => depth.get(n) === col);
+    // Rules stand in the order of the names that enter them, so the lines into them do not cross.
+    const first = (inputs: string[]) => Math.min(Infinity, ...inputs.map((i) => names.indexOf(i)).filter((i) => i >= 0));
+    const here = flows.filter(([n]) => depth.get(n) === col).sort((a, b) => first(a[1].inputs) - first(b[1].inputs) || 0);
     // What is drawn beside a rule, top to bottom: each line's own node, level with the line where there is room, then the rule's actions.
     const sides = ([name, f]: (typeof here)[number]) => {
       let at = 0;
@@ -235,7 +237,18 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     n.position = { x: at.x, y: at.y };
     for (const g of nodes) if (rides.get(n.id)?.includes(g.id) && !placed(g.id)) g.position = { x: g.position.x + dx, y: g.position.y + dy };
   }
-  return { nodes, edges };
+  // A model or a peer nobody placed sits level with the lines that reach it. Where a line leaves its node:
+  const at = new Map(nodes.map((n) => [n.id, n.position]));
+  const leaves = (e: Edge): number => {
+    const top = at.get(e.source)?.y ?? 0;
+    const n = Number(/-(\d+)$/.exec(e.sourceHandle ?? "")?.[1] ?? 0);
+    if (e.source === "self") return top + 78 + Math.max(0, names.indexOf((e.sourceHandle ?? "").slice(4))) * 22 + 11;
+    return e.source.startsWith("flow:") ? top + RULE.head + n * RULE.row + RULE.row / 2 : top + 50 + n * SIDE.place + SIDE.place / 2;
+  };
+  const free = nodes.filter((n) => n.type === "dest" && !placed(n.id));
+  const level = besideLines(free.map((n) => n.id), (id) => edges.filter((e) => e.target === id).map(leaves), 60);
+  for (const n of free) n.position = { x: n.position.x, y: level.get(n.id) ?? n.position.y };
+  return { nodes, edges, rides };
 }
 
 /** The routing map: drawn from the draft while there is a file to edit, else from what is in force. */
@@ -256,7 +269,13 @@ export function Routing() {
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
   const dragging = useRef<string | null>(null);
-  useEffect(() => setNodes((now) => held(laid.nodes, now, dragging.current)), [laid]);
+  // No box lies on another: with each one's size as drawn, one that would overlap moves down past what is above it.
+  const [sizes, setSizes] = useState<Record<string, { w: number; h: number }>>({});
+  const fitted = useMemo(() => {
+    const ys = spread(laid.nodes.flatMap((n) => (sizes[n.id] ? [{ id: n.id, ...n.position, ...sizes[n.id]! }] : [])), laid.rides);
+    return laid.nodes.map((n) => (ys.has(n.id) && ys.get(n.id) !== n.position.y ? { ...n, position: { x: n.position.x, y: ys.get(n.id)! } } : n));
+  }, [laid, sizes]);
+  useEffect(() => setNodes((now) => held(fitted, now, dragging.current)), [fitted]);
   // The line under the pointer is drawn as strongly as one a tried request takes, so it can be followed through a
   // crossing. Only the lines are redrawn for it: touching the nodes would cut off a drag that is just starting.
   const edges = useMemo(() => (edit.hover === null ? laid.edges : laid.edges.map((e) => (e.id === edit.hover ? { ...e, zIndex: 1001, data: { ...e.data, lit: true } } : e))), [laid.edges, edit.hover]);
@@ -279,7 +298,12 @@ export function Routing() {
       // The strip over the map is two rows tall when it has something to say.
       minZoom={0.3} maxZoom={1.5} onInit={(rf) => { flow.current = rf; arrive(rf, 120); }}
       colorMode={dark ? "dark" : "light"} proOptions={{ hideAttribution: true }}
-      onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes, ns))}
+      snapToGrid snapGrid={[20, 20]}
+      onNodesChange={(changes) => {
+        setNodes((ns) => applyNodeChanges(changes, ns));
+        const sized = changes.flatMap((c) => (c.type === "dimensions" && c.dimensions ? [[c.id, { w: c.dimensions.width, h: c.dimensions.height }] as const] : []));
+        if (sized.length) setSizes((was) => (sized.every(([id, s]) => was[id]?.w === s.w && was[id]?.h === s.h) ? was : { ...was, ...Object.fromEntries(sized) }));
+      }}
       onNodeDragStart={(_, n) => { dragging.current = n.id; }}
       // A box stays where it was let go; its place is kept apart from anything of the same name on the topology.
       onNodeDragStop={(_, n) => { dragging.current = null; if (editing) place(`routing/${n.id}`, n.position); }}

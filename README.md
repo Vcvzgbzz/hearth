@@ -743,8 +743,12 @@ line; **route a name** brings one onto the map.
   log line, or a call to a URL. Drag a line's dot onto the action, or pick it
   under the line's **⋯**, and a dashed line shows what runs it. See
   [Actions](#actions).
-- **Drag a box** to arrange the map. Where you put things is saved with the
-  rest, under `layout:`; **tidy up** goes back to the automatic arrangement.
+- **Drag a box** to arrange the map; it lands on a grid. Where you put things
+  is saved with the rest, under `layout:`; **tidy up** goes back to the
+  automatic arrangement. What you have not placed fits itself around what you
+  have: a model sits level with the lines that reach it, rules stand in the
+  order of the names that enter them, and a box that would lie on another is
+  drawn below it.
 - **A type's ⋯** on the Router (it shows as you point at the name) renames it,
   moves it up or down the list, or removes it; double-clicking the name
   renames it too. The new name follows into the rule that takes it. The order
