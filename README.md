@@ -743,6 +743,10 @@ line; **route a name** brings one onto the map.
   [Actions](#actions).
 - **Drag a box** to arrange the map. Where you put things is saved with the
   rest, under `layout:`; **tidy up** goes back to the automatic arrangement.
+- **A type's ⋯** on the Router (it shows as you point at the name) renames it,
+  moves it up or down the list, or removes it; double-clicking the name
+  renames it too. The new name follows into the rule that takes it. The order
+  is kept with the layout.
 - **Try a request** along the bottom asks the node where a request would go
   under the map as you have it now, saved or not, lights the way it takes and
   names the line that decided. **pretend…** lists the state your rules test
@@ -754,20 +758,27 @@ line; **route a name** brings one onto the map.
   several, red for a refusal, amber for an action, grey for nowhere yet.
 - **find** (or the `/` key) searches the map for a rule, an action, a name or
   a model and brings it into view. **Right-click** the map to add a rule or an
-  action there, or a rule or an action to edit it, switch it off or delete it.
+  action there, or a rule or an action to edit it, duplicate it, switch it off
+  or delete it.
+- **Keys**: with a rule or an action selected, Delete or Backspace removes it,
+  Ctrl/⌘+D makes a second one, and Ctrl/⌘+C then Ctrl/⌘+V pastes a copy. A
+  copied rule takes no names until you give it some. Ctrl/⌘+Z undoes. A rule
+  and an action also carry a bin of their own.
 - **?** beside the buttons says what each thing on the map means. A rule or an
-  action is renamed by clicking its name in the panel, and the name follows
-  everywhere it is used.
+  action is renamed by clicking its name, on the map or in the panel, and the
+  name follows everywhere it is used.
 - **A number at the end of a line** is how many requests it has decided since
   the rules last changed or the node started.
 - **In a rule's panel**: switch it off without deleting it, keep a conversation
   on the model it started with, and leave a note on what it is for.
 
-Nothing is written while you edit. The strip along the top counts what you
-have changed and says what still needs attention; **undo** steps back, and
-**review & save** shows the change to the file as a diff, checks that it loads,
-and writes it only when you confirm. A draft survives a reload, and if the file
-changes underneath it your changes are carried over.
+What you edit is a draft: nothing is written and nothing about routing changes
+until you publish it. The strip along the top counts what the draft changes and
+says what still needs attention; **undo** steps back, **discard draft** drops
+it, and **review & publish** shows the change to the file as a diff, checks
+that it loads, and writes it only when you confirm. A draft is kept in the
+browser, so it survives a reload or a closed tab, and if the file changes
+underneath it your changes are carried over.
 
 The **Topology** page is the other picture: the machines, hardware and
 backends, and the requests in flight. It is watched, not edited; backends,

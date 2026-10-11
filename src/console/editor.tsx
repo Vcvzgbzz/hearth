@@ -7,11 +7,11 @@ import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, Plus, RotateCcw, Save, Sea
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, directTo, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, renamed, routeId, TEMPLATES, text, toOf, toText, withDo, type Doc, type To } from "./draft.js";
-import { change, changed, choose, chooseAt, closeMenu, dirty, editSelect, facts, focusOn, loadDraft, pick, remove, revert, review, setAdding, startRule, tryRequest, undo, useEdit, wire, type Choice } from "./editStore.js";
+import { ACTIONS, arranged, directTo, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, withDo, type Doc, type To } from "./draft.js";
+import { change, changed, choose, chooseAt, closeMenu, copy, dirty, duplicate, editSelect, facts, focusOn, loadDraft, paste, pick, remove, rename, revert, review, setAdding, startRule, tryRequest, undo, useEdit, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
-import { toast, useStore } from "./store.js";
+import { useStore } from "./store.js";
 import { Button, cx, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
@@ -85,9 +85,10 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
   const entry = on ? obj(obj(draft[SECTION[on.kind]])[on.id]) : {};
   const items: Choice[] = on ? [
     { label: `${on.kind === "flow" ? "rule" : "action"} ${on.id}`, head: true },
-    { label: "Edit…", value: "edit" },
+    { label: "Edit…", value: "edit", hint: "its name is changed there, or by clicking it" },
+    { label: "Duplicate", value: "duplicate", hint: "⌘D, or ⌘C then ⌘V" },
     ...(on.kind === "flow" ? [{ label: entry.off === true ? "Switch on" : "Switch off", value: "toggle", hint: entry.off === true ? undefined : "its names run as themselves until it is on again" }] : []),
-    { label: "Delete", value: "delete", danger: true },
+    { label: "Delete", value: "delete", danger: true, hint: "or press Delete" },
     { label: "the map", head: true },
   ] : [];
   chooseAt(e.clientX, e.clientY, [
@@ -98,13 +99,14 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
     ...ACTIONS.map((k) => ({ label: k.label, value: `action:${k.key}`, hint: k.hint })),
     { label: "view", head: true },
     { label: "Fit everything in view", value: "fit" },
-    ...(isObj(draft.layout) ? [{ label: "Tidy up", value: "tidy", hint: "back to the automatic arrangement" }] : []),
+    ...(arranged(draft) ? [{ label: "Tidy up", value: "tidy", hint: "back to the automatic arrangement" }] : []),
   ], (v) => {
     if (v === "find") openSearch(e.clientX, e.clientY);
     else if (v.startsWith("rule:")) startRule(v.slice(5));
     else if (v.startsWith("action:")) setAdding(`actions:${v.slice(7)}`);
     else if (v === "fit") focusOn("*");
-    else if (v === "tidy") change(({ layout: _, ...rest }) => rest);
+    else if (v === "tidy") change(tidied);
+    else if (on && v === "duplicate") duplicate(on);
     else if (on && v === "edit") { editSelect(on); focusOn(node!); }
     else if (on && v === "delete") remove(on);
     else if (on && v === "toggle") change((d) => { const { off: _, ...rest } = obj(obj(d.flows)[on.id]); return put(d, "flows", on.id, entry.off === true ? rest : { ...rest, off: true }); });
@@ -120,13 +122,24 @@ export function EditBar() {
   const { draft, err, plan, past, unread, adding } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
-  // "/" opens the search from anywhere on the page, unless something is being typed into.
+  // The map's keys, from anywhere on the page unless something is being typed into or a list is open:
+  // "/" searches, Delete takes out what is selected, and copy, paste, duplicate and undo are where they always are.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      if (e.key !== "/" || e.metaKey || e.ctrlKey || el?.closest("input, textarea, select, [contenteditable]")) return;
+      const s = useEdit.getState();
+      if (el?.closest("input, textarea, select, [contenteditable]") || s.choosing || s.picking || s.adding || s.plan || !s.draft) return;
+      const mod = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
+      if (k === "/" && !mod) openSearch(innerWidth / 2 - 150, 120);
+      else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.sel) remove(s.sel);
+      else if (mod && k === "d" && s.sel) duplicate(s.sel);
+      // Text that is selected on the page is what a copy is for, before any node.
+      else if (mod && k === "c" && s.sel && !String(getSelection() ?? "")) copy(s.sel);
+      else if (mod && k === "v" && !e.shiftKey) paste();
+      else if (mod && k === "z" && !e.shiftKey) undo();
+      else return;
       e.preventDefault();
-      openSearch(innerWidth / 2 - 150, 120);
     };
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
@@ -157,7 +170,7 @@ export function EditBar() {
                 onClick={(e) => choose(e, ACTIONS.map((k) => ({ label: k.label, value: k.key, hint: k.hint })), (k) => setAdding(`actions:${k}`))}>
           <Zap size={13} />action
         </button>
-        {isObj(draft.layout) && <Button onClick={() => change(({ layout: _, ...rest }) => rest)}>tidy up</Button>}
+        {arranged(draft) && <Button onClick={() => change(tidied)}>tidy up</Button>}
         <button type="button" aria-label="find a node" title="find a rule, an action, a name or a model on the map ( / )" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 text-[12px] text-dim hover:bg-muted hover:text-fg"
                 onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openSearch(r.left, r.bottom + 4); }}>
           <Search size={13} />find<kbd className="rounded border border-line px-1 text-[10px]">/</kbd>
@@ -166,12 +179,12 @@ export function EditBar() {
                 onClick={(e) => choose(e, LEGEND.map(([label, hint]) => ({ label, hint })), () => {})}>
           <CircleHelp size={14} />
         </button>
-        <span className="ml-2 truncate text-[11px] text-dim max-2xl:hidden">Only what you have routed is shown. Drag a dot to connect it; right-click for more.</span>
+        <span className="ml-2 truncate text-[11px] text-dim max-2xl:hidden">You are editing a draft: nothing changes until you publish. Drag a dot to connect it; right-click for more.</span>
         <div className="ml-auto flex items-center gap-2">
-          {isDirty && <span className="flex items-center gap-1.5 text-[12px] text-accent"><span className="size-1.5 rounded-full bg-accent" />{changes} unsaved {changes === 1 ? "change" : "changes"}</span>}
+          {isDirty && <span className="flex items-center gap-1.5 text-[12px] text-accent"><span className="size-1.5 rounded-full bg-accent" />draft: {changes} {changes === 1 ? "change" : "changes"}, not live yet</span>}
           <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
-          <Button disabled={!isDirty} onClick={revert}><RotateCcw size={13} />discard</Button>
-          <Button tone="primary" disabled={!isDirty} onClick={() => void review()}><Save size={13} />review &amp; save</Button>
+          <Button disabled={!isDirty} onClick={revert}><RotateCcw size={13} />discard draft</Button>
+          <Button tone="primary" disabled={!isDirty} onClick={() => void review()}><Save size={13} />review &amp; publish</Button>
         </div>
         {err && <div className="w-full text-[12px] text-bad">{err.message}</div>}
         {!err && issues.length > 0 && <div className="w-full text-[12px] text-warn">{issues[0]}{issues.length > 1 ? ` (and ${issues.length - 1} more)` : ""}</div>}
@@ -571,12 +584,6 @@ export function EditRail() {
   const paths = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).path)).filter(Boolean)))];
   // What runs this action, so taking it away is not a surprise.
   const users = sel.kind === "action" ? linesRunning(draft, sel.id) : [];
-  const rename = (to: string) => {
-    const next = renamed(draft, section, sel.id, to.trim());
-    if (!next) { if (to.trim() && to.trim() !== sel.id) toast("bad", `"${to.trim()}" is taken, or not a name`); return; }
-    change(() => next);
-    editSelect({ kind: sel.kind, id: to.trim() });
-  };
   return (
     <aside className="w-[480px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-10 max-lg:max-w-full">
       <div className="mb-3 flex items-center gap-2">
@@ -584,7 +591,7 @@ export function EditRail() {
           <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "flow" ? "routing rule" : "action"}</div>
           {isObj(entry)
             ? <input key={sel.id} aria-label="name" title="click to rename" defaultValue={sel.id} className={cx("w-full truncate rounded border border-transparent bg-transparent text-base font-semibold hover:border-line focus:border-accent focus:outline-none", mono)}
-                     onBlur={(e) => { rename(e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
+                     onBlur={(e) => { rename(sel, e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
             : <div className={cx("truncate text-base font-semibold", mono)}>{sel.id}</div>}
         </div>
         {isObj(entry) && <button className="ml-auto text-dim hover:text-bad" aria-label={`delete ${sel.id}`} onClick={() => remove(sel)}><Trash2 size={15} /></button>}

@@ -256,6 +256,63 @@ export function renamed(doc: Doc, section: "flows" | "actions", from: string, to
   };
 }
 
+/** A rule or an action put in again under a free name, and that name. A copied rule takes no names: a name enters one rule. */
+export function added(doc: Doc, section: "flows" | "actions", base: string, entry: Doc): { doc: Doc; name: string } {
+  let name = `${base}-copy`;
+  for (let n = 2; name in obj(doc[section]); n++) name = `${base}-copy-${n}`;
+  return { doc: put(doc, section, name, section === "flows" ? { ...entry, inputs: [] } : entry), name };
+}
+
+/**
+ * Give a type another name, and follow it everywhere it is named: the rule it enters, a line that
+ * tests what was asked for, and its place in the list. Null when the name is taken or not one.
+ */
+export function retyped(doc: Doc, from: string, to: string): Doc | null {
+  const flows = Object.entries(obj(doc.flows));
+  if (!to || to === from || from === ANY || /[:*\s]/.test(to) || flows.some(([, f]) => list(obj(f).inputs).includes(to))) return null;
+  const swap = (names: unknown) => list(names).map((n) => (n === from ? to : n));
+  const when = (w: Doc): Doc => ({ ...w, ...(w.asked !== undefined ? { asked: swap(w.asked) } : {}), ...(w.askedNot !== undefined ? { askedNot: swap(w.askedNot) } : {}) });
+  // A flow that only says where this one name runs is named after it, and stays so while that name is free.
+  const key = (name: string, f: unknown) => (name === from && !(to in obj(doc.flows)) && directTo(name, { inputs: list(obj(f).inputs), steps: (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).map(obj) }) ? to : name);
+  const out: Doc = {
+    ...doc,
+    flows: Object.fromEntries(flows.map(([name, f]) => [key(name, f), {
+      ...obj(f), inputs: swap(obj(f).inputs),
+      ...(Array.isArray(obj(f).steps) ? { steps: (obj(f).steps as unknown[]).map((s) => (isObj(obj(s).when) ? { ...obj(s), when: when(obj(obj(s).when)) } : s)) } : {}),
+    }])),
+  };
+  const rank = obj(doc.layout)[RANK + from];
+  return rank === undefined ? out : put(put(out, "layout", RANK + from, undefined), "layout", RANK + to, rank);
+}
+
+/** Where a type sits in the Router's list is kept with the layout, as a rank in `y`. */
+export const RANK = "routing/order:";
+
+/** `names` in the order they were put in: ranked ones first by rank, then the rest as they come. */
+export function ordered(layout: Record<string, { x: number; y: number }> | undefined, names: string[]): string[] {
+  const rank = (n: string) => layout?.[RANK + n]?.y ?? Infinity;
+  return names.map((n, i) => [n, i] as const).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([n]) => n);
+}
+
+/** Move a type `by` places in the list `names`, which is the order they are shown in now. */
+export function movedName(doc: Doc, names: string[], name: string, by: number): Doc {
+  const i = names.indexOf(name);
+  const j = i + by;
+  if (i < 0 || j < 0 || j >= names.length) return doc;
+  const next = names.map((n, k) => (k === i ? names[j]! : k === j ? names[i]! : n));
+  return next.reduce<Doc>((d, n, k) => put(d, "layout", RANK + n, { x: 0, y: k }), doc);
+}
+
+/** Has a node been placed by hand? */
+export const arranged = (doc: Doc): boolean => Object.keys(obj(doc.layout)).some((id) => !id.startsWith(RANK));
+
+/** The draft with every node back where the automatic arrangement puts it; the order of the types is kept. */
+export function tidied(doc: Doc): Doc {
+  const kept = Object.fromEntries(Object.entries(obj(doc.layout)).filter(([id]) => id.startsWith(RANK)));
+  const { layout: _, ...rest } = doc;
+  return Object.keys(kept).length ? { ...rest, layout: kept } : rest;
+}
+
 /** Make step `i` of a flow run `action` when it decides, or stop it; null when that changes nothing. */
 export function withDo(doc: Doc, flow: string, i: number, action: string, on: boolean): Doc | null {
   const step = stepsOf(doc, flow)?.[i];

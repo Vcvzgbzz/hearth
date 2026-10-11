@@ -6,7 +6,7 @@
 import { applyNodeChanges, Background, Controls, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, directTo, draftView, factsOf, list, nodeOf, refusal, restOf, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, directTo, draftView, factsOf, list, nodeOf, ordered, refusal, restOf, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried } from "./editStore.js";
 import { contextMenu } from "./editor.js";
 import { HUE, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type RefuseBox, type SwitchBox } from "./flowNodes.js";
@@ -106,7 +106,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     ...(self.backends ?? []).flatMap((b) => b.serves ?? []),
     ...Object.entries(d.routing ?? {}).filter(([, r]) => r.backend !== undefined).map(([id]) => id),
   ])];
-  const names = [...new Set([...flows.flatMap(([, f]) => f.inputs), ...direct.keys(), ...(edit?.pending ?? [])])];
+  const names = ordered(d.layout, [...new Set([...flows.flatMap(([, f]) => f.inputs), ...direct.keys(), ...(edit?.pending ?? [])])]);
   const ruleOf = (name: string) => flows.find(([, f]) => f.inputs.includes(name))?.[0];
   /** The variants a rule's lines test, its own and those of the rules it hands on to. */
   const variantsIn = (rule: string | undefined, seen: string[] = []): string[] => {
@@ -139,7 +139,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   };
   const action = (name: string, at: { x: number; y: number }, unused = false): Node => ({
     id: `action:${name}`, type: "action", position: at, zIndex: 1000,
-    data: { name, kind: d.actions![name]!.kind, says: d.actions![name]!.says, selected: is("action", name), on: tried?.actions?.includes(name) ?? false, unused } satisfies ActionBox,
+    data: { name, kind: d.actions![name]!.kind, says: d.actions![name]!.says, editable: Boolean(edit), selected: is("action", name), on: tried?.actions?.includes(name) ?? false, unused } satisfies ActionBox,
   });
 
   // Each name's line: into the rule that takes it, else to wherever it was sent. A name that is not chat has none.

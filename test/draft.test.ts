@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -263,6 +263,36 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual(parseConfig(moved).layout, moved.layout);
   assert.deepEqual(parseConfig(doc()).layout, {}, "a file that places nothing is laid out as before");
   assert.throws(() => parseConfig({ ...doc(), layout: { self: { x: "left" } } }), /layout\.self\.x must be a number/);
+}
+
+// --- copies, and the types on the Router ------------------------------------------------------------
+{
+  // A copy goes in under a free name and takes no names of its own; a second copy gets the next one.
+  const once = added(doc(), "flows", "pick", (doc().flows as Record<string, Doc>).pick!);
+  const twice = added(once.doc, "flows", "pick", (doc().flows as Record<string, Doc>).pick!);
+  assert.deepEqual([once.name, twice.name], ["pick-copy", "pick-copy-2"]);
+  assert.deepEqual([(twice.doc.flows as Record<string, Doc>)["pick-copy"]!.inputs, steps(twice.doc, "pick-copy-2")], [[], steps(doc())]);
+  assert.doesNotThrow(() => parseConfig(withRest(twice.doc, "asked")));
+
+  // A type's new name follows into the rule it enters, a line that tests it, and a flow named after it.
+  const tested = pointStep({ ...doc(), flows: { ...(doc().flows as Doc), pick: { inputs: ["auto"], steps: [{ when: { asked: ["auto"] }, to: "image" }, { to: "chat" }] } } }, "pick", 1, { kind: "model", model: "other" })!;
+  const smart = retyped(tested, "auto", "smart")!;
+  assert.deepEqual([(smart.flows as Record<string, Doc>).pick!.inputs, steps(smart)[0]!.when], [["smart"], { asked: ["smart"] }]);
+  const photo = retyped(routeId(doc(), "image", { kind: "model", model: "other" }), "image", "photo")!;
+  assert.deepEqual([Object.keys(photo.flows as object), (photo.flows as Record<string, Doc>).photo], [["pick", "heavy", "photo"], { inputs: ["photo"], steps: [{ to: "other" }] }]);
+  assert.doesNotThrow(() => parseConfig(withRest(photo, "asked")));
+  // A name another rule takes, the catch-all, and one with a variant's colon in it are refused.
+  assert.deepEqual([retyped(doc(), "auto", "image"), retyped(doc(), "*", "all"), retyped(doc(), "auto", "a:b"), retyped(doc(), "auto", "")], [null, null, null, null]);
+
+  // The order of the types is kept with the layout, follows a rename, and outlasts a tidy-up.
+  const down = movedName(doc(), ["auto", "image"], "auto", 1);
+  assert.deepEqual(ordered(down.layout as never, ["auto", "image", "new"]), ["image", "auto", "new"]);
+  assert.equal(movedName(doc(), ["auto", "image"], "auto", -1).layout, undefined);
+  assert.deepEqual(ordered(retyped(down, "auto", "smart")!.layout as never, ["smart", "image"]), ["image", "smart"]);
+  const put = placed(down, "routing/flow:pick", { x: 5, y: 5 });
+  assert.deepEqual([arranged(down), arranged(put), arranged(tidied(put)), ordered(tidied(put).layout as never, ["auto", "image"])], [false, true, false, ["image", "auto"]]);
+  assert.equal(tidied(placed(doc(), "routing/flow:pick", { x: 5, y: 5 })).layout, undefined);
+  assert.doesNotThrow(() => parseConfig(withRest(put, "asked")));
 }
 
 // --- what is written is the change and nothing else -------------------------------------------------

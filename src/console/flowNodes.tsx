@@ -5,11 +5,11 @@
  * them by node type; how each behaves when a line is drawn is NODES in draft.ts.
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronDown, MoreHorizontal, Plus, Split, X, Zap } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Plus, Split, Trash2, X, Zap } from "lucide-react";
 import { memo, useState } from "react";
 
-import { ACTIONS, ANY, editStep, list, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
-import { addName, change, choose, editSelect, hover, pick, type Choice } from "./editStore.js";
+import { ACTIONS, ANY, editStep, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
+import { addName, change, choose, dropName, editSelect, hover, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { cx } from "./ui.js";
 
 type About = "the request" | "where it would go" | "this node";
@@ -163,6 +163,17 @@ const hue = (kind: string) => HUE[kind] ?? HUE.unset!;
 // Big enough to see and to grab at the size the whole picture is drawn.
 const PORT = "!h-3.5 !w-3.5 !border-2 !border-panel";
 
+/** A name that is renamed where it stands: typed over, then Enter or a click away. */
+function Renamed({ name, label, onRename, className }: { name: string; label: string; onRename: (to: string) => void; className?: string }) {
+  return (
+    <input key={name} aria-label={label} title="click to rename" defaultValue={name} spellCheck={false} style={{ width: `${name.length + 2}ch` }}
+           className={cx("nodrag nopan min-w-0 shrink rounded border border-transparent bg-transparent px-0.5 font-mono font-medium hover:border-line focus:border-accent focus:outline-none", className)}
+           onBlur={(e) => { onRename(e.target.value); e.target.value = name; }}
+           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = name; e.currentTarget.blur(); } }} />
+  );
+}
+const BIN = "nodrag nopan grid h-6 w-6 shrink-0 place-items-center rounded-md text-dim hover:bg-muted hover:text-bad";
+
 /** What is known about a line: `bad` is why it cannot work, `unsure` that its target has not said whether it can take what the line tests. */
 export type Mark = { bad: string } | { unsure: true } | null;
 
@@ -185,9 +196,10 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
         <Handle type="target" position={Position.Left} className={cx(PORT, HUE.flow!.dot)} style={{ left: -6 }} />
         <Split size={13} className="text-info" />
         <span className="text-[10px] uppercase tracking-wide text-info">routing rule</span>
-        <span className="truncate font-mono font-medium">{data.name}</span>
+        {data.editable ? <Renamed name={data.name} label={`name of rule ${data.name}`} onRename={(to) => rename({ kind: "flow", id: data.name }, to)} /> : <span className="truncate font-mono font-medium">{data.name}</span>}
         {(data.takes ?? []).length > 0 && <span className="shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title={`not chat: it takes requests on ${data.takes!.join(", ")}`}>not chat</span>}
         <span className={cx("ml-auto shrink-0 text-[10px]", data.orphan ? "text-warn" : "text-dim")}>{data.off ? "switched off" : data.orphan ? "nothing reaches this yet" : data.sticky ? "a conversation stays where it starts" : "top to bottom, first match wins"}</span>
+        {data.editable && <button type="button" aria-label={`delete rule ${data.name}`} title="delete this rule" className={BIN} onClick={(e) => { e.stopPropagation(); remove({ kind: "flow", id: data.name }); }}><Trash2 size={13} /></button>}
       </div>
       {data.steps.map((s, i) => {
         const to = toOf(s.to);
@@ -317,7 +329,9 @@ export type Hub = {
 /** This node's router: the model names it sends somewhere, each with a line to where requests for it go. */
 export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   const [typing, setTyping] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const add = (v: string) => { setTyping(null); addName(v.trim()); };
+  const order = data.rows.map((r) => r.id);
   return (
     <div className={cx("w-[240px] rounded-xl border border-line bg-panel shadow-sm")}>
       <div className="border-b border-line px-3 py-2">
@@ -326,13 +340,31 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
       </div>
       {data.rows.length > 0 && <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wide text-dim" title="the names callers may ask for">types</div>}
       {data.rows.map((r) => (
-        <div key={r.id} className={cx("relative flex h-[22px] items-center px-3 text-[11px] hover:bg-muted", r.on && "bg-accent/15", r.fixed && "text-dim")} title={r.fixed ?? `drag the dot to say where requests for ${r.id} go`}
+        <div key={r.id} className={cx("group relative flex h-[22px] items-center px-3 text-[11px] hover:bg-muted", r.on && "bg-accent/15", r.fixed && "text-dim")} title={r.fixed ?? `drag the dot to say where requests for ${r.id} go`}
              onMouseEnter={() => hover(`e:ask:${r.id}`)} onMouseLeave={() => hover(null)}>
           {/* A name sent to a peer leaves on the peers' side. */}
           <Handle type="source" id={`ask-${r.id}-back`} position={Position.Left} className="!opacity-0 !pointer-events-none" style={{ left: -6 }} />
-          <span className={cx("truncate font-mono", r.loose && "text-warn")}>{r.id === ANY ? "anything else" : r.id}</span>
+          {renaming === r.id
+            ? <input autoFocus aria-label={`new name for ${r.id}`} defaultValue={r.id} spellCheck={false} className="nodrag nopan h-5 min-w-0 flex-1 rounded border border-accent bg-panel px-1 font-mono text-[11px] focus:outline-none"
+                     onBlur={(e) => { setRenaming(null); retype(r.id, e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = r.id; e.currentTarget.blur(); } }} />
+            : <span className={cx("truncate font-mono", r.loose && "text-warn")} onDoubleClick={() => { if (data.editable && r.id !== ANY) setRenaming(r.id); }}>{r.id === ANY ? "anything else" : r.id}</span>}
           {(r.variants ?? []).length > 0 && <span className="ml-1.5 min-w-0 truncate text-[10px] text-dim" title={`also asked for as ${r.variants!.map((v) => `${r.id}:${v}`).join(", ")}`}>:{r.variants!.join(" :")}</span>}
           {r.loose && <span className="ml-auto shrink-0 text-[10px] text-warn">drag me →</span>}
+          {data.editable && r.id !== ANY && renaming !== r.id && (
+            <button type="button" aria-label={`${r.id} options`} title="rename, move or remove this type" className={cx("nodrag nopan mr-1 hidden h-5 w-5 shrink-0 place-items-center rounded text-dim hover:bg-line hover:text-fg group-hover:grid", !r.loose && "ml-auto")}
+                    onClick={(e) => choose(e, [
+                      { label: "Rename…", value: "rename", hint: "or double-click the name" },
+                      { label: "Move up", value: "up", off: order.indexOf(r.id) === 0 },
+                      { label: "Move down", value: "down", off: order.indexOf(r.id) === order.length - 1 },
+                      { label: "Remove", value: "remove", danger: true, hint: "nothing takes this name any more" },
+                    ], (v) => {
+                      if (v === "rename") setRenaming(r.id);
+                      else if (v === "remove") dropName(r.id);
+                      else change((d) => movedName(d, order, r.id, v === "up" ? -1 : 1));
+                    })}>
+              <MoreHorizontal size={12} />
+            </button>
+          )}
           <Handle type="source" id={`ask-${r.id}`} position={Position.Right} style={{ right: -6 }}
                   className={cx(PORT, r.on ? "!bg-accent" : hue(r.to ?? "unset").dot, (!data.editable || r.fixed) && "!pointer-events-none", r.fixed && "!opacity-0")} />
         </div>
@@ -387,7 +419,7 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
   );
 });
 
-export type ActionBox = { name: string; kind: string; says?: string; selected?: boolean; on?: boolean; /** No line runs it. */ unused?: boolean };
+export type ActionBox = { name: string; kind: string; says?: string; editable?: boolean; selected?: boolean; on?: boolean; /** No line runs it. */ unused?: boolean };
 
 /** Something a line sets off beside sending the request on: it changes nothing about where the request goes. */
 export const ActionNode = memo(function ActionNode({ data }: NodeProps<Node<ActionBox>>) {
@@ -400,7 +432,8 @@ export const ActionNode = memo(function ActionNode({ data }: NodeProps<Node<Acti
       <div className="flex items-center gap-1.5">
         <Zap size={12} className="shrink-0 text-warn" />
         <span className="text-[10px] uppercase tracking-wide text-warn">action</span>
-        <span className="truncate font-mono text-[12px] font-medium">{data.name}</span>
+        {data.editable ? <Renamed name={data.name} label={`name of action ${data.name}`} className="text-[12px]" onRename={(to) => rename({ kind: "action", id: data.name }, to)} /> : <span className="truncate font-mono text-[12px] font-medium">{data.name}</span>}
+        {data.editable && <button type="button" aria-label={`delete action ${data.name}`} title="delete this action" className={cx(BIN, "ml-auto h-5 w-5")} onClick={(e) => { e.stopPropagation(); remove({ kind: "action", id: data.name }); }}><Trash2 size={12} /></button>}
       </div>
       <div className="mt-0.5 truncate text-[10px] text-dim" title={data.says}>{kind ? `${kind.label.toLowerCase()}${data.says ? `: ${data.says}` : ""}` : "not set up yet"}</div>
       {data.unused && <div className="truncate text-[10px] text-warn">no line runs this yet: drag a line's dot here</div>}

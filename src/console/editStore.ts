@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { factsOf, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, TEMPLATES, type Doc, type Facts, type Landing } from "./draft.js";
+import { added, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, TEMPLATES, type Doc, type Facts, type Landing } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 
 export type EditSel = { kind: "flow" | "action"; id: string } | null;
@@ -49,14 +49,14 @@ export const useEdit = create<EditState>(() => ({
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-// A draft outlives a reload: it is kept beside the file it was made on, and carried over if that file has moved since.
+// A draft outlives a reload and a closed tab: it is kept beside the file it was made on, and carried over if that file has moved since.
 const KEPT = "hearth.draft";
 const keep = (s: Pick<EditState, "file" | "draft">): void => {
   // With no file read there is nothing to compare a draft with: what was kept stays kept.
   if (!s.file) return;
   try {
-    if (s.file?.doc && s.draft && dirty(s)) sessionStorage.setItem(KEPT, JSON.stringify({ base: s.file.doc, draft: s.draft }));
-    else sessionStorage.removeItem(KEPT);
+    if (s.file?.doc && s.draft && dirty(s)) localStorage.setItem(KEPT, JSON.stringify({ base: s.file.doc, draft: s.draft }));
+    else localStorage.removeItem(KEPT);
   } catch { /* storage is a convenience: without it a reload starts from the file */ }
 };
 // Every change to the draft is one step back for undo, and is kept across a reload.
@@ -84,7 +84,7 @@ export async function loadDraft(): Promise<void> {
   const now = useEdit.getState();
   let mine: { base: Doc; draft: Doc } | null = now.file?.doc && now.draft && dirty(now) ? { base: now.file.doc, draft: now.draft } : null;
   if (!mine && !now.file) {
-    try { mine = JSON.parse(sessionStorage.getItem(KEPT) ?? "null") as typeof mine; } catch { mine = null; }
+    try { mine = JSON.parse(localStorage.getItem(KEPT) ?? "null") as typeof mine; } catch { mine = null; }
   }
   stepping = true;
   set({ unread: null });
@@ -94,7 +94,7 @@ export async function loadDraft(): Promise<void> {
     if ("doc" in moved) set({ file, draft: moved.doc, err: null, plan: null });
     // Changes kept from before a reload that no longer fit the file are let go, and said so: there is nothing on screen to keep editing.
     else if (!now.draft) {
-      try { sessionStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
+      try { localStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
       set({ file, draft: file.doc, err: null, plan: null, past: [] });
       toast("bad", `Unsaved changes from before could not be carried over: ${moved.clash} has changed in the file since.`);
     }
@@ -107,7 +107,7 @@ export const dirty = (s: Pick<EditState, "file" | "draft">) => JSON.stringify(s.
 /** How many things the draft changes: a rule, a backend, the layout each count once however much of them moved. */
 export const changed = (s: Pick<EditState, "file" | "draft">): number =>
   s.file?.doc && s.draft ? new Set(opsOf(s.file.doc, s.draft).map((op) => op.path.slice(0, 2).join("."))).size : 0;
-export const revert = () => { set((s) => ({ draft: s.file?.doc ?? null, err: null, pending: [], trial: null, tried: null })); toast("ok", "changes discarded — undo brings them back"); };
+export const revert = () => { set((s) => ({ draft: s.file?.doc ?? null, err: null, pending: [], trial: null, tried: null })); toast("ok", "draft discarded — undo brings it back"); };
 export function undo(): void {
   const { past } = useEdit.getState();
   if (past.length === 0) return;
@@ -148,6 +148,55 @@ export function remove(sel: NonNullable<EditSel>): void {
   if (useEdit.getState().sel?.id === sel.id) set({ sel: null });
   toast("ok", `${sel.id} deleted — undo brings it back`);
 }
+const SECTION = { flow: "flows", action: "actions" } as const;
+
+/** Give a rule or an action another name; says why when it cannot. */
+export function rename(sel: NonNullable<EditSel>, to: string): void {
+  const { draft } = useEdit.getState();
+  const name = to.trim();
+  if (!draft || !name || name === sel.id) return;
+  const next = renamed(draft, SECTION[sel.kind], sel.id, name);
+  if (!next) { toast("bad", `"${name}" is taken, or not a name`); return; }
+  set((s) => ({ draft: next, err: null, ...(s.sel?.kind === sel.kind && s.sel.id === sel.id ? { sel: { kind: sel.kind, id: name } } : {}) }));
+}
+
+/** Give a type another name, one that is routed or one still waiting to be. */
+export function retype(from: string, to: string): void {
+  const { draft, pending } = useEdit.getState();
+  const name = to.trim();
+  if (!draft || !name || name === from) return;
+  const next = retyped(draft, from, name);
+  if (!next || pending.includes(name)) { toast("bad", `"${name}" is taken, or not a name a type can have`); return; }
+  set({ draft: next, err: null, pending: pending.map((p) => (p === from ? name : p)) });
+}
+
+/** Take a type off the Router: nothing takes that name any more. */
+export function dropName(id: string): void {
+  set((s) => ({ draft: s.draft ? routeId(s.draft, id, { kind: "unset" }) : s.draft, err: null, pending: s.pending.filter((p) => p !== id) }));
+  toast("ok", `${id} removed — undo brings it back`);
+}
+
+// What was last copied: a rule or an action as it stood, so it can be put in again after it has changed or gone.
+let copiedOne: { kind: "flow" | "action"; id: string; entry: Doc } | null = null;
+/** Remember a rule or an action to paste; false when there is none by that name. */
+export function copy(sel: EditSel): boolean {
+  const entry = sel && obj(useEdit.getState().draft?.[SECTION[sel.kind]])[sel.id];
+  if (!sel || !isObj(entry)) return false;
+  copiedOne = { ...sel, entry };
+  return true;
+}
+/** Put in what was last copied, under a free name, and open it. */
+export function paste(): void {
+  const { draft } = useEdit.getState();
+  if (!draft || !copiedOne) return;
+  const { kind } = copiedOne;
+  const { doc, name } = added(draft, SECTION[kind], copiedOne.id, copiedOne.entry);
+  set({ draft: doc, err: null, sel: { kind, id: name }, focus: { node: `${kind}:${name}` } });
+  toast("ok", kind === "flow" ? `${name} added — give it the names it takes` : `${name} added`);
+}
+/** A second one of a rule or an action, beside the first. */
+export const duplicate = (sel: EditSel) => { if (copy(sel)) paste(); };
+
 export const change = (fn: (d: Doc) => Doc) => set((s) => ({ draft: s.draft ? fn(s.draft) : s.draft, err: null }));
 
 /** What is known right now about names and the places a line can go, or null before the node has reported. */
@@ -232,10 +281,10 @@ export async function review(): Promise<void> {
         commit: async () => {
           try {
             const out = await request<{ restartPending: string[] }>("PATCH", "/config", body);
-            toast("ok", out.restartPending.length ? `saved — restart to apply ${out.restartPending.join(", ")}` : "saved and applied");
+            toast("ok", out.restartPending.length ? `published — restart to apply ${out.restartPending.join(", ")}` : "published: the draft is now what runs");
             stepping = true;
             // Saved: nothing is left to carry over a reload.
-            try { sessionStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
+            try { localStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
             set({ file: null, draft: null, pending: [] });
             stepping = false;
             await loadDraft();
