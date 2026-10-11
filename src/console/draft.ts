@@ -25,12 +25,16 @@ export function put(doc: Doc, section: string, id: string, value: unknown): Doc 
 /** Somewhere a request can run: a model here, or a peer's copy of one (null: the id asked for). */
 export type End = { kind: "model"; model: string } | { kind: "peer"; peer: string; model: string | null };
 /** A step's `to`, read the same way whether it came from the file or from the running node. */
-export type To = End | { kind: "flow"; flow: string } | { kind: "fastest"; of: End[] } | { kind: "refuse"; why: string } | { kind: "unset" };
+export type To = End | { kind: "flow"; flow: string } | { kind: "fastest"; of: End[] } | { kind: "refuse"; why: string } | { kind: "asked" } | { kind: "unset" };
+
+/** The input that stands for every name no other flow takes. */
+export const ANY = "*";
 
 export function toOf(raw: unknown): To {
   if (typeof raw === "string") return raw === "" ? { kind: "unset" } : { kind: "model", model: raw };
   const o = obj(raw);
   if (typeof o.refuse === "string") return { kind: "refuse", why: o.refuse };
+  if (o.asked === true) return { kind: "asked" };
   if (typeof o.flow === "string") return { kind: "flow", flow: o.flow };
   if (Array.isArray(o.fastest)) return { kind: "fastest", of: o.fastest.map(toOf).filter((e): e is End => e.kind === "model" || e.kind === "peer") };
   if (typeof o.peer === "string") return { kind: "peer", peer: o.peer, model: text(o.model) || null };
@@ -45,6 +49,7 @@ export function rawTo(to: To): unknown {
     case "flow": return { flow: to.flow };
     case "fastest": return { fastest: to.of.map(rawTo) };
     case "refuse": return { refuse: to.why };
+    case "asked": return { asked: true };
     default: return "";
   }
 }
@@ -57,6 +62,7 @@ export function toText(to: To): string {
     case "flow": return `rule ${to.flow}`;
     case "fastest": return `fastest of ${to.of.length}`;
     case "refuse": return "refuse it";
+    case "asked": return "its own model";
     default: return "nowhere yet";
   }
 }
@@ -68,6 +74,7 @@ const flowsIn = (doc: Doc): Record<string, Flow> =>
     steps: (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).map(obj),
     ...(obj(f).off === true ? { off: true } : {}), ...(text(obj(f).note) ? { note: text(obj(f).note) } : {}),
     ...(typeof obj(f).sticky === "number" ? { sticky: obj(f).sticky as number } : {}),
+    ...(list(obj(f).takes).length ? { takes: list(obj(f).takes) } : {}),
   }]));
 
 /** The kinds of action, by the key that names each in the file: what it is called, and what a new one starts as. */
@@ -165,8 +172,29 @@ export function directTo(name: string, flow: { inputs: string[]; steps: { when?:
 }
 
 /**
- * Say where requests for `id` go. Its own model means "as itself", which needs no flow at all;
- * a rule means it enters that rule; anywhere else becomes a flow of its own named after it.
+ * What becomes of a name no flow takes: every one runs as itself (`asked`), every one is turned
+ * away (`refuse`), a flow with lines of its own decides (`rule`), or the draft has yet to say (`none`).
+ */
+export function restOf(doc: Doc): { mode: "asked" | "refuse" | "rule" | "none"; name: string | null } {
+  const hit = Object.entries(obj(doc.flows)).find(([, f]) => list(obj(f).inputs).includes(ANY));
+  if (!hit) return { mode: "none", name: null };
+  const steps = (Array.isArray(obj(hit[1]).steps) ? (obj(hit[1]).steps as unknown[]) : []).map(obj);
+  const to = steps.length === 1 && Object.keys(obj(steps[0]!.when)).length === 0 && list(steps[0]!.do).length === 0 ? toOf(steps[0]!.to) : null;
+  return { mode: to?.kind === "asked" ? "asked" : to?.kind === "refuse" ? "refuse" : "rule", name: hit[0] };
+}
+
+/** Say what becomes of a name no flow takes: run as itself, or turned away. A flow that already decides it is replaced. */
+export function withRest(doc: Doc, mode: "asked" | "refuse"): Doc {
+  const { name } = restOf(doc);
+  let id = name ?? "anything-else";
+  if (name === null) for (let n = 2; isObj(obj(doc.flows)[id]); n++) id = `anything-else-${n}`;
+  return put(doc, "flows", id, { inputs: [ANY], steps: [{ to: mode === "asked" ? { asked: true } : { refuse: "that is not something this node offers" } }] });
+}
+
+/**
+ * Say where requests for `id` go. Its own model means "as itself": no flow at all where every
+ * other name already runs as itself, else a flow that says so, since only what a flow takes is
+ * offered. A rule means it enters that rule; anywhere else becomes a flow of its own named after it.
  */
 export function routeId(doc: Doc, id: string, to: To): Doc {
   // Wherever it went before, it goes one way now.
@@ -174,7 +202,7 @@ export function routeId(doc: Doc, id: string, to: To): Doc {
     .filter(([name, f]) => !(name === id && directTo(name, { inputs: list(obj(f).inputs), steps: (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).map(obj) }) !== null))
     .map(([name, f]) => [name, { ...obj(f), inputs: list(obj(f).inputs).filter((x) => x !== id) }]));
   const out: Doc = { ...doc, flows };
-  if (to.kind === "model" && to.model === id) return out;
+  if (to.kind === "model" && to.model === id && restOf(out).mode === "asked") return out;
   if (to.kind === "flow") return isObj(flows[to.flow]) ? put(out, "flows", to.flow, { ...flows[to.flow]!, inputs: [...list(flows[to.flow]!.inputs), id] }) : out;
   if (to.kind === "unset") return out;
   // A name already taken by another flow gets one beside it.
@@ -249,6 +277,8 @@ export interface Outlet {
   rule?: string;
   /** Only somewhere work can run will do: a model or a peer. */
   endsOnly?: boolean;
+  /** Its rule takes requests that are not chat. */
+  paths?: boolean;
   /** The draft with this outlet sent to `to`; null when that changes nothing or cannot be. */
   send: (to: To) => Doc | null;
   /** The draft with `action` run from this outlet, where one can be. */
@@ -284,7 +314,7 @@ export const NODES: Record<string, NodeKind> = {
     outlet: (doc, id, handle) => {
       const i = Number(/^step-(\d+)/.exec(handle ?? "")?.[1] ?? NaN);
       const step = stepsOf(doc, id)?.[i];
-      return step ? { when: obj(step.when), rule: id, send: (to) => pointStep(doc, id, i, to), also: (a) => withDo(doc, id, i, a, true) } : null;
+      return step ? { when: obj(step.when), rule: id, paths: list(obj(obj(doc.flows)[id]).takes).length > 0, send: (to) => pointStep(doc, id, i, to), also: (a) => withDo(doc, id, i, a, true) } : null;
     },
   },
   // The fastest of several: an outlet per place, `end-<k>`, and any other handle adds a place.
@@ -294,7 +324,7 @@ export const NODES: Record<string, NodeKind> = {
       const { flow, step } = lineOf(id);
       const line = stepsOf(doc, flow)?.[step];
       const k = /^end-(\d+)/.exec(handle ?? "");
-      return line ? { when: obj(line.when), endsOnly: true, send: (to) => pointEnd(doc, flow, step, k ? Number(k[1]) : null, to) } : null;
+      return line ? { when: obj(line.when), endsOnly: true, paths: list(obj(obj(doc.flows)[flow]).takes).length > 0, send: (to) => pointEnd(doc, flow, step, k ? Number(k[1]) : null, to) } : null;
     },
   },
   refuse: { opens: (id) => ({ kind: "flow", id: lineOf(id).flow }) },
@@ -361,7 +391,9 @@ export function factsOf(doc: Doc, live: UiData): Facts {
   const backends = Object.entries(obj(doc.backends));
   const owner = (name: string): string | undefined => {
     const wire = text(obj(obj(doc.models)[name]).as) || name;
-    return text(obj(obj(doc.models)[name]).backend) || backends.find(([, b]) => list(obj(b).serves).includes(wire))?.[0]
+    // A path with no name in it is answered by the model its route names, which need not be in `serves`.
+    const routed = (b: unknown) => (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).some((r) => text(obj(r).model) === wire);
+    return text(obj(obj(doc.models)[name]).backend) || backends.find(([, b]) => list(obj(b).serves).includes(wire) || routed(b))?.[0]
       || live.routing?.[name]?.backend || (self?.backends ?? []).find((b) => (b.serves ?? []).includes(wire))?.name;
   };
   // A backend that declares paths of its own answers its models on those, not as chat.
@@ -381,12 +413,16 @@ export function factsOf(doc: Doc, live: UiData): Facts {
  * Why a line that tests `when` cannot send work to `to`, or null when nothing known rules it out.
  * Only what is known counts: a model nobody has described is not refused.
  */
-export function refusal(when: Doc | null | undefined, to: To, facts: Facts): string | null {
+export function refusal(when: Doc | null | undefined, to: To, facts: Facts, paths = false): string | null {
   const ends: End[] = to.kind === "fastest" ? to.of : to.kind === "model" || to.kind === "peer" ? [to] : [];
   for (const end of ends) {
     const name = end.kind === "peer" ? `${end.model ?? "the model"} on ${end.peer}` : end.model;
+    // `paths`: the rule takes requests that are not chat, so what it sends them to must answer those and not chat.
+    if (paths && end.kind === "peer") return `This rule takes requests that are not chat, and a peer is only ever sent chat.`;
+    if (paths && end.kind === "model" && facts.kind(end.model) === "chat") return `This rule takes requests that are not chat, and ${end.model} answers chat.`;
+    if (paths) continue;
     if (end.kind === "model" && facts.kind(end.model) === "paths") {
-      return `${end.model} is not a chat model: its backend answers it on paths of its own (image generation and the like), so a chat request cannot run as it.`;
+      return `${end.model} is not a chat model: its backend answers it on paths of its own (image generation and the like), so a chat request cannot run as it. Give the rule the path it takes to route those.`;
     }
     const s = facts.stats(end);
     if (!s) continue;
@@ -397,10 +433,6 @@ export function refusal(when: Doc | null | undefined, to: To, facts: Facts): str
   }
   return null;
 }
-
-/** Why requests for `name` cannot be routed at all, or null when they can. */
-export const unroutable = (name: string, facts: Facts): string | null =>
-  facts.kind(name) === "paths" ? `Requests for ${name} are not chat: its backend takes them on paths of its own (image generation and the like), and routing only decides chat requests.` : null;
 
 /** Does a line test something its target has not said whether it can take? Then the line stands, but unchecked. */
 export function unchecked(when: Doc | null | undefined, to: To, facts: Facts): boolean {
@@ -416,16 +448,16 @@ export function unchecked(when: Doc | null | undefined, to: To, facts: Facts): b
 /** What is wrong with a draft that a person can fix, said before the file refuses it. */
 export function problems(doc: Doc, facts?: Facts): string[] {
   const out: string[] = [];
-  const flows = Object.entries(obj(doc.flows)).map(([name, f]) => ({ name, inputs: list(obj(f).inputs), steps: (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).map(obj) }));
+  const flows = Object.entries(obj(doc.flows)).map(([name, f]) => ({ name, inputs: list(obj(f).inputs), paths: list(obj(f).takes).length > 0, steps: (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).map(obj) }));
+  if (restOf(doc).mode === "none") out.push(`Say what happens to a name no type takes: on the Router, choose "run it as itself" or "refuse it". The file does not load without one.`);
   for (const f of flows) {
     const fed = f.inputs.length > 0 || flows.some((o) => o.steps.some((s) => { const to = toOf(s.to); return to.kind === "flow" && to.flow === f.name; }));
     if (!fed) out.push(`Nothing reaches the rule "${f.name}" yet: drag a model name onto it, or it does nothing.`);
-    for (const id of f.inputs) { const no = facts ? unroutable(id, facts) : null; if (no) out.push(`Rule "${f.name}": ${no}`); }
     f.steps.forEach((s, i) => {
       const last = i === f.steps.length - 1;
       const to = toOf(s.to);
       // A condition changed after the line was drawn can leave it pointing somewhere that cannot take it.
-      const no = facts ? refusal(obj(s.when), to, facts) : null;
+      const no = facts ? refusal(obj(s.when), to, facts, f.paths) : null;
       if (no) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: ${no}`);
       if (to.kind === "unset") out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: choose where it sends requests.`);
       else if (!last && to.kind !== "peer" && typeof s.max !== "number" && Object.keys(obj(s.when)).length === 0) out.push(`Rule "${f.name}", line ${i + 1}: choose a condition, or the lines after it are never reached.`);

@@ -186,6 +186,11 @@ export interface FlowWhen {
    * else is loaded on its backend or on the exclusive hardware that backend uses.
    */
   ready?: boolean;
+  /**
+   * The variant the name was asked for with, after its last colon: `ImageGen:realism` is the
+   * type `ImageGen` in its `realism` variant. A request with no variant matches none of these.
+   */
+  variant?: string[];
   /** The opposite of `asked`, `caller` and `lane`: none of these. */
   askedNot?: string[];
   callerNot?: string[];
@@ -197,8 +202,14 @@ export interface FlowWhen {
 /** Somewhere a request can run: here as `model`, or on `peer` as its id for `model` (null: the id asked for). */
 export type FlowEnd = { model: string } | { peer: string; model: string | null };
 
-/** Where a step sends a request: to run, into another flow, to whichever of several would start it soonest, or nowhere. */
-export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string };
+/**
+ * Where a step sends a request: to run, into another flow, to whichever of several would start
+ * it soonest, nowhere, or here as the very id that was asked for.
+ */
+export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true };
+
+/** The input that stands for every name no other flow takes: the flow that has it decides what happens to those. */
+export const ANY = "*";
 
 /** One step of a flow: when its conditions hold and its target can take the request, the request goes there. */
 export interface FlowStep {
@@ -227,6 +238,12 @@ export interface Flow {
   off?: true;
   /** What it is for, in the operator's words. */
   note?: string;
+  /**
+   * The request paths this flow answers besides chat, each as a backend declares it under
+   * `routes:`. A path with no name in it (`/generate`) is asked for by this flow's first input;
+   * one with a `{model}` segment, or a model in its body, is asked for by the name it carries.
+   */
+  takes?: string[];
   /**
    * How long a conversation stays where this flow first sent it, in ms. A later turn of the same
    * conversation goes there again while it can take it, whatever the steps would say now.
@@ -571,17 +588,21 @@ function layoutDecl(raw: unknown): Record<string, { x: number; y: number }> {
   return out;
 }
 
-const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
+const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, or a refusal. */
 function flowTo(raw: unknown, at: string): FlowTo {
   if (typeof raw === "string" && raw.trim() !== "") return { model: raw.trim() };
   const o = asRecord(raw, at);
-  only(o, ["model", "peer", "flow", "fastest", "refuse"], at);
-  const said = ["peer", "flow", "fastest", "refuse"].filter((k) => o[k] !== undefined);
+  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked"], at);
+  const said = ["peer", "flow", "fastest", "refuse", "asked"].filter((k) => o[k] !== undefined);
   if (said.length > 1 || (said.length === 1 && said[0] !== "peer" && o.model !== undefined)) {
-    throw bad(at, "must say one thing: a model, a peer, a flow, fastest or refuse");
+    throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse or asked");
+  }
+  if (o.asked !== undefined) {
+    if (o.asked !== true) throw bad(`${at}.asked`, "must be true: run it here as the id that was asked for");
+    return { asked: true };
   }
   if (o.refuse !== undefined) return { refuse: str(o.refuse, `${at}.refuse`) };
   if (o.flow !== undefined) return { flow: str(o.flow, `${at}.flow`) };
@@ -590,7 +611,7 @@ function flowTo(raw: unknown, at: string): FlowTo {
     return {
       fastest: o.fastest.map((e, i) => {
         const end = flowTo(e, `${at}.fastest[${i}]`);
-        if ("flow" in end || "fastest" in end || "refuse" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
+        if ("flow" in end || "fastest" in end || "refuse" in end || "asked" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
         return end;
       }),
     };
@@ -606,10 +627,11 @@ export function rawFlow(flow: Flow): Record<string, unknown> {
     ...(flow.note !== undefined ? { note: flow.note } : {}),
     ...(flow.off ? { off: true } : {}),
     ...(flow.sticky !== undefined ? { sticky: flow.sticky } : {}),
+    ...(flow.takes !== undefined ? { takes: [...flow.takes] } : {}),
     inputs: [...flow.inputs],
     steps: flow.steps.map((s) => ({
       ...(s.when !== null ? { when: s.when } : {}),
-      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to ? s.to : end(s.to),
+      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to || "asked" in s.to ? s.to : end(s.to),
       ...(s.max !== undefined ? { max: s.max } : {}),
       ...(s.lane !== null ? { lane: s.lane } : {}),
       ...(s.params !== null ? { params: s.params } : {}),
@@ -618,17 +640,41 @@ export function rawFlow(flow: Flow): Record<string, unknown> {
   };
 }
 
+/** The places a target can run a request: itself, or each of the several it chooses between. `asked` is the id in hand, for a target that runs "what was asked for". */
+export function endsOf(to: FlowTo, asked?: string): FlowEnd[] {
+  if ("fastest" in to) return to.fastest;
+  if ("asked" in to) return asked === undefined ? [] : [{ model: asked }];
+  return "flow" in to || "refuse" in to ? [] : [to];
+}
+
 /** Can this target be passed over when it cannot take the request? Only a peer can be down. */
 const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
 
 /** Check a `flows:` section against a running config, as loading the file would. */
 export function flowsFor(raw: unknown, cfg: HearthConfig, actions: Record<string, unknown> = cfg.actions): Record<string, Flow> {
-  return flowDecls(raw, cfg.scheduler.lanes, cfg.peers, actions);
+  return flowDecls(raw, cfg.scheduler.lanes, cfg.peers, actions, cfg.backends.flatMap((b) => b.routes.map((r) => r.path)));
+}
+
+/**
+ * A flow's `takes`: paths a backend declares. What arrives on one is not a chat request, so a step
+ * cannot test what only chat has, nor send it to a peer, which is only ever sent chat.
+ */
+function takesOf(raw: unknown, at: string, steps: readonly FlowStep[], routed: readonly string[]): string[] {
+  const paths = strList(typeof raw === "string" ? [raw] : raw, at);
+  for (const p of paths) {
+    if (!routed.includes(p)) throw bad(at, `names "${p}", which no backend declares under routes: (${routed.join(", ") || "none"})`);
+  }
+  steps.forEach((s, i) => {
+    const chatOnly = (["images", "tools", "tokensOver", "tokensUnder"] as const).find((k) => s.when?.[k] !== undefined);
+    if (chatOnly) throw bad(`${at.replace(/takes$/, `steps[${i}].when.${chatOnly}`)}`, "reads a chat request, and this flow takes paths that are not chat");
+    if (endsOf(s.to).some((e) => "peer" in e)) throw bad(`${at.replace(/takes$/, `steps[${i}].to`)}`, "sends to a peer, and a peer is only ever sent chat: this flow takes paths that are not chat");
+  });
+  return paths;
 }
 
 /** `flows:`, checked whole: every name resolves, every flow ends in an answer, and none leads back to itself. */
 function flowDecls(
-  raw: unknown, lanes: Record<string, unknown>, peers: readonly PeerConfig[], actions: Record<string, unknown>,
+  raw: unknown, lanes: Record<string, unknown>, peers: readonly PeerConfig[], actions: Record<string, unknown>, routed: readonly string[],
 ): Record<string, Flow> {
   const flows: Record<string, Flow> = {};
   const entry = new Map<string, string>();
@@ -643,6 +689,7 @@ function flowDecls(
     for (const id of inputs) {
       const other = entry.get(id);
       if (other !== undefined) throw bad(`${at}.inputs`, `names "${id}", which already enters flows.${other}`);
+      if (id === ANY && inputs.length > 1) throw bad(`${at}.inputs`, `lists "${ANY}" beside other names: the flow for every other name takes only "${ANY}"`);
       entry.set(id, name);
     }
     const rawSteps = decl.steps;
@@ -660,8 +707,9 @@ function flowDecls(
         when = {};
         for (const k of ["images", "tools", "warm", "free", "ready"] as const) if (w[k] !== undefined) when[k] = bool(w[k], `${here}.when.${k}`, false);
         for (const k of ["tokensOver", "tokensUnder", "queuedUnder"] as const) if (w[k] !== undefined) when[k] = count(w[k], `${here}.when.${k}`, 0, k === "tokensOver" ? 0 : 1);
-        for (const k of ["asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "held", "down"] as const) if (w[k] !== undefined) when[k] = strList(typeof w[k] === "string" ? [w[k]] : w[k], `${here}.when.${k}`);
+        for (const k of ["variant", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "held", "down"] as const) if (w[k] !== undefined) when[k] = strList(typeof w[k] === "string" ? [w[k]] : w[k], `${here}.when.${k}`);
         for (const l of [...(when.lane ?? []), ...(when.laneNot ?? [])]) inLanes(l, `${here}.when.lane`);
+        for (const v of when.variant ?? []) if (v === "" || v.includes(":")) throw bad(`${here}.when.variant`, `names "${v}": a variant is a plain word, asked for as <name>:<variant>`);
         if (w.time !== undefined) {
           const time = asRecord(w.time, `${here}.when.time`);
           only(time, ["from", "to"], `${here}.when.time`);
@@ -692,6 +740,7 @@ function flowDecls(
         if (!("peer" in end)) continue;
         const peer = peers.find((x) => x.name === end.peer);
         if (!peer) throw bad(`${here}.to`, `names peer "${end.peer}", which is not a peer you borrow from (one with a url)`);
+        if (end.model === null && inputs.includes(ANY)) throw bad(`${here}.to`, `sends every other name to ${end.peer}: say which model with \`model:\`, since a peer maps ids one by one`);
         for (const id of end.model === null ? inputs : [end.model]) {
           if (peer.models[id] === undefined) throw bad(`${here}.to`, `sends "${id}" to ${end.peer}, which does not map it — add it to peers.${end.peer}.models`);
         }
@@ -707,6 +756,7 @@ function flowDecls(
       ...(bool(decl.off, `${at}.off`, false) ? { off: true as const } : {}),
       ...(str(decl.note, `${at}.note`, "") !== "" ? { note: str(decl.note, `${at}.note`) } : {}),
       ...(decl.sticky !== undefined ? { sticky: atLeast(decl.sticky, `${at}.sticky`, 0, 1000) } : {}),
+      ...(decl.takes !== undefined ? { takes: takesOf(decl.takes, `${at}.takes`, steps, routed) } : {}),
     };
   }
   for (const [name, flow] of Object.entries(flows)) {
@@ -1447,7 +1497,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     historyFile: str(root.historyFile, "historyFile", "") || null,
     layout: layoutDecl(root.layout),
     modelHeader: bool(root.modelHeader, "modelHeader", true),
-    flows: flowDecls(root.flows, lanes, peers, actions),
+    flows: flowDecls(root.flows, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))),
     actions,
     listen: mainListen,
     resources: resourceDecls,
@@ -1521,6 +1571,10 @@ export function loadConfig(path: string): HearthConfig {
     throw new ConfigError(null, `${path} is not valid YAML: ${String(e)}`);
   }
   const cfg = parseConfig(raw);
+  // A file says what becomes of a name no flow takes, so that nothing is callable or refused by an oversight.
+  if (!Object.values(cfg.flows).some((f) => f.inputs.includes(ANY))) {
+    throw new ConfigError("flows", `flows: needs a flow with inputs: ["${ANY}"], which says what happens to a name no other flow takes — \`to: { asked: true }\` runs it as itself, \`to: { refuse: "..." }\` turns it away. \`hearth migrate\` adds one that runs them as themselves`);
+  }
   cfg.configPath = path;
   return cfg;
 }

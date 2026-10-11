@@ -136,6 +136,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `models.<id>.params` | unset | request fields stamped on every call (`temperature`, `reasoning_effort`, …). See [One resident model, several ids](#one-resident-model-several-ids-different-defaults) |
 | `flows.<name>.inputs` | none | the ids whose requests enter this flow. An id enters at most one. See [Flows](#flows) |
 | `flows.<name>.steps` | — | where those requests go: tried in order, first match wins, the last always applies |
+| `flows.<name>.takes` | chat | request paths this flow answers besides chat, each as a backend declares it under `routes:`. See [Types](#types) |
 | `flows.<name>.sticky` | unset | how long a conversation stays where this flow first sent it, in ms, so later turns keep the same model |
 | `flows.<name>.off` | `false` | switched off: requests for its inputs run as themselves |
 | `flows.<name>.note` | unset | what the flow is for |
@@ -715,6 +716,10 @@ their own model, the rules they pass through, and the models and peers those
 end at. Every other name goes to its own model, which the node says in one
 line; **route a name** brings one onto the map.
 
+- **The Router lists your types**: the names callers may ask for. **+ type**
+  adds one of your own (`LLM`, `ImageGen`) or offers a model under its own
+  name. The line under them says what becomes of any other name, and a click
+  changes it between "refuse it" and "run it as itself".
 - **A name's dot** is where its line starts. Drag it onto another model or a
   peer to send requests for that name there, onto a rule to have the rule
   decide, or back onto its own model to undo. **add a new name** adds one
@@ -1250,6 +1255,7 @@ as named, so `to: chat-model` inside the flow that takes `chat-model` means
 | `{ flow: name }` | carries on in another flow. A flow that leads back to itself is refused at startup |
 | `{ fastest: [a, { peer: b }, …] }` | runs wherever it would start soonest, by queue depth and whether the model is loaded. A tie stays with the one listed first |
 | `{ refuse: "why" }` | is answered 503 with that reason |
+| `{ asked: true }` | runs here as the id that was asked for. See [Types](#types) |
 
 **A step's `when`** holds when every condition in it does:
 
@@ -1257,6 +1263,7 @@ as named, so `to: chat-model` inside the flow that takes `chat-model` means
 |---|---|
 | `images: true` / `tools: true` | the request carries images / tool definitions (`false` for the opposite) |
 | `tokensOver: n` / `tokensUnder: n` | the estimated prompt plus reserved output is over / under `n` |
+| `variant: [name]` | the name was asked for in one of these variants: `LLM:fast` is the type `LLM` in its `fast` variant. See [Types](#types) |
 | `asked: [id]` | the client asked for one of these ids |
 | `caller: [name]` | the request came with the api key labelled `name`, or `local` for loopback without a key |
 | `lane: [name]` | the request is in one of these lanes |
@@ -1318,6 +1325,82 @@ own `params` still apply over those.
 Work a peer borrows is served as asked and never enters a flow, so two nodes
 cannot bounce a request between them. Paths other than chat completions are
 not routed this way.
+
+#### Types
+
+Only a name some flow takes can be asked for. Those names are this node's
+**types**: `LLM`, `Voice`, `ImageGen`, or a model's own name where you want
+it offered as itself. An app asks for a type and never needs to know which
+model answers, and `/v1/models` lists the types, not the models.
+
+```yaml
+flows:
+  LLM:
+    inputs: [LLM]
+    steps:
+      - when: { images: true }
+        to: vision-model
+      - to: chat-model
+
+  ImageGen:
+    takes: "/upstream/{model}/generate"   # not chat: a path a backend declares under routes:
+    inputs: [ImageGen]
+    steps:
+      - to: image-model
+
+  anything-else:
+    inputs: ["*"]                         # every name no other flow takes
+    steps:
+      - to: { refuse: "ask for LLM or ImageGen" }
+```
+
+**Every file has one flow with `inputs: ["*"]`**, which says what becomes of a
+name no other flow takes. `to: { refuse: "…" }` turns it away, so only your
+types can be asked for. `to: { asked: true }` runs it here as the id that was
+asked for, which keeps every model callable by its own name; `asked` works in
+any flow, and is how one that takes several names sends each to its own model.
+It may have conditions like any flow. A file without one does not load:
+`hearth migrate` adds one that runs names as themselves, which is how a node
+behaved before types.
+
+**A type comes in variants.** `Name:variant` asks for the type in that variant,
+and a step tests which with `variant:`:
+
+```yaml
+  ImageGen:
+    takes: "/upstream/{model}/generate"
+    inputs: [ImageGen]
+    steps:
+      - when: { variant: [realism] }
+        to: photo-model
+      - to: image-model
+```
+
+`ImageGen` runs as `image-model` and `ImageGen:realism` as `photo-model`. The
+variant rides where the name does, in a chat body, a path or any other body,
+and `/v1/models` lists each beside its type. A variant no step tests is not
+offered, so a mistyped one is refused with the ones that exist and never
+quietly answered as the plain type. A name a flow takes as written is itself,
+colon and all.
+
+**A different operation is a different type.** Editing an image arrives on
+another path than generating one, so it is `ImageEdit` with its own `takes`. A
+type is offered only on the paths it takes, and one with `takes` is not offered
+as chat.
+
+**Work that is not chat** arrives on a backend's own path and queues under
+hearth as before. The name it carries is looked up the same way: the `{model}`
+segment of a path (`/upstream/ImageGen/generate`), or the `model` in its body.
+The flow says which model runs it, and the request goes on under that model's
+id. A path with no name in it (`/generate`) is asked for by the flow whose
+`takes` lists it. A flow with `takes` can test the caller, the lane, the time
+and the state of its targets, but not what only a chat request has (images,
+tools, size), and cannot send to a peer. One model per path is all a type has
+to choose from unless two models answer the same path.
+
+Requests a peer borrows are served as the model it was lent and do not pass
+through types. Maintenance calls that hearth forwards without queueing (a
+model swapper's own endpoints) are not affected.
 
 #### Actions
 

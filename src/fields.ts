@@ -86,6 +86,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
   flow: {
     note: { type: "text", desc: "What this flow is for." },
     off: { type: "bool", desc: "Switched off: requests for its inputs run as themselves.", def: false },
+    takes: { type: "list", desc: "Request paths this flow answers besides chat, each as a backend declares it under routes: (image generation and the like). Unset is chat." },
     sticky: { type: "ms", min: 1000, desc: "How long a conversation stays where this flow first sent it, so later turns keep the same model. Unset decides every turn afresh." },
     inputs: { type: "refs", ref: "models", desc: "The ids whose requests enter this flow. An id enters at most one." },
     steps: { type: "raw", desc: "Tried in order, first match wins: `when: {…}`, `to:` a model, `{ peer }`, `{ flow }`, `{ fastest: […] }` or `{ refuse }`, with optional `lane`, `params`, `max` (requests in flight at once) and `do:` (actions to set off). The last has no `when`." },

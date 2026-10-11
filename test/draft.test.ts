@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, unroutable, linesRunning, removed, renamed, TEMPLATES, withDo, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -125,7 +125,7 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.equal(renamed(acting, "actions", "note", "tell"), null);
 
   // Text an action would write out as typed, and what is only known at the end, are said before saving.
-  const texts = (a: Doc) => problems({ ...doc(), actions: { x: a } }).join("\n");
+  const texts = (a: Doc) => problems({ ...withRest(doc(), "asked"), actions: { x: a } }).join("\n");
   assert.match(texts({ log: "{model} took {duration}" }), /uses \{duration\}, which is not something it is told/);
   assert.match(texts({ log: "{model} took {ms}" }), /only known with "on" set to finished or failed/);
   assert.equal(texts({ log: "{model} took {ms}", on: "finished" }), "");
@@ -154,14 +154,35 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual([flowsOf(entered)["pick"]!.inputs, flowsOf(entered)["heavy"]!.inputs], [[], ["image", "auto"]]);
   assert.doesNotThrow(() => parseConfig(entered));
 
-  // Back onto its own model: it runs as itself, which takes no flow at all.
-  const home = routeId(redirected, "chat", { kind: "model", model: "chat" });
+  // Back onto its own model, where other names run as themselves: it does too, which takes no flow at all.
+  const home = routeId(withRest(redirected, "asked"), "chat", { kind: "model", model: "chat" });
   assert.equal(flowsOf(home)["chat"], undefined);
   assert.deepEqual(flowsOf(routeId(doc(), "image", { kind: "model", model: "image" }))["heavy"]!.inputs, [], "and out of any rule that took it");
 
   // Somewhere that is not one model becomes a rule of its own, beside any flow already using the name.
   const refused = routeId(doc(), "pick", { kind: "refuse", why: "no" });
   assert.deepEqual(flowsOf(refused)["pick-2"], { inputs: ["pick"], steps: [{ to: { refuse: "no" } }] });
+}
+
+// --- what becomes of a name no rule takes, and offering a model under its own name ----------------------------
+{
+  assert.deepEqual(restOf(doc()), { mode: "none", name: null });
+  assert.match(problems(doc()).join("\n"), /Say what happens to a name no type takes/);
+  const open = withRest(doc(), "asked");
+  assert.deepEqual([restOf(open), (open.flows as Record<string, unknown>)["anything-else"]], [{ mode: "asked", name: "anything-else" }, { inputs: ["*"], steps: [{ to: { asked: true } }] }]);
+  assert.doesNotThrow(() => parseConfig(open));
+  const shut = withRest(open, "refuse");
+  assert.deepEqual([restOf(shut).mode, Object.keys(shut.flows as object).filter((n) => n.startsWith("anything")).length], ["refuse", 1], "changing it replaces the one flow");
+  assert.equal(restOf({ ...doc(), flows: { r: { inputs: ["*"], steps: [{ when: { caller: ["app"] }, to: { asked: true } }, { to: { refuse: "no" } }] } } }).mode, "rule");
+  assert.deepEqual(rawTo(toOf({ asked: true })), { asked: true });
+
+  // Where other names run as themselves, a name sent to its own model needs no flow; where they are refused, it needs one to be offered at all.
+  const flowsOf = (d: Doc) => d.flows as Record<string, unknown>;
+  assert.equal(flowsOf(routeId(open, "other", { kind: "model", model: "other" }))["other"], undefined);
+  const offered = routeId(shut, "other", { kind: "model", model: "other" });
+  assert.deepEqual(flowsOf(offered)["other"], { inputs: ["other"], steps: [{ to: "other" }] });
+  assert.deepEqual(directTo("other", flowsOf(offered)["other"] as { inputs: string[]; steps: Doc[] }), { kind: "model", model: "other" }, "drawn as a line from the name, not as a rule");
+  assert.doesNotThrow(() => parseConfig(offered));
 }
 
 // --- a draft made on one file, carried over to the file as someone else has since saved it ------------------
@@ -184,7 +205,7 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
 
 // --- what a person can fix is said before the file refuses it -----------------------------------------------------
 {
-  assert.deepEqual(problems(doc()), [], "a file that is in order has nothing to say");
+  assert.deepEqual(problems(withRest(doc(), "asked")), [], "a file that is in order has nothing to say");
   const broken = { ...doc(), servers: { box: { host: "10.0.0.5" }, spare: {} }, flows: { lonely: { inputs: [], steps: [{ when: {}, to: "chat" }, { to: "" }] } },
     backends: { ...(doc().backends as object), other: { server: "box", port: 1, resources: ["gpu0"] } } };
   const said = problems(broken).join("\n");
@@ -206,8 +227,6 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   const live = { net: { nodes: [{ name: "me", self: true, up: true, free: 1, slots: 1, queued: 0, stats: { other: { tools: false } } }, { name: "friend", up: true, free: 1, slots: 1, queued: 0, stats: { chat: { vision: true } } }] }, routing: {} } as unknown as UiData;
   const facts = factsOf(withFacts, live);
   assert.deepEqual([facts.kind("paint"), facts.kind("chat"), facts.kind("auto")], ["paths", "chat", "chat"], "a name nothing serves is chat: a rule answers for it");
-  assert.match(unroutable("paint", facts)!, /Requests for paint are not chat/);
-  assert.equal(unroutable("chat", facts), null);
 
   const to = (model: string) => ({ kind: "model" as const, model });
   assert.match(refusal(null, to("paint"), facts)!, /paint is not a chat model/, "a chat request cannot run as a model that is not chat");
@@ -228,7 +247,13 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   const stale = { ...withFacts, flows: { r: { inputs: ["auto", "paint"], steps: [{ when: { images: true }, to: "chat" }, { to: "image" }] } } };
   const said = problems(stale, factsOf(stale, live)).join("\n");
   assert.match(said, /Rule "r", line 1: This line is for requests with images, and chat does not take images/);
-  assert.match(said, /Rule "r": Requests for paint are not chat/);
+  // A model only a route names (a path with no name in it) is not chat either.
+  const filmed = factsOf({ ...withFacts, backends: { ...(withFacts.backends as object), film: { url: "http://127.0.0.1:8", kind: "none", routes: [{ path: "/generate", model: "film-model", lane: "chat" }] } } }, live);
+  assert.equal(filmed.kind("film-model"), "paths");
+  // A rule that takes a path is the other way about: its lines end at what answers that path, never at chat or a peer.
+  assert.equal(refusal(null, to("paint"), facts, true), null);
+  assert.match(refusal(null, to("chat"), facts, true)!, /takes requests that are not chat, and chat answers chat/);
+  assert.match(refusal(null, { kind: "peer", peer: "friend", model: null }, facts, true)!, /a peer is only ever sent chat/);
 }
 
 // --- where a node was put is part of the file ----------------------------------------------------------

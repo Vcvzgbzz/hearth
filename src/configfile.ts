@@ -14,7 +14,7 @@ import { basename, dirname } from "node:path";
 import { isMap, isScalar, parseDocument, type Document } from "yaml";
 
 import { Refusal } from "./admit.js";
-import { ConfigError, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ConfigError, endsOf, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
 import { routedFlow } from "./route.js";
 import type { Logger } from "./log.js";
 
@@ -202,7 +202,7 @@ export function link(cfg: HearthConfig, peer: string, mine: string, theirs: stri
     return;
   }
   const sends = (e: FlowEnd) => "peer" in e && e.peer === peer && (e.model ?? mine) === mine;
-  if (taken.steps.some((s) => ("fastest" in s.to ? s.to.fastest.some(sends) : !("flow" in s.to) && !("refuse" in s.to) && sends(s.to)))) return;
+  if (taken.steps.some((s) => endsOf(s.to).some(sends))) return;
   // Beside the peers it already tries: in the choice of the fastest when there is one, else as a step ahead of the last.
   const choice = taken.steps.find((s) => "fastest" in s.to);
   if (choice && "fastest" in choice.to) choice.to.fastest.push({ peer, model: mine });
@@ -226,17 +226,17 @@ function pruneUnmapped(cfg: HearthConfig): void {
   for (const [name, flow] of Object.entries(cfg.flows)) {
     const before = JSON.stringify(flow);
     // An id this flow takes that a peer step can no longer be sent as goes back to running as itself.
-    const open = flow.steps.flatMap((s) => ("fastest" in s.to ? s.to.fastest : "flow" in s.to || "refuse" in s.to ? [] : [s.to])).filter((e): e is Extract<FlowEnd, { peer: string }> => "peer" in e && e.model === null);
+    const open = flow.steps.flatMap((s) => endsOf(s.to)).filter((e): e is Extract<FlowEnd, { peer: string }> => "peer" in e && e.model === null);
     if (flow.inputs.length > 1) flow.inputs = flow.inputs.filter((id) => open.every((e) => maps(e.peer, id)));
     const dead = (e: FlowEnd) => "peer" in e && (e.model === null ? flow.inputs.some((id) => !maps(e.peer, id)) : !maps(e.peer, e.model));
     flow.steps = flow.steps.flatMap((s): Flow["steps"] => {
-      if ("flow" in s.to || "refuse" in s.to) return [s];
+      if ("flow" in s.to || "refuse" in s.to || "asked" in s.to) return [s];
       if (!("fastest" in s.to)) return dead(s.to) ? [] : [s];
       const left = s.to.fastest.filter((e) => !dead(e));
       return left.length === 0 ? [] : [{ ...s, to: left.length === 1 ? left[0]! : { fastest: left } }];
     });
     if (JSON.stringify(flow) === before) continue;
-    const idle = flow.steps.every((s) => "refuse" in s.to || (!("flow" in s.to) && !("fastest" in s.to) && !("peer" in s.to) && flow.inputs.includes(s.to.model) && s.do.length === 0 && s.params === null && s.lane === null));
+    const idle = flow.steps.every((s) => "refuse" in s.to || (!("flow" in s.to) && !("fastest" in s.to) && !("peer" in s.to) && ("asked" in s.to || flow.inputs.includes(s.to.model)) && s.do.length === 0 && s.params === null && s.lane === null));
     if (flow.steps.length === 0 || flow.inputs.length === 0 || idle) { delete cfg.flows[name]; continue; }
     // What is left still has to end in a step that always applies.
     const last = flow.steps.at(-1)!;

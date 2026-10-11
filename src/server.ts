@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
-import { ConfigError, flowsFor, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ANY, ConfigError, flowsFor, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
@@ -18,7 +18,7 @@ import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, h
 import { LogRing, type Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
-import { decide, mayLeave, resolve, type LocalLoad, type World } from "./route.js";
+import { decide, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
@@ -520,6 +520,19 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     return !pool.all().some((o) => o !== slot && o.cfg.resources.some((r) => mine.includes(r)) && o.state.loaded().length > 0);
   }
 
+  /** What a flow decided for work that is not chat: counted, and its actions that run as a step decides set off. */
+  function settle(r: ReturnType<typeof resolve>, asked: string, caller: string): void {
+    countHits(r.path);
+    for (const a of r.actions) {
+      const action = cfg.actions[a.name];
+      if (action?.on !== "decided") continue;
+      act(a.name, action, {
+        action: a.name, node: cfg.name, asked, model: r.model, target: r.target, peer: "", lane: r.lane, caller, tokens: 0, images: false, tools: false,
+        flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "", backend: r.target === "local" ? pool.for(r.model).name : "", id: "", queuedMs: 0, ranMs: 0,
+      });
+    }
+  }
+
   /** What a flow reads about this node, for a request with these needs. */
   function worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = cfg): World {
     return {
@@ -577,7 +590,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       // What the backend it lands on is known to take, as a real request would be checked before it is queued.
       const small = r.target === "local" ? unfit(pool.statsFor(r.model), need) : null;
       json(c.res, 200, {
-        target: r.target, model: r.model, lane: r.lane, reason: r.reason, path: r.path, params: r.params, actions: r.actions.map((a) => a.name), ...(small ? { unfit: `${r.model} ${small}` } : {}),
+        target: r.target, model: r.model, lane: r.lane, reason: r.reason, path: r.path, params: r.params, actions: r.actions.map((a) => a.name), ...(r.unlisted ? { unlisted: true } : {}), ...(small ? { unfit: `${r.model} ${small}` } : {}),
         ...(r.target === "peer" ? { peer: r.peer } : r.target === "local" ? { backend: pool.for(r.model).name } : {}),
       });
     } catch (e) {
@@ -638,6 +651,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     const startedAt = Date.now();
     const flowsNow = cfg.flows;
     const decision = resolve(asked, world);
+    // A name this node does not offer is not found, which is a different answer from one it will not run right now.
+    if (decision.unlisted) throw new Refusal(404, decision.reason);
+    // Nor is one that takes paths of its own a chat model.
+    const paths = cfg.flows[decision.via[0] ?? ""]?.takes;
+    if (paths) throw new Refusal(404, `"${asked}" is not offered as chat: it takes ${paths.join(", ")}`);
     // What the flow chose, which a fallback from a failed peer may change again.
     let model = decision.model;
     let lane = decision.lane;
@@ -1607,6 +1625,16 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       // A peer sees only what we share.
       if (modelsPeer !== null) {
         upstream.data = (upstream.data ?? []).filter((m) => shared().includes(m.id));
+      } else {
+        // Everyone else sees what can be asked for: the names flows take, and every model as well
+        // only where the flow for other names runs them as themselves.
+        const taken = Object.values(cfg.flows).filter((f) => !f.off).flatMap((f) => f.inputs).filter((id) => id !== ANY);
+        const open = Object.values(cfg.flows).some((f) => !f.off && f.inputs.includes(ANY) && f.steps.some((s) => "asked" in s.to));
+        const listed = new Set(upstream.data!.map((m) => m.id));
+        if (!open) upstream.data = upstream.data!.filter((m) => taken.includes(m.id));
+        for (const id of taken) if (!listed.has(id)) upstream.data!.push({ id });
+        // Each variant a type comes in is a name of its own to ask for.
+        for (const id of taken) for (const v of variantsOf(cfg.flows, id)) upstream.data!.push({ id: `${id}:${v}` });
       }
       // Same for a scoped key: its picker shows what it may pick.
       if (c.models !== null) {
@@ -1837,7 +1865,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /** Everything not claimed above, proxied to a backend as-is. */
   async function routePassthrough(c: Call): Promise<void> {
-    const { req, res, url, path } = c;
+    const { req, res, url } = c;
+    // Both may be rewritten below, when the name a path carries turns out to be one a flow takes.
+    let path = c.path;
+    let pathname = url.pathname;
     // Everything else is proxied as-is and unqueued (llama-swap's /unload, /running, /upstream/...),
     // unless `backends[].routes` names the path, in which case hearth is its admission control.
     const who = c.caller;
@@ -1850,7 +1881,6 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
     // A declared route wins over every heuristic below it, being the only
     // statement here the operator actually made.
-    const routed = pool.forPath(url.pathname);
 
     // The model from the /upstream/<model>/ path or the body, else the first backend. A form upload
     // (/v1/audio/transcriptions) names its model in a multipart field rather than in JSON.
@@ -1870,6 +1900,38 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         }
       }
     }
+    // Work that queues is asked for by name as chat is, and the name's flow says which model runs it. The
+    // name is the `{model}` segment of the path or the model in the body; a path that carries neither is
+    // asked for by the flow that takes it, else by the model its route names.
+    let routed = pool.forPath(pathname);
+    const held = pool.named(pathname);
+    if (c.peer === null && (held !== undefined || routed?.rule.queue === true)) {
+      const taker = Object.values(cfg.flows).find((f) => !f.off && f.takes?.includes(held?.path ?? pathname));
+      const name = held?.name ?? viaBody ?? taker?.inputs[0] ?? routed!.rule.model;
+      const r = resolve(name, worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined));
+      const refuse = (status: number, why: string) => fail(res, new Refusal(status, why, status === 404 ? "invalid_request_error" : "server_error"));
+      if (r.unlisted) return refuse(404, r.reason);
+      // A type that says which paths it takes is not offered on any other.
+      const takes = cfg.flows[r.via[0] ?? ""]?.takes;
+      if (takes && !takes.includes(held?.path ?? pathname)) return refuse(404, `"${name}" is not offered on ${held?.path ?? pathname}: it takes ${takes.join(", ")}`);
+      if (r.target === "unavailable") return refuse(503, `${name} is not being run: ${r.reason}`);
+      if (r.target === "peer") return refuse(503, `${name} is not being run: its flow sends it to a peer, and only chat goes to a peer`);
+      settle(r, name, who);
+      if (r.model !== name) {
+        if (held) {
+          pathname = held.as(r.model);
+          path = pathname;
+          routed = pool.forPath(pathname);
+          if (!routed) return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${held.path}`);
+        } else if (viaBody !== undefined && body) {
+          viaBody = r.model;
+          body = isForm ? replaceMultipartField(body, contentType, "model", r.model) ?? body : withModel(body, r.model) ?? body;
+        } else if (r.model !== routed!.rule.model) {
+          return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, and ${pathname} is answered by ${routed!.rule.model}`);
+        }
+      }
+    }
+
     // What the caller asked for, kept apart from the backend `named` picks.
     const asked = viaPath ?? viaBody;
     // A degraded model is out of rotation on EVERY door, not only the chat one.

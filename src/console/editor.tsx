@@ -225,7 +225,8 @@ export function Picker() {
   const flows = Object.keys(obj(draft.flows)).filter((f) => f !== self && hit(f));
   // A rule one name enters can send it on as itself; with several names there is no single "itself" to offer.
   const entering = self ? list(obj(obj(draft.flows)[self]).inputs) : [];
-  const own = entering.length === 1 ? entering[0]! : null;
+  // With several names entering, "its own model" is whichever of them was asked for.
+  const own = entering.length === 1 ? entering[0]! : entering.length > 1 ? "whichever was asked for" : null;
   const row = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-line/60";
   const head = "px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-dim";
   return (
@@ -251,7 +252,7 @@ export function Picker() {
             </>
           )}
           {/* Leaving a name alone is a choice too, and the one most lines end on. */}
-          {own && hit("its own model") && <button className={row} onClick={() => send({ kind: "model", model: own })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
+          {own && hit("its own model") && <button className={row} onClick={() => send(entering.length === 1 ? { kind: "model", model: own } : { kind: "asked" })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
           {models.length > 0 && <div className={head}>a model on this node</div>}
           {models.map((m) => {
             const shut = known?.kind(m) === "paths";
@@ -346,7 +347,10 @@ export function TryStrip() {
   const [last, setLast] = useState<string | null>(null);
   useEffect(() => { if (trial) setLast(trial.model); }, [trial]);
   // Every name the node answers to can be tried, routed or not.
-  const names = [...new Set([...Object.values(obj(draft?.flows)).flatMap((f) => list(obj(f).inputs)), ...pending, ...Object.values(obj(draft?.backends)).flatMap((b) => list(obj(b).serves))])];
+  const flowList = Object.values(obj(draft?.flows)).map(obj);
+  // Each type, and each variant a line of its rule tests, is a name that can be tried.
+  const typed = flowList.flatMap((f) => list(f.inputs).filter((n) => n !== "*").flatMap((n) => [n, ...[...new Set((Array.isArray(f.steps) ? (f.steps as unknown[]) : []).flatMap((s) => list(obj(obj(s).when).variant)))].map((v) => `${n}:${v}`)]));
+  const names = [...new Set([...typed, ...pending, ...Object.values(obj(draft?.backends)).flatMap((b) => list(obj(b).serves))])];
   // Asked again as the draft changes, so the lit path is always the draft's.
   useEffect(() => { if (trial) void tryRequest({ ...trial }); }, [draft]);
   if (!draft || names.length === 0) return null;
@@ -452,7 +456,7 @@ function Lines({ name, flow }: { name: string; flow: Doc }) {
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
               <span className="text-dim">{to.kind === "refuse" ? "then" : "send to"}</span>
               <button type="button" className={cx(PICK, mono, to.kind === "unset" && "border-warn text-warn")} onClick={(e) => from(e, `flow:${name}`, `step-${i}`)}>
-                <span className="truncate">{to.kind === "unset" ? "choose where" : to.kind === "model" && list(flow.inputs).includes(to.model) ? "its own model" : toText(to)}</span><ChevronDown size={12} className="shrink-0 text-dim" />
+                <span className="truncate">{to.kind === "unset" ? "choose where" : to.kind === "asked" || (to.kind === "model" && list(flow.inputs).includes(to.model)) ? "its own model" : toText(to)}</span><ChevronDown size={12} className="shrink-0 text-dim" />
               </button>
               {i < last && to.kind !== "refuse" && (
                 <label className="flex items-center gap-1.5" title="The most requests this line takes at once. Past it, requests go on down the list. Empty is no limit.">
@@ -563,6 +567,8 @@ export function EditRail() {
   const self = data?.net.nodes.find((n) => n.self);
   const catalog = [...(data?.catalog ?? []), ...(self?.backends ?? []).flatMap((b) => [...(b.serves ?? []), ...(b.loaded ?? [])])];
   // An action taken away is taken off every line that ran it, so the file still loads.
+  // Every path a backend declares: what a rule can take besides chat.
+  const paths = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).path)).filter(Boolean)))];
   // What runs this action, so taking it away is not a surprise.
   const users = sel.kind === "action" ? linesRunning(draft, sel.id) : [];
   const rename = (to: string) => {
@@ -603,6 +609,23 @@ export function EditRail() {
                 </label>
                 <input aria-label="what this rule is for" placeholder="a note: what this rule is for" className="h-8 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" value={text(entry.note)}
                        onChange={(e) => change((d) => { const { note: _, ...rest } = obj(obj(d.flows)[sel.id]); return put(d, "flows", sel.id, e.target.value ? { ...rest, note: e.target.value } : rest); })} />
+              </div>
+              <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px]">
+                <span className="text-dim">It takes</span>
+                <button type="button" className={PICK} title="what kind of request this rule answers"
+                        onClick={(e) => choose(e, [
+                          { label: "chat requests", value: "", on: list(entry.takes).length === 0 },
+                          { label: "requests on a backend's own path", head: true },
+                          ...paths.map((p) => ({ label: p, value: p, mono: true, on: list(entry.takes).includes(p) })),
+                          ...(paths.length ? [] : [{ label: "no backend declares a path under routes:", off: true }]),
+                        ], (p) => change((d) => {
+                          const { takes: _, ...rest } = obj(obj(d.flows)[sel.id]);
+                          const had = list(obj(obj(d.flows)[sel.id]).takes);
+                          const next = p === "" ? [] : had.includes(p) ? had.filter((x) => x !== p) : [...had, p];
+                          return put(d, "flows", sel.id, next.length ? { ...rest, takes: next } : rest);
+                        }))}>
+                  {list(entry.takes).length ? list(entry.takes).join(", ") : "chat requests"}<ChevronDown size={12} className="shrink-0 text-dim" />
+                </button>
               </div>
               <div className="mb-1 text-[12px] font-medium">When a request asks for</div>
               <Names flow={sel.id} names={list(entry.inputs)} options={refsOf(draft, catalog).models} />

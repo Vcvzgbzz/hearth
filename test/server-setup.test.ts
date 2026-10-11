@@ -22,7 +22,7 @@ if (!iface) {
 }
 
 const path = join(mkdtempSync(join(tmpdir(), "hearth-setup-")), "hearth.yaml");
-writeFileSync(path, `backends:\n  main:\n    url: http://127.0.0.1:9292\n`);
+writeFileSync(path, `backends:\n  main:\n    url: http://127.0.0.1:9292\nflows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }\n`);
 const node = createNode(loadConfig(path), silentLogger);
 await new Promise<void>((r) => node.server.listen(0, iface.address, r));
 const url = `http://${iface.address}:${(node.server.address() as AddressInfo).port}`;

@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { factsOf, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, TEMPLATES, unroutable, type Doc, type Facts, type Landing } from "./draft.js";
+import { factsOf, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, TEMPLATES, type Doc, type Facts, type Landing } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 
 export type EditSel = { kind: "flow" | "action"; id: string } | null;
@@ -172,7 +172,7 @@ export function wire(from: { node: string; handle: string | null }, to: Landing)
     next = out.also(to.action);
   } else {
     const known = facts();
-    const no = known && ((out.name !== undefined ? unroutable(out.name, known) : null) ?? refusal(out.when, to, known));
+    const no = known && refusal(out.when, to, known, out.paths);
     if (no) { toast("bad", no); return; }
     next = out.send(to);
   }

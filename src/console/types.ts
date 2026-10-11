@@ -209,6 +209,8 @@ export interface Flow {
   note?: string;
   /** How long a conversation stays where the flow first sent it, in ms. */
   sticky?: number;
+  /** Request paths it answers besides chat. */
+  takes?: string[];
 }
 
 export interface Routing {

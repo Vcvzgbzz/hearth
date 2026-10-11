@@ -3,7 +3,7 @@
  * concurrency, warm state), so an embedder never waits behind a GPU generation. Nothing
  * schedules across backends; shared hardware only makes one wait for another.
  */
-import type { BackendConfig, HearthConfig, ModelRoute, RouteRule } from "./config.js";
+import { ANY, type BackendConfig, type HearthConfig, type ModelRoute, type RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import { KINDS } from "./kinds.js";
 import type { Logger } from "./log.js";
@@ -171,6 +171,29 @@ export class BackendPool {
       return { slot: p.slot, rule: { ...p.rule, model } };
     }
     return undefined;
+  }
+
+  /**
+   * A path some backend declares with a `{model}` segment, as the name standing in that segment
+   * and the same path for another name. The name need not be a model anything serves: it may be
+   * one a flow takes, to be turned into a model before the path is matched to a backend.
+   */
+  named(pathname: string): { path: string; name: string; as: (model: string) => string } | undefined {
+    for (const p of this.patterns) {
+      const m = p.re.exec(pathname);
+      if (!m) continue;
+      try {
+        return { path: p.rule.path, name: decodeURIComponent(m[1]!), as: (model) => p.rule.path.replace("{model}", encodeURIComponent(model)) };
+      } catch {
+        continue; // a malformed escape is not a name
+      }
+    }
+    return undefined;
+  }
+
+  /** Every path a backend declares, as written: what a flow may say it takes. */
+  paths(): string[] {
+    return [...this.byPath.keys(), ...this.patterns.map((p) => p.rule.path)];
   }
 
   /** Does this backend serve this id: declared in `serves`, else reported by it? */
@@ -427,7 +450,9 @@ export class BackendPool {
     // Named in `models:` — the operator said this id means something, and
     // `backend`/`as` may point it somewhere this check cannot see.
     if (this.cfg.models[model]) return false;
-    if (Object.values(this.cfg.flows).some((flow) => flow.inputs.includes(model))) return false;
+    // A name a flow takes, with or without a variant after it, is that flow's to answer.
+    const cut = model.lastIndexOf(":");
+    if (Object.values(this.cfg.flows).some((flow) => flow.inputs.includes(model) || (cut > 0 && flow.inputs.includes(model.slice(0, cut))))) return false;
     const wire = this.outboundId(model);
     for (const s of this.slots) {
       if (s.cfg.serves.length === 0) return false;
@@ -529,7 +554,7 @@ export class BackendPool {
       if (out.has(this.cfg.models[id]!.as!)) out.add(id);
     }
     // An id a flow takes is advertised whether or not a backend serves it: where it lands is decided per request.
-    for (const flow of Object.values(this.cfg.flows)) for (const id of flow.inputs) out.add(id);
+    for (const flow of Object.values(this.cfg.flows)) for (const id of flow.inputs) if (id !== ANY) out.add(id);
     return [...out];
   }
 

@@ -6,7 +6,7 @@
 import { applyNodeChanges, Background, Controls, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { directTo, draftView, factsOf, list, nodeOf, refusal, toOf, unchecked, unroutable, type End, type Facts, type To } from "./draft.js";
+import { ANY, directTo, draftView, factsOf, list, nodeOf, refusal, restOf, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried } from "./editStore.js";
 import { contextMenu } from "./editor.js";
 import { HUE, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type RefuseBox, type SwitchBox } from "./flowNodes.js";
@@ -15,7 +15,7 @@ import type { UiData } from "./types.js";
 import { useStore } from "./store.js";
 
 /** What the draft adds to the picture: what a rule may name, the request being tried, and what is known about each model. */
-type Editing = { models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
+type Editing = { /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
 
 /** Widths and heights the layout steps by. A node drawn beside a rule is `SIDE` tall, plus a row per place for a fastest-of. */
 const RULE = { width: 570, head: 36, row: 32 };
@@ -43,7 +43,12 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
 
   // A flow that only says "this name runs there" is a line from the name; the rest are rules, drawn as nodes.
   const direct = new Map<string, End>();
-  const flows = Object.entries(d.flows ?? {}).filter(([name, f]) => {
+  // The flow for every other name, while it only says "run it" or "refuse it", is a line on the router and not a rule of its own.
+  const plainRest = ([, f]: [string, { inputs: string[]; steps: { when?: unknown; to?: unknown; do?: unknown }[] }]) =>
+    f.inputs.includes(ANY) && f.steps.length === 1 && ["asked", "refuse"].includes(toOf(f.steps[0]!.to).kind) && list(f.steps[0]!.do).length === 0;
+  const flows = Object.entries(d.flows ?? {}).filter((entry) => {
+    const [name, f] = entry;
+    if (plainRest(entry)) return false;
     const to = directTo(name, f);
     if (to) direct.set(name, to);
     return to === null;
@@ -75,7 +80,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   let y = 0;
   const used: End[] = [...direct.values(), ...flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "fastest" ? t.of : t.kind === "model" || t.kind === "peer" ? [t] : []; }))];
   for (const model of new Set(used.flatMap((e) => (e.kind === "model" ? [e.model] : [])))) {
-    const on = d.routing?.[model]?.backend ?? (self.backends ?? []).find((b) => (b.serves ?? []).includes(model))?.name;
+    const on = d.routing?.[model]?.backend ?? (self.backends ?? []).find((b) => (b.serves ?? []).includes(model) || (b.routes ?? []).some((r) => r.model === model))?.name;
     const where = (self.backends ?? []).find((b) => b.name === on);
     nodes.push({
       id: `model:${model}`, type: "dest", position: { x: endX, y },
@@ -102,8 +107,13 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     ...Object.entries(d.routing ?? {}).filter(([, r]) => r.backend !== undefined).map(([id]) => id),
   ])];
   const names = [...new Set([...flows.flatMap(([, f]) => f.inputs), ...direct.keys(), ...(edit?.pending ?? [])])];
-  const fixed = (id: string) => (edit ? unroutable(id, edit.facts) : null);
   const ruleOf = (name: string) => flows.find(([, f]) => f.inputs.includes(name))?.[0];
+  /** The variants a rule's lines test, its own and those of the rules it hands on to. */
+  const variantsIn = (rule: string | undefined, seen: string[] = []): string[] => {
+    const f = rule === undefined || seen.includes(rule) ? undefined : d.flows?.[rule];
+    if (!f) return [];
+    return [...new Set(f.steps.flatMap((s) => { const t = toOf(s.to); return [...list((s.when as Record<string, unknown> | null | undefined)?.variant), ...(t.kind === "flow" ? variantsIn(t.flow, [...seen, rule!]) : [])]; }))];
+  };
   const hubHeight = 56 + (names.length ? 22 + names.length * 22 : 0) + 26 + (edit ? 36 : 0);
   nodes.unshift({
     id: "self", type: "hub", position: { x: 0, y: 0 },
@@ -114,9 +124,10 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       rows: names.map((id) => ({
         id, on: edit?.asked === id && tried !== null, loose: (edit?.pending ?? []).includes(id) && !ruleOf(id) && !direct.has(id),
         to: ruleOf(id) !== undefined ? "flow" : direct.get(id)?.kind ?? "unset",
-        ...(fixed(id) ? { fixed: fixed(id)! } : {}),
+        variants: variantsIn(ruleOf(id)),
       })),
-      others: all.filter((id) => !names.includes(id) && !fixed(id)),
+      others: all.filter((id) => !names.includes(id)),
+      rest: edit?.rest ?? (Object.entries(d.flows ?? {}).some(plainRest) ? (Object.entries(d.flows ?? {}).some((e) => plainRest(e) && toOf(e[1].steps[0]!.to).kind === "asked") ? "asked" : "refuse") : flows.some(([, f]) => f.inputs.includes(ANY)) ? "rule" : "none"),
     } satisfies Hub,
   });
 
@@ -133,7 +144,6 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
 
   // Each name's line: into the rule that takes it, else to wherever it was sent. A name that is not chat has none.
   for (const name of names) {
-    if (fixed(name)) continue;
     const rule = ruleOf(name);
     const off = rule !== undefined && d.flows?.[rule]?.off === true;
     // A rule that is off takes nothing: the line to it is drawn faint, and a tried request does not light it.
@@ -174,9 +184,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         id, type: "flow", position: { x: colX[col]!, y: fy }, zIndex: 1000,
         data: {
           name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step,
-          models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined,
+          models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined, takes: f.takes,
           ...(d.flowHits && !edit?.changed(name) ? { hits: f.steps.map((_, i) => d.flowHits![name]?.[i] ?? 0) } : {}),
-          ...(edit ? { marks: f.steps.map((s) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
+          ...(edit ? { marks: f.steps.map((s) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts, (f.takes ?? []).length > 0); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
           orphan: f.inputs.length === 0 && handsTo(name).length === 0,
         } satisfies SwitchBox,
       });
@@ -240,7 +250,7 @@ export function Routing() {
     const self = view.net.nodes.find((n) => n.self);
     const models = [...new Set([...(view.catalog ?? []), ...(self?.backends ?? []).flatMap((b) => b.serves ?? []), ...Object.keys((edit.draft.models ?? {}) as object)])].sort();
     const lanes = Object.keys(((edit.draft.scheduler as { lanes?: object } | undefined)?.lanes ?? {}) as object);
-    return layout(view, edit.sel, { models, lanes, tried: edit.tried, asked: edit.trial?.model ?? null, pending: edit.pending, facts: factsOf(edit.draft, data),
+    return layout(view, edit.sel, { rest: restOf(edit.draft).mode, models, lanes, tried: edit.tried, asked: edit.trial?.model ?? null, pending: edit.pending, facts: factsOf(edit.draft, data),
       changed: (rule) => JSON.stringify((edit.draft!.flows as Record<string, unknown> | undefined)?.[rule]) !== JSON.stringify((edit.file?.doc?.flows as Record<string, unknown> | undefined)?.[rule]) });
   }, [edit.draft, edit.file, edit.sel, edit.tried, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.

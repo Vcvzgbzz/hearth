@@ -6,7 +6,7 @@
  */
 import { Document, isMap, isScalar, isSeq, YAMLMap, type Node } from "yaml";
 
-import { MOVED_TO_FLOWS, rawFlow, type Flow } from "./config.js";
+import { ANY, MOVED_TO_FLOWS, rawFlow, type Flow } from "./config.js";
 import { routedFlow } from "./route.js";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -34,6 +34,11 @@ export function v1Marker(raw: Record<string, unknown>): string | null {
   if (Array.isArray(raw.peers)) return "peers as a list";
   if (isObj(raw.scheduler) && "concurrency" in raw.scheduler) return "scheduler.concurrency";
   return null;
+}
+
+/** Does the file leave unsaid what happens to a name no flow takes? */
+export function unguarded(raw: Record<string, unknown>): boolean {
+  return !Object.values(isObj(raw.flows) ? raw.flows : {}).some((f) => isObj(f) && Array.isArray(f.inputs) && f.inputs.includes(ANY));
 }
 
 /** The first model that still routes by its own settings, named for the error, or null. */
@@ -162,6 +167,13 @@ export function migrateDoc(doc: Document): string[] {
   if (isMap(sched) && sched.items.length === 0) doc.delete("scheduler");
 
   routesToFlows(doc, done);
+  // A file from before names had to be offered keeps every one of them callable, as it was.
+  if (unguarded((doc.toJS() ?? {}) as Record<string, unknown>)) {
+    let name = "anything-else";
+    for (let n = 2; doc.hasIn(["flows", name]); n++) name = `anything-else-${n}`;
+    doc.setIn(["flows", name], doc.createNode({ note: "every name no other flow takes runs as itself", inputs: [ANY], steps: [{ to: { asked: true } }] }));
+    done.push(`flows.${name}: names no other flow takes run as themselves, as before`);
+  }
 
   // Moved keys land at the end; put a v1 file back in reading order. Comments ride on their pairs.
   const top = doc.contents;
@@ -202,7 +214,7 @@ function listToMap(doc: Document, key: string, done: string[]): void {
 
 /** The same rewrite on a plain object: test fixtures and anything else holding v1 as data. */
 export function migrate(raw: unknown): unknown {
-  if (!isObj(raw) || (v1Marker(raw) === null && routedMarker(raw) === null)) return raw;
+  if (!isObj(raw) || (v1Marker(raw) === null && routedMarker(raw) === null && !unguarded(raw))) return raw;
   const doc = new Document(raw);
   migrateDoc(doc);
   return doc.toJS();

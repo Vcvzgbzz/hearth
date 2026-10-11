@@ -20,7 +20,7 @@ import { mayLeave } from "./route.js";
 import { writeFileAtomic } from "./configfile.js";
 import { LEVELS, createLogger, type Level } from "./log.js";
 import { hashPassword } from "./login.js";
-import { migrateDoc, routedMarker, v1Marker } from "./migrate.js";
+import { migrateDoc, routedMarker, unguarded, v1Marker } from "./migrate.js";
 import { createNode } from "./server.js";
 import { getJson } from "./upstream.js";
 import { parseDocument } from "yaml";
@@ -118,13 +118,20 @@ models: {}
 #   my-big-model:
 #     note: the 70B, for long documents
 #
-# flows: where requests go. An id no flow takes runs here as itself.
-# flows:
-#   my-big-model:
-#     inputs: [my-big-model]
+# flows: what can be asked for, and where each request goes. Only a name a flow
+# takes is offered; the flow with "*" says what becomes of every other name.
+flows:
+  anything-else:
+    inputs: ["*"]
+    steps:
+      # Runs any model your backend serves under its own name. Change this to
+      # { refuse: "..." } once the flows above it name everything you offer.
+      - to: { asked: true }
+#   LLM:                              # callers ask for LLM, never for a model
+#     inputs: [LLM]
 #     steps:
-#       - to: { peer: friend }      # try the peer first
-#       - to: my-big-model          # else run it here
+#       - to: { peer: friend }        # try the peer first
+#       - to: my-big-model            # else run it here
 `;
 }
 
@@ -207,7 +214,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const raw = doc.toJS() as Record<string, unknown> | null;
-    if (!raw || (v1Marker(raw) === null && routedMarker(raw) === null)) {
+    if (!raw || (v1Marker(raw) === null && routedMarker(raw) === null && !unguarded(raw))) {
       console.log(`${configPath} is already in the current layout; nothing to do`);
       return;
     }

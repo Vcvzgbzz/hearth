@@ -8,7 +8,7 @@ import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyf
 import { ChevronDown, MoreHorizontal, Plus, Split, X, Zap } from "lucide-react";
 import { memo, useState } from "react";
 
-import { ACTIONS, editStep, list, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, type Doc, type End } from "./draft.js";
+import { ACTIONS, ANY, editStep, list, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
 import { addName, change, choose, editSelect, hover, pick, type Choice } from "./editStore.js";
 import { cx } from "./ui.js";
 
@@ -26,6 +26,7 @@ export const CONDS: Cond[] = [
   { key: "tools", kind: "bool", yes: "the request uses tools", no: "the request uses no tools", about: "the request" },
   { key: "tokensOver", kind: "num", before: "the prompt is over", after: "tokens", seed: 8000, about: "the request" },
   { key: "tokensUnder", kind: "num", before: "the prompt is under", after: "tokens", seed: 8000, about: "the request" },
+  { key: "variant", kind: "list", before: "the variant is", hint: "e.g. realism, for Name:realism", about: "the request" },
   { key: "asked", kind: "list", before: "they asked for", hint: "model names", about: "the request" },
   { key: "askedNot", kind: "list", before: "they did not ask for", hint: "model names", about: "the request" },
   { key: "caller", kind: "list", before: "the caller is", hint: "key label, or local", about: "the request" },
@@ -165,7 +166,7 @@ const PORT = "!h-3.5 !w-3.5 !border-2 !border-panel";
 /** What is known about a line: `bad` is why it cannot work, `unsure` that its target has not said whether it can take what the line tests. */
 export type Mark = { bad: string } | { unsure: true } | null;
 
-export type SwitchBox = { marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean };
+export type SwitchBox = { marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean };
 
 export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<SwitchBox>>) {
   const from = useWireFrom();
@@ -173,7 +174,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
   const canTake = from !== id && takesWork(from);
   const edit = (i: number, fn: (s: Doc) => Doc | null) => change((d) => editStep(d, data.name, i, fn));
   // Sending a name to the model of the same name is leaving it alone: the default, said as such.
-  const own = (to: ReturnType<typeof toOf>) => to.kind === "model" && (data.inputs ?? []).includes(to.model);
+  const own = (to: ReturnType<typeof toOf>) => to.kind === "asked" || (to.kind === "model" && (data.inputs ?? []).includes(to.model));
   return (
     <div className={cx(
       "w-[570px] rounded-xl border bg-panel shadow-sm transition-colors",
@@ -185,6 +186,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
         <Split size={13} className="text-info" />
         <span className="text-[10px] uppercase tracking-wide text-info">routing rule</span>
         <span className="truncate font-mono font-medium">{data.name}</span>
+        {(data.takes ?? []).length > 0 && <span className="shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title={`not chat: it takes requests on ${data.takes!.join(", ")}`}>not chat</span>}
         <span className={cx("ml-auto shrink-0 text-[10px]", data.orphan ? "text-warn" : "text-dim")}>{data.off ? "switched off" : data.orphan ? "nothing reaches this yet" : data.sticky ? "a conversation stays where it starts" : "top to bottom, first match wins"}</span>
       </div>
       {data.steps.map((s, i) => {
@@ -305,9 +307,11 @@ export const RefuseNode = memo(function RefuseNode({ data }: NodeProps<Node<Refu
 export type Hub = {
   title: string; sub: string; editable?: boolean;
   /** Every name a client can ask this node for, and what its line says: `loose` is one that goes nowhere yet. */
-  rows: { id: string; on?: boolean; loose?: boolean; /** The kind of thing its line goes to, for the colour of its dot. */ to?: string; /** Why this name cannot be routed; it then has no dot to drag. */ fixed?: string }[];
-  /** Names that go to their own model and so are not drawn: there to be picked when one is to be routed. */
+  rows: { id: string; on?: boolean; loose?: boolean; /** The variants it can be asked for in, as `id:variant`. */ variants?: string[]; /** The kind of thing its line goes to, for the colour of its dot. */ to?: string; /** Why this name cannot be routed; it then has no dot to drag. */ fixed?: string }[];
+  /** Models no rule takes, and so not drawn: there to be picked when one is to be offered or routed. */
   others?: string[];
+  /** What becomes of a name no rule takes: run as itself, refused, decided by a rule drawn beside, or not yet said. */
+  rest?: "asked" | "refuse" | "rule" | "none";
 };
 
 /** This node's router: the model names it sends somewhere, each with a line to where requests for it go. */
@@ -320,33 +324,47 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
         <div className="flex items-center gap-2"><Split size={14} className="text-accent" /><span className="truncate font-medium">{data.title}</span></div>
         <div className="mt-0.5 truncate text-[11px] text-dim">{data.sub}</div>
       </div>
-      {data.rows.length > 0 && <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wide text-dim">when asked for</div>}
+      {data.rows.length > 0 && <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wide text-dim" title="the names callers may ask for">types</div>}
       {data.rows.map((r) => (
         <div key={r.id} className={cx("relative flex h-[22px] items-center px-3 text-[11px] hover:bg-muted", r.on && "bg-accent/15", r.fixed && "text-dim")} title={r.fixed ?? `drag the dot to say where requests for ${r.id} go`}
              onMouseEnter={() => hover(`e:ask:${r.id}`)} onMouseLeave={() => hover(null)}>
           {/* A name sent to a peer leaves on the peers' side. */}
           <Handle type="source" id={`ask-${r.id}-back`} position={Position.Left} className="!opacity-0 !pointer-events-none" style={{ left: -6 }} />
-          <span className={cx("truncate font-mono", r.loose && "text-warn")}>{r.id}</span>
+          <span className={cx("truncate font-mono", r.loose && "text-warn")}>{r.id === ANY ? "anything else" : r.id}</span>
+          {(r.variants ?? []).length > 0 && <span className="ml-1.5 min-w-0 truncate text-[10px] text-dim" title={`also asked for as ${r.variants!.map((v) => `${r.id}:${v}`).join(", ")}`}>:{r.variants!.join(" :")}</span>}
           {r.loose && <span className="ml-auto shrink-0 text-[10px] text-warn">drag me →</span>}
-          {r.fixed && <span className="ml-auto shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title={r.fixed}>not chat</span>}
           <Handle type="source" id={`ask-${r.id}`} position={Position.Right} style={{ right: -6 }}
                   className={cx(PORT, r.on ? "!bg-accent" : hue(r.to ?? "unset").dot, (!data.editable || r.fixed) && "!pointer-events-none", r.fixed && "!opacity-0")} />
         </div>
       ))}
-      {/* What is not routed is not drawn: it goes to its own model, and says so in one line. */}
-      <div className="border-t border-line px-3 py-1.5 text-[10px] text-dim">
-        {(data.others ?? []).length > 0 ? `${data.others!.length} other ${data.others!.length === 1 ? "name goes" : "names go"} to ${data.others!.length === 1 ? "its" : "their"} own model` : data.rows.length ? "every other name goes to its own model" : "every name goes to its own model"}
-      </div>
+      {/* What becomes of every name that is not a type, in one line, to be changed where it is read. */}
+      {(() => {
+        const n = (data.others ?? []).length;
+        const says = data.rest === "asked" ? `any other name runs as itself${n ? ` (${n} now)` : ""}`
+          : data.rest === "refuse" ? `any other name is refused${n ? ` (${n} models not offered)` : ""}`
+          : data.rest === "rule" ? "any other name: decided by a rule" : "any other name: not said yet";
+        const line = cx("w-full border-t border-line px-3 py-1.5 text-left text-[10px]", data.rest === "none" ? "text-warn" : "text-dim");
+        return data.editable && data.rest !== "rule"
+          ? <button type="button" className={cx(line, "nodrag nopan flex items-center gap-1 hover:bg-muted hover:text-fg")} title="what happens to a name that is not one of the types"
+                    onClick={(e) => choose(e, [
+                      { label: "a name that is not a type", head: true },
+                      { label: "Refuse it", value: "refuse", hint: "only the types above can be asked for", on: data.rest === "refuse" },
+                      { label: "Run it as itself", value: "asked", hint: "every model stays callable by its own name", on: data.rest === "asked" },
+                    ], (v) => change((d) => withRest(d, v as "asked" | "refuse")))}>
+              <span className="min-w-0 flex-1 truncate">{says}</span><ChevronDown size={10} className="shrink-0" />
+            </button>
+          : <div className={line}>{says}</div>;
+      })()}
       {data.editable && (typing === null ? (
         <div className="px-1.5 pb-1.5">
           <button type="button" className="nodrag nopan flex h-7 w-full items-center justify-center gap-1 rounded-md border border-dashed border-line text-[11px] text-dim hover:border-accent hover:text-fg"
-                  onClick={(e) => choose(e, [{ label: "A new name…", value: "\u0000new", hint: "one nothing serves yet, like auto" }, { label: "a name that goes to its own model now", head: true }, ...(data.others ?? []).map((o) => ({ label: o, mono: true }))],
+                  onClick={(e) => choose(e, [{ label: "A new type…", value: "\u0000new", hint: "a name of your own, like LLM or ImageGen" }, { label: "a model, offered or routed under its own name", head: true }, ...(data.others ?? []).map((o) => ({ label: o, mono: true }))],
                     (v) => (v === "\u0000new" ? setTyping("") : add(v)))}>
-            <Plus size={12} />route a name
+            <Plus size={12} />type
           </button>
         </div>
       ) : (
-        <input autoFocus aria-label="a new name clients can ask for" placeholder="any name, e.g. auto" value={typing} onChange={(e) => setTyping(e.target.value)}
+        <input autoFocus aria-label="a new type callers can ask for" placeholder="a name, e.g. LLM" value={typing} onChange={(e) => setTyping(e.target.value)}
                onBlur={() => add(typing)} onKeyDown={(e) => { if (e.key === "Enter") add(typing); if (e.key === "Escape") setTyping(null); }}
                className="nodrag nopan m-1.5 h-7 w-[calc(100%-12px)] rounded-md border border-accent bg-panel px-2 font-mono text-[11px] focus:outline-none" />
       ))}

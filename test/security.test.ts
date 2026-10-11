@@ -45,6 +45,7 @@ peers:
     token: t
     accept: peer-token
     models: { borrowed: theirs }
+flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }
 `);
 chmodSync(cfgPath, 0o600);
 
@@ -161,6 +162,7 @@ peers:
     token: t
     accept: tok
     models: { borrowed: theirs }
+flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }
 `);
   const n2 = createNode(loadConfig(p2), silentLogger);
   await new Promise<void>((r) => n2.server.listen(0, "127.0.0.1", r));
@@ -225,6 +227,7 @@ peers:
     "apiKeys: [local-key]",
     "lending: { models: [m] }",
     "peers: { friend: { accept: peer-token } }",
+    'flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }',
   ].join("\n"));
   const n = createNode(loadConfig(cfgFile), silentLogger);
   n.start();
@@ -321,6 +324,7 @@ peers:
     "  - {key: narrow-key, label: voice, models: [quiet]}",
     "models:",
     "  quiet: {as: m}",
+    'flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }',
   ].join("\n"));
   const n = createNode(loadConfig(cfgFile), silentLogger);
   n.start();

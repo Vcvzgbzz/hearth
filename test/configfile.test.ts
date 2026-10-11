@@ -64,6 +64,7 @@ flows:
     steps:
       - to: {peer: friend}
       - to: borrowed
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 
 models:
   # Past 80 columns on purpose: the writer's default would fold it across lines.
@@ -299,6 +300,7 @@ peers:
     token: plain-peer-token
     accept: plain-token-value
     models: {}
+flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}}]}}
 operator:
   user: op
   passHash: a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
@@ -371,7 +373,7 @@ operator:
 
 {
   // A flow that names the peer would have to be renamed with it; this file has none, so the rename stands alone.
-  const ORIGINAL = FULL.replace(/flows:\n[\s\S]*?\n\nmodels:/, "models:");
+  const ORIGINAL = FULL.replace(/flows:\n[\s\S]*?\n\nmodels:/, 'flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}}]}}\n\nmodels:');
   writeFileSync(cfgPath, ORIGINAL);
   const a = await boot();
   const r = await a.patch({ ops: [{ path: ["peers", "friend"], rename: "gpu-east" }] });

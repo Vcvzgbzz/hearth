@@ -2,7 +2,7 @@
  * Where a request runs. Every routing choice is a flow: an ordered list of steps, each a
  * condition and a place to send the request. Pure, so it tests without a socket.
  */
-import type { Flow, FlowEnd, FlowStep, FlowTo, FlowWhen, HearthConfig } from "./config.js";
+import { ANY, endsOf, type Flow, type FlowEnd, type FlowStep, type FlowTo, type FlowWhen, type HearthConfig } from "./config.js";
 import type { PeerRegistry } from "./peers.js";
 import { unfit, type Need } from "./stats.js";
 
@@ -65,6 +65,8 @@ export type Resolution = {
   path: { flow: string; step: number }[];
   /** The actions those steps name, in the order they were passed, each once. */
   actions: { name: string; flow: string; step: number }[];
+  /** No flow takes the id, and none takes every other name: it is not something this node offers. */
+  unlisted?: true;
 } & ({ target: "local" } | { target: "peer"; peer: string; theirModel: string } | { target: "unavailable" });
 
 /**
@@ -109,6 +111,33 @@ function inHours(t: { from: string; to: string }, now: Date): boolean {
   return t.from <= t.to ? at >= t.from && at < t.to : at >= t.from || at < t.to;
 }
 
+/**
+ * A name as the type it asks for and the variant it asks for it in. The whole name wins where a
+ * flow takes it as written, so an id with a colon of its own is still itself; else what follows
+ * the last colon is a variant of what precedes it, when a flow takes that.
+ */
+export function typeOf(flows: Readonly<Record<string, Flow>>, name: string): { type: string; variant: string | null } {
+  const cut = name.lastIndexOf(":");
+  if (cut <= 0 || entryOf(flows, name) !== undefined || entryOf(flows, name.slice(0, cut)) === undefined) return { type: name, variant: null };
+  return { type: name.slice(0, cut), variant: name.slice(cut + 1) };
+}
+
+/** The variants a type can be asked for in: every one a step tests, in its own flow and in those it hands on to. */
+export function variantsOf(flows: Readonly<Record<string, Flow>>, type: string): string[] {
+  const out = new Set<string>();
+  const seen = new Set<string>();
+  const walk = (name: string | undefined): void => {
+    if (name === undefined || seen.has(name) || !flows[name]) return;
+    seen.add(name);
+    for (const s of flows[name].steps) {
+      for (const v of s.when?.variant ?? []) out.add(v);
+      if ("flow" in s.to) walk(s.to.flow);
+    }
+  };
+  walk(entryOf(flows, type));
+  return [...out];
+}
+
 /** The flow a request for `asked` enters, if any. One that is switched off takes nothing. */
 export function entryOf(flows: Readonly<Record<string, Flow>>, asked: string): string | undefined {
   return Object.keys(flows).find((name) => !flows[name]!.off && flows[name]!.inputs.includes(asked));
@@ -124,7 +153,7 @@ export function mayLeave(cfg: HearthConfig, asked: string): boolean {
     return flows[name]!.steps.some(({ to, when }) =>
       when?.down !== undefined || "peer" in to || ("fastest" in to && to.fastest.some((e) => "peer" in e)) || ("flow" in to && walk(to.flow)));
   };
-  return walk(entryOf(flows, asked));
+  return walk(entryOf(flows, typeOf(flows, asked).type) ?? entryOf(flows, ANY));
 }
 
 /** A place a step can send work, resolved against what is reachable right now. */
@@ -134,8 +163,10 @@ type Reached = { model: string; peer?: string; theirModel?: string };
  * Walk the flow a request for `asked` enters. Steps are tried in order: one is passed over
  * when a condition fails or its target cannot take the request, and the first that holds decides.
  */
-export function resolve(asked: string, w: World): Resolution {
+export function resolve(named: string, w: World): Resolution {
   const flows = flowsOf(w.cfg);
+  // From here on `asked` is the type; the variant it was asked for in is something a step can test.
+  const { type: asked, variant } = typeOf(flows, named);
   const need = w.need ?? { tokens: 0, images: false, tools: false };
   let lane = w.lane;
   const params: Record<string, unknown> = {};
@@ -192,6 +223,7 @@ export function resolve(asked: string, w: World): Resolution {
     && (c.tokensOver === undefined || need.tokens > c.tokensOver)
     && (c.tokensUnder === undefined || need.tokens < c.tokensUnder)
     && (c.asked === undefined || c.asked.includes(asked))
+    && (c.variant === undefined || (variant !== null && c.variant.includes(variant)))
     // A key's caller is `key:<label>`; a step names the label.
     && (c.caller === undefined || c.caller.some((n) => n === w.caller || `key:${n}` === w.caller))
     && (c.lane === undefined || c.lane.includes(lane))
@@ -221,11 +253,16 @@ export function resolve(asked: string, w: World): Resolution {
       && (c.queuedUnder === undefined || l.queued < c.queuedUnder);
   };
 
-  let name = entryOf(flows, asked);
+  // A name no flow takes goes to the flow for every other name, when there is one.
+  let name = entryOf(flows, asked) ?? entryOf(flows, ANY);
   if (name === undefined) {
-    // With no flow there is one place it runs, so nowhere else to go when that has failed.
-    if (w.skip?.has(asked)) return done(null, `${asked} just failed`);
-    return done({ model: asked }, w.cfg.models[asked] ? "no flow takes it" : "no route configured");
+    const types = Object.values(flows).filter((f) => !f.off).flatMap((f) => f.inputs);
+    return { ...done(null, `"${asked}" is not offered here${types.length ? ` (${types.join(", ")})` : ""}`), unlisted: true };
+  }
+  // A variant nothing tests would be answered as the plain type, which is not what was asked for.
+  if (variant !== null && !variantsOf(flows, asked).includes(variant)) {
+    const known = variantsOf(flows, asked);
+    return { ...done(null, `"${named}" is not offered here: ${asked} ${known.length ? `comes as ${known.map((v) => `${asked}:${v}`).join(", ")}` : "has no variants"}`), unlisted: true };
   }
   // A flow cannot lead back to itself: the file is refused if one would.
   walking: while (name !== undefined) {
@@ -233,9 +270,9 @@ export function resolve(asked: string, w: World): Resolution {
     via.push(name);
     // A conversation this flow has already placed goes back there while that place can take it.
     const pin = w.pinned?.(name);
-    const same = (e: FlowTo): boolean => pin !== undefined && !("flow" in e) && !("refuse" in e) && !("fastest" in e)
+    const same = (e: FlowEnd): boolean => pin !== undefined
       && ("peer" in pin ? "peer" in e && e.peer === pin.peer && (e.model ?? asked) === pin.model : !("peer" in e) && e.model === pin.model);
-    const kept = flow.steps.findIndex(({ to }) => ("fastest" in to ? to.fastest : [to]).some(same));
+    const kept = flow.steps.findIndex(({ to }) => endsOf(to, asked).some(same));
     if (kept >= 0) {
       const r = reach(pin!);
       if (typeof r !== "string") {
@@ -254,7 +291,7 @@ export function resolve(asked: string, w: World): Resolution {
       if ("refuse" in s.to) { took(name, i, s); return done(null, s.to.refuse); }
       let r: Reached | string | null = null;
       if (!("flow" in s.to)) {
-        r = "fastest" in s.to ? fastest(s.to.fastest) : reach(s.to);
+        r = "fastest" in s.to ? fastest(s.to.fastest) : reach("asked" in s.to ? { model: asked } : s.to);
         if (typeof r === "string") { passed.push(r); continue; }
         if (s.when !== null && !fits(s.when, r)) continue;
       }

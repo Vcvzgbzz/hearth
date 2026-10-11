@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 
 import { parseConfig, rawFlow, type HearthConfig } from "../src/config.js";
 import { silentLogger, type Logger } from "../src/log.js";
-import { flowsOf, resolve, routedFlow, type World } from "../src/route.js";
+import { flowsOf, resolve, routedFlow, typeOf, variantsOf, type World } from "../src/route.js";
 import { createNode } from "../src/server.js";
 
 const base = (flows: Record<string, unknown>, more: Record<string, unknown> = {}) => ({
@@ -99,7 +99,19 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   assert.deepEqual(at("auto", world({ up: false })), ["local", "big", "chat", "pick>heavy"], "and so is a peer that is down");
   assert.equal(resolve("small", world({ queued: 2 })).target === "peer" && resolve("small", world({ queued: 2 })).model, "big", "the peer runs the id the step names");
   assert.deepEqual(at("big", world({ noPeers: true })), ["local", "big", "chat", "heavy"], "after a peer has failed, the flow answers without them");
-  assert.deepEqual(at("unrouted", world()), ["local", "unrouted", "chat", ""], "an id no flow takes runs as itself");
+  // Only what a flow takes is offered: any other name is turned away, unless a flow for every other name says what becomes of it.
+  const stray = resolve("unrouted", world());
+  assert.deepEqual([stray.target, stray.unlisted, stray.reason], ["unavailable", true, '"unrouted" is not offered here (auto, small, big, eyes)']);
+  const open = (steps: unknown[]) => ({ ...world(), cfg: parseConfig(base({ pick, heavy, rest: { inputs: ["*"], steps } })) });
+  const asItself = resolve("unrouted", open([{ to: { asked: true } }]));
+  assert.deepEqual([asItself.target, asItself.model, asItself.via, asItself.unlisted], ["local", "unrouted", ["rest"], undefined], "one that runs them as themselves");
+  assert.deepEqual([resolve("unrouted", open([{ to: { refuse: "ask for auto" } }])).reason, resolve("unrouted", open([{ to: { refuse: "ask for auto" } }])).unlisted], ["ask for auto", undefined], "or one that says why not");
+  const picky = open([{ when: { caller: "app" }, to: { asked: true } }, { to: "small" }]);
+  assert.deepEqual([resolve("unrouted", { ...picky, caller: "key:app" }).model, resolve("unrouted", { ...picky, caller: "local" }).model], ["unrouted", "small"], "with conditions like any other flow");
+  assert.equal(resolve("small", open([{ to: { refuse: "no" } }])).via[0], "pick", "a name a flow takes never reaches it");
+  assert.throws(() => parseConfig(base({ rest: { inputs: ["*", "small"], steps: [{ to: "big" }] } })), /lists "\*" beside other names/);
+  assert.throws(() => parseConfig(base({ rest: { inputs: ["*"], steps: [{ to: { peer: "friend" } }, { to: { asked: true } }] } })), /sends every other name to friend: say which model/);
+  assert.throws(() => parseConfig(base({ rest: { inputs: ["*"], steps: [{ to: { asked: false } }] } })), /asked must be true/);
 
   // fastest: whichever would start soonest, a tie staying with the one listed first.
   assert.deepEqual(at("eyes", world()), ["local", "eyes", "chat", "race"]);
@@ -182,8 +194,12 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   assert.equal(seen.at(-1)!.model, "eyes");
   await ask("hi", "small");
   assert.equal(seen.at(-1)!.model, "small", "a real id that enters a flow may still run as itself");
-  await ask("hi", "eyes");
-  assert.equal(seen.at(-1)!.model, "eyes", "an id no flow takes is untouched");
+  const stray = await ask("hi", "eyes");
+  assert.equal(stray.status, 404, "a model no flow takes is not offered, though a backend serves it");
+  assert.match(((await stray.json()) as { error: { message: string } }).error.message, /"eyes" is not offered here \(auto, small\)/);
+  assert.equal(seen.at(-1)!.model, "small", "and nothing was sent for it");
+  const offered = (await (await fetch(`${at}/v1/models`)).json()) as { data: { id: string }[] };
+  assert.deepEqual(offered.data.map((m) => m.id).sort(), ["auto", "small"], "the list of models is what can be asked for");
 
   // Asking where a request would go sends nothing, and may try a `flows:` that is not saved.
   const before = seen.length;
@@ -224,7 +240,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const cfg = parseConfig({
     backends: { main: { url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}`, kind: "none", serves: ["small", "big"] } },
     models: { alias: { as: "big" } },
-    flows: { borrow: { inputs: ["small"], steps: [{ when: { idle: { model: "big", ms: 150 } }, to: "big" }, { to: "small" }] } },
+    flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }, borrow: { inputs: ["small"], steps: [{ when: { idle: { model: "big", ms: 150 } }, to: "big" }, { to: "small" }] } },
   });
   const node = createNode(cfg, silentLogger);
   const at = await new Promise<string>((ready) =>
@@ -289,7 +305,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const cfg = parseConfig({
     backends: { main: { url, kind: "none", serves: ["small", "big"] } },
     actions: { note: { log: "{asked} ran as {model}, line {line} of {flow}" }, tell: { call: `${url}/hook`, headers: { "x-key": "k" } }, dead: { call: "http://127.0.0.1:1/nothing" } },
-    flows: { a: { inputs: ["small"], steps: [{ to: "big", do: ["note", "tell", "dead"] }] } },
+    flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }, a: { inputs: ["small"], steps: [{ to: "big", do: ["note", "tell", "dead"] }] } },
   });
   const lines: { msg: string; fields: Record<string, unknown> }[] = [];
   const keep = (msg: string, fields: Record<string, unknown> = {}) => { lines.push({ msg, fields }); };
@@ -370,7 +386,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
       onFail: { call: `${url}/hook`, on: "failed" },
       rare: { call: `${url}/hook`, every: 60000 },
     },
-    flows: {
+    flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] },
       a: { inputs: ["small"], steps: [{ when: { tokensUnder: 1000000 }, to: "small" }, { to: "big", do: ["after", "onFail", "rare"] }] },
       b: { inputs: ["lone"], steps: [{ to: "small", do: ["onFail"] }] },
       keep: { sticky: 60000, inputs: ["big"], steps: [{ when: { idle: { model: "lone", ms: 150 } }, to: "lone" }, { to: "big" }] },
@@ -479,7 +495,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const cfg = parseConfig({
     backends: { main: { url, kind: "none", serves: ["small", "big"], concurrency: 4 } },
     actions: { slow: { call: `${url}/hook`, on: "finished", slowerThan: 100 } },
-    flows: { a: { inputs: ["small"], steps: [{ to: "big", max: 1, do: "slow" }, { to: "small", do: "slow" }] } },
+    flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }, a: { inputs: ["small"], steps: [{ to: "big", max: 1, do: "slow" }, { to: "small", do: "slow" }] } },
   });
   const node = createNode(cfg, silentLogger);
   const at = await new Promise<string>((ready) =>
@@ -524,6 +540,128 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   await (await third).text();
 
   await node.close();
+  backend.closeAllConnections();
+  backend.close();
+}
+
+// --- a type comes in variants ------------------------------------------------------------------------
+// `Name:variant` asks for the type in that variant, and a step can test which. The name stays one
+// field, so chat, a path and a body all carry it the same way.
+{
+  const flows = {
+    LLM: { inputs: ["LLM"], steps: [{ when: { variant: ["fast", "tiny"] }, to: "small" }, { when: { variant: "sharp" }, to: { flow: "more" } }, { to: "big" }] },
+    more: { inputs: [], steps: [{ when: { variant: "deep" }, to: "eyes" }, { to: "eyes" }] },
+    "odd:name": { inputs: ["odd:name"], steps: [{ to: "small" }] },
+    rest: { inputs: ["*"], steps: [{ to: { asked: true } }] },
+  };
+  const cfg = parseConfig(base(flows));
+  const world: World = { cfg, peers: { candidates: () => [], statsFor: () => null, theirModelId: () => undefined, loadFor: () => undefined } as unknown as World["peers"], caller: "local", lane: "chat", local: () => ({ queued: 0, free: 1, slots: 1, loaded: [] }), held: () => false };
+  const to = (name: string) => { const r = resolve(name, world); return r.unlisted ? `no: ${r.reason}` : r.model; };
+  assert.deepEqual([to("LLM"), to("LLM:fast"), to("LLM:tiny"), to("LLM:sharp")], ["big", "small", "small", "eyes"]);
+  assert.deepEqual(variantsOf(cfg.flows, "LLM"), ["fast", "tiny", "sharp", "deep"], "a rule handed on to adds the variants it tests");
+  assert.equal(to("LLM:deep"), "big", "a variant only a later rule tests is still a variant, decided by the lines it reaches");
+  assert.equal(to("LLM:nope"), 'no: "LLM:nope" is not offered here: LLM comes as LLM:fast, LLM:tiny, LLM:sharp, LLM:deep');
+  assert.equal(to("odd:name"), "small", "a name a flow takes as written is itself, colon and all");
+  assert.equal(to("qwen:latest"), "qwen:latest", "and one no flow knows goes to the flow for every other name whole");
+  assert.deepEqual(typeOf(cfg.flows, "LLM:fast"), { type: "LLM", variant: "fast" });
+  assert.throws(() => parseConfig(base({ a: { inputs: ["a"], steps: [{ when: { variant: "x:y" }, to: "small" }, { to: "big" }] } })), /a variant is a plain word/);
+}
+
+// --- work that is not chat is asked for by name too ------------------------------------------------
+// A backend's own paths (image generation and the like) queue under hearth. The name such a request
+// carries, in the path or in the body, is looked up like a chat model's: a flow may take it and say
+// which model runs it, and a name no flow takes is not offered.
+{
+  const got: { url: string; model?: unknown }[] = [];
+  const backend = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      let model: unknown;
+      try { model = (JSON.parse(Buffer.concat(chunks).toString()) as { model?: unknown }).model; } catch { /* no body */ }
+      if (req.method === "POST") got.push({ url: req.url ?? "", ...(model !== undefined ? { model } : {}) });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+  });
+  await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
+  const shape = (flows: Record<string, unknown>) => ({
+    backends: {
+      draw: { url, kind: "none", serves: ["img-a", "img-b"], routes: [{ path: "/upstream/{model}/generate", lane: "chat" }] },
+      film: { url, kind: "none", routes: [{ path: "/generate", model: "vid", lane: "chat" }] },
+      embed: { url, kind: "none", serves: ["emb"], routes: [{ path: "/v1/embeddings", model: "emb", lane: "chat" }] },
+    },
+    scheduler: { lanes: { chat: { priority: 0 } } },
+    actions: { note: { log: "{asked} drew as {model}" } },
+    flows,
+  });
+  const types = {
+    ImageGen: { takes: "/upstream/{model}/generate", inputs: ["ImageGen"], steps: [{ when: { caller: "app" }, to: "img-b" }, { when: { variant: "b" }, to: "img-b" }, { to: "img-a", do: "note" }] },
+    VideoGen: { takes: ["/generate"], inputs: ["VideoGen"], steps: [{ to: "vid" }] },
+    Embeddings: { inputs: ["Embeddings"], steps: [{ to: "emb" }] },
+  };
+  const cfg = parseConfig(shape(types));
+  assert.deepEqual(cfg.flows["ImageGen"]!.takes, ["/upstream/{model}/generate"], "one path may be written bare");
+  assert.throws(() => parseConfig(shape({ x: { takes: ["/nowhere"], inputs: ["x"], steps: [{ to: "vid" }] } })), /takes names "\/nowhere", which no backend declares under routes/);
+  assert.throws(() => parseConfig(shape({ x: { takes: ["/generate"], inputs: ["x"], steps: [{ when: { images: true }, to: "vid" }, { to: "vid" }] } })), /steps\[0\]\.when\.images reads a chat request/);
+
+  const lines: Record<string, unknown>[] = [];
+  const keep = (msg: string, fields: Record<string, unknown> = {}) => { if (msg === "flow.action") lines.push(fields); };
+  const node = createNode(cfg, { debug: () => {}, info: keep, warn: keep, error: keep });
+  const at = await new Promise<string>((ready) =>
+    node.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(node.server.address() as AddressInfo).port}`)));
+  const post = async (path: string, body: unknown = {}) => { const r = await fetch(`${at}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const text = await r.text(); return { status: r.status, text }; };
+
+  // A name in the path: the backend is asked for the model the flow picked, and the line's action runs.
+  assert.equal((await post("/upstream/ImageGen/generate", { prompt: "a fox" })).status, 200);
+  assert.equal(got.at(-1)!.url, "/upstream/img-a/generate");
+  assert.equal(lines.at(-1)?.["text"], "ImageGen drew as img-a");
+  // A variant rides in the same place the name does.
+  assert.equal((await post("/upstream/ImageGen:b/generate", { prompt: "a fox" })).status, 200);
+  assert.equal(got.at(-1)!.url, "/upstream/img-b/generate");
+  assert.equal((await post("/upstream/ImageGen:c/generate", {})).status, 404);
+  const names = (await (await fetch(`${at}/v1/models`)).json()) as { data: { id: string }[] };
+  assert.deepEqual(names.data.map((m) => m.id).sort(), ["Embeddings", "ImageGen", "ImageGen:b", "VideoGen"], "and is listed beside its type");
+  // A type is offered on the paths it takes and nowhere else: not as chat, and not on a path another type takes.
+  const asChat = await post("/v1/chat/completions", { model: "ImageGen", messages: [{ role: "user", content: "hi" }] });
+  assert.equal(asChat.status, 404);
+  assert.match(asChat.text, /ImageGen.+is not offered as chat: it takes \/upstream\/\{model\}\/generate/);
+  assert.equal((await post("/v1/embeddings", { model: "VideoGen", input: "x" })).status, 404);
+  // A model named outright is not offered, though a backend serves it and declares the path.
+  const direct = await post("/upstream/img-b/generate", { prompt: "a fox" });
+  assert.equal(direct.status, 404);
+  assert.match(direct.text, /img-b.+is not offered here \(ImageGen, VideoGen, Embeddings\)/);
+  // A path with no name in it is asked for by the flow that takes it.
+  assert.equal((await post("/generate", { prompt: "a river" })).status, 200);
+  assert.equal(got.at(-1)!.url, "/generate");
+  // A name in the body goes out as the model the flow picked.
+  assert.equal((await post("/v1/embeddings", { model: "Embeddings", input: "x" })).status, 200);
+  assert.deepEqual(got.at(-1), { url: "/v1/embeddings", model: "emb" });
+  assert.equal((await post("/v1/embeddings", { model: "emb", input: "x" })).status, 404);
+  const counted = (await (await fetch(`${at}/ui/data`)).json()) as { flowHits: Record<string, number[]> };
+  assert.deepEqual(counted.flowHits["ImageGen"], [0, 1, 1], "and each is counted on the line that decided");
+  await node.close();
+
+  // With a flow for every other name that runs them as themselves, each path answers as it did before any of this.
+  const open = createNode(parseConfig(shape({ rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } })), silentLogger);
+  const at2 = await new Promise<string>((ready) =>
+    open.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(open.server.address() as AddressInfo).port}`)));
+  for (const [path, body] of [["/upstream/img-b/generate", {}], ["/generate", {}], ["/v1/embeddings", { model: "emb" }]] as const) {
+    const r = await fetch(`${at2}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await r.text();
+    assert.equal(r.status, 200, `${path} answers as itself`);
+  }
+  assert.equal(got.at(-1)!.url, "/v1/embeddings");
+  // A flow with nothing to take a path leaves it unoffered.
+  const shut = createNode(parseConfig(shape({ Embeddings: types.Embeddings })), silentLogger);
+  const at3 = await new Promise<string>((ready) =>
+    shut.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(shut.server.address() as AddressInfo).port}`)));
+  const none = await fetch(`${at3}/generate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await none.text();
+  assert.equal(none.status, 404, "a path no flow takes is not offered");
+  await open.close();
+  await shut.close();
   backend.closeAllConnections();
   backend.close();
 }

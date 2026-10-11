@@ -40,6 +40,7 @@ apiKeys:
   - plain-key
   - { key: labeled-key, label: dsh }
   - { key: "env:HEARTH_LABEL_TEST_KEY", label: nova }
+flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }
 `);
 const cfg = loadConfig(cfgPath);
 assert.deepEqual(cfg.apiKeys, ["plain-key", "labeled-key", "env-secret-key"],
@@ -51,7 +52,7 @@ assert.deepEqual(cfg.apiKeyLabels, ["", "dsh", "nova"],
 
 const bad = (line: string, re: RegExp, why: string) => {
   const p = join(dir, "bad.yaml");
-  writeFileSync(p, `name: bad\nbackends: { main: { url: "${beUrl}", kind: none, serves: [mine] } }\n${line}\n`);
+  writeFileSync(p, `name: bad\nbackends: { main: { url: "${beUrl}", kind: none, serves: [mine] } }\n${line}\nflows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }\n`);
   assert.throws(() => loadConfig(p), re, why);
 };
 bad(`apiKeys: [{ key: k, label: "" }]`, /label must not be empty/,
