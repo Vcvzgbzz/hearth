@@ -410,6 +410,10 @@ export class BackendPool {
     const declared = this.slots.find((s) => s.cfg.serves.includes(wire));
     if (declared) return declared;
 
+    // A path with no name in it is answered by the model its route names, which is that backend's to run.
+    const routed = this.slots.find((s) => s.cfg.routes.some((r) => r.model === wire));
+    if (routed) return routed;
+
     const claiming = this.slots.filter(
       (s) => s.cfg.serves.length === 0 && s.state.catalog().includes(wire),
     );

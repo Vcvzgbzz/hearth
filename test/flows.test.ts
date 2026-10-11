@@ -635,6 +635,8 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   // A path with no name in it is asked for by the flow that takes it.
   assert.equal((await post("/generate", { prompt: "a river" })).status, 200);
   assert.equal(got.at(-1)!.url, "/generate");
+  // And the model a route names is found on that route's backend, for what a flow reads about it and for a tried request.
+  assert.equal(JSON.parse((await post("/flows/try", { model: "VideoGen" })).text).backend, "film");
   // A name in the body goes out as the model the flow picked.
   assert.equal((await post("/v1/embeddings", { model: "Embeddings", input: "x" })).status, 200);
   assert.deepEqual(got.at(-1), { url: "/v1/embeddings", model: "emb" });
