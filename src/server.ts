@@ -21,9 +21,10 @@ import { BackendPool, type BackendSlot } from "./pool.js";
 import { decide, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
+import { KEEP_DAYS, meter, Usage, type Meter } from "./usage.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_HTML } from "./ui.js";
-import { createViews, type KeyInfo } from "./views.js";
+import { createViews, type CallerUse, type KeyInfo } from "./views.js";
 import { multipartField, replaceMultipartField } from "./multipart.js";
 import { send, type UpstreamResponse } from "./upstream.js";
 
@@ -157,6 +158,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   /** What we lend right now: `share:` while lending is on, nothing while paused. Every share gate reads this. */
   const shared = (): readonly string[] => controls.share(cfg.share);
 
+  /** Requests and tokens per caller per model per day. */
+  const usage = new Usage();
   const history = new History(() => {
     const agg = pool.aggregate();
     return {
@@ -345,6 +348,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   interface Timing {
     enqueuedAt: number;
     startedAt: number;
+    /** Reads what the answer cost as it is written, where the request is one worth counting. */
+    meter?: Meter;
+    /** The size the request was judged to be, for an answer that does not say. */
+    need?: number;
   }
   function logRequest(
     t: Timing,
@@ -362,8 +369,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         ms: Date.now() - started, waitedMs: started - t.enqueuedAt, ok,
       });
     }
+    // Whoever asked used it, here or on a peer; an admission refusal used nothing.
+    const used = t.startedAt > 0 ? t.meter?.read(t.need) ?? null : null;
+    if (t.startedAt > 0 && typeof fields.model === "string") {
+      const who = typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : typeof fields.forPeer === "string" ? `peer:${fields.forPeer}` : "local";
+      usage.add(who, fields.model, ok, used);
+    }
     log.info("request", {
       ...fields,
+      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.est ? { tokensEstimated: true } : {}) } : {}),
       waitedMs: started - t.enqueuedAt,
       runMs: Date.now() - started,
       ok,
@@ -753,7 +767,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg) }, spare);
     };
 
-    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
+    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (need?.tokens ?? 0) - (need?.output ?? 0)) };
 
     if (decision.target === "unavailable") {
       // Refusing is the point. The operator said this can't run here.
@@ -1055,6 +1069,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
     // Mint and revoke write the config file, and the node follows it at once.
     { path: ["/keys/mint", "/keys/revoke"], methods: ["POST"], auth: "local", handler: routeKeys },
+    { path: "/usage", methods: ["GET"], auth: "local", handler: routeUsage },
 
     // The OpenAI surface: a peer may send us work here, and so may we.
     { path: "/v1/warm", methods: ["POST"], auth: "either", envelope: "openai", handler: routeWarm },
@@ -1484,8 +1499,20 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   const keysView = (): KeyInfo[] =>
     cfg.apiKeys.map((k, i) => {
       const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
-      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null };
+      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: usage.total(caller, 1), month: usage.total(caller, KEEP_DAYS) };
     });
+
+  /** Whoever else used this node in the last month: this machine with no key, and peers. */
+  const othersView = (): CallerUse[] => {
+    const keys = new Set(cfg.apiKeys.map((k, i) => "key:" + (cfg.apiKeyLabels[i] || keyId(k))));
+    return usage.callers().filter((c) => !keys.has(c)).map((caller) => ({ caller, today: usage.total(caller, 1), month: usage.total(caller, KEEP_DAYS) }));
+  };
+
+  // What was used, by whom: the last `days` days (31 at most) as day -> caller -> model -> counts.
+  async function routeUsage(c: Call): Promise<void> {
+    const days = Math.min(KEEP_DAYS, Math.max(1, Number(c.url.searchParams.get("days")) || KEEP_DAYS));
+    json(c.res, 200, { days, usage: usage.since(days) });
+  }
 
   // Drop a model off the card that serves it. Per-model where the backend can, because that
   // leaves the card's other residents working; a whole-card clear only as its one and only verb,
@@ -1845,7 +1872,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // A peer running a model here is that model in use.
     using(model, res);
 
-    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
+    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res) };
     const serving = pool.for(model);
     // As on the local path: what we relayed to the borrower, so lent
     // capacity that failed is not filed as lent capacity that worked.
@@ -2414,6 +2441,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // quiet" are not the same blank tile.
     canary: () => canary?.page() ?? { enabled: false, passive: false, recovery: false, models: {} },
     keys: keysView,
+    others: othersView,
   });
 
   /** Expired sessions, swept like any other in-memory state; unref'd so it never holds the process. */
@@ -2424,8 +2452,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function loadHistory(): void {
     if (!cfg.historyFile || !existsSync(cfg.historyFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown; lastUse?: unknown };
+      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown; lastUse?: unknown; usage?: unknown };
       history.restore(saved.history);
+      usage.restore(saved.usage);
       logs.restore(saved.logs);
       // When each model was last asked for, so a restart does not make everything look long idle.
       for (const [m, at] of Object.entries(saved.lastUse ?? {})) if (typeof at === "number") lastUse.set(m, at);
@@ -2437,7 +2466,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function saveHistory(): void {
     if (!cfg.historyFile) return;
     try {
-      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse) }));
+      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse), usage: usage.snapshot() }));
       historyWarned = false;
     } catch (e) {
       // Once per failure streak: a read-only path must not fill the journal every minute.

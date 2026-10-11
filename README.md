@@ -180,7 +180,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `callers.<who>` | none | Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default`. |
 | `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](#editing-on-the-graph); nodes without one are laid out |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](#flows) |
-| `historyFile` | unset | a file that keeps the console's day of history and its recent log lines across restarts, written every minute and at shutdown. Unset keeps them in memory |
+| `historyFile` | unset | a file that keeps the console's day of history, its recent log lines and the month of usage per caller across restarts, written every minute and at shutdown. Unset keeps them in memory |
 | `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
 
 Tokens accept `env:NAME`, so the config stays committable.
@@ -243,6 +243,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
 | `/keys/mint`, `/keys/revoke` | local | `POST { label, models? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
+| `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
 | `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, headers?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
 | `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |
@@ -658,8 +659,8 @@ Five pages, and ⌘K jumps to anything on them:
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
   evicted from its row.
-- **Keys**: every api key by label, what it may run and when it last spoke to
-  this node. Mint one (shown once) or revoke one by its label.
+- **Keys**: every api key by label, what it may run, what it used today and
+  over 31 days, and when it last spoke to this node. Mint one (shown once) or revoke one by its label.
 - **Queue**: jobs in flight, and finished requests per model with how long they
   waited and ran, over the last ten minutes or the last day; a row opens to
   its individual calls. The day view adds

@@ -260,6 +260,9 @@ export interface Canary {
   models: Record<string, CanaryModel>;
 }
 
+/** Requests and tokens over some days. */
+export interface Used { requests: number; failed: number; in: number; out: number }
+
 export interface UiData {
   /** The operator logged in on this request, or null for loopback and key callers. */
   operator: string | null;
@@ -295,5 +298,7 @@ export interface UiData {
   /** The canary's verdict per model. Absent only on an older server's payload. */
   canary?: Canary;
   /** Every api key: its label (or hash where unlabeled), its model scope, and the last time it spoke here. */
-  keys?: { label: string; id: string; models: string[] | null; lastSeen: number | null }[];
+  keys?: { label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used }[];
+  /** Callers that are not keys (this machine with none, peers) and what they used. */
+  others?: { caller: string; today: Used; month: Used }[];
 }

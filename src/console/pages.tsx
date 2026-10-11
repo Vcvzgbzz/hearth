@@ -2,7 +2,7 @@
 import { ChevronRight, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 
-import type { UiData } from "./types.js";
+import type { UiData, Used } from "./types.js";
 import { Refs, refsOf, Value } from "./config.js";
 import { draftView, isObj, obj, put } from "./draft.js";
 import { change, useEdit } from "./editStore.js";
@@ -283,8 +283,23 @@ export function Models() {
  * plaintext over once, and after that only the label and a hash are shown, the way the
  * config page does.
  */
+/** A count as a person reads it: 950, 12.4k, 3.1M. */
+const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
+
+/** Requests and tokens over some days, as one cell. */
+function UsedCell({ used }: { used?: Used }) {
+  if (!used || used.requests === 0) return <span className="text-dim">—</span>;
+  return (
+    <span title={`${used.requests} requests, ${used.failed} failed · ${used.in} tokens in, ${used.out} out`}>
+      {short(used.requests)} <span className="text-dim">req ·</span> {short(used.in)} <span className="text-dim">in /</span> {short(used.out)} <span className="text-dim">out</span>
+      {used.failed > 0 && <span className="text-bad"> · {short(used.failed)} failed</span>}
+    </span>
+  );
+}
+
 export function Keys() {
   const keys = useStore((s) => s.data!.keys ?? []);
+  const others = useStore((s) => s.data!.others ?? []);
   const catalog = useStore((s) => s.data!.catalog);
   const [label, setLabel] = useState("");
   const [scope, setScope] = useState("");
@@ -316,7 +331,7 @@ export function Keys() {
     <Card className="overflow-hidden">
       <div className="border-b border-line px-4 py-2.5">
         <div className="font-medium">Keys</div>
-        <div className="text-[11px] text-dim">Bearer keys for /v1 on this node. They live in hearth.yaml and a change takes effect at once; what is shown here is a label and a hash, never the secret.</div>
+        <div className="text-[11px] text-dim">Bearer keys for /v1 on this node. They live in hearth.yaml and a change takes effect at once; what is shown here is a label and a hash, never the secret. Days are UTC; tokens are the backend&rsquo;s own count where its answer carries one, and an estimate where it does not.</div>
       </div>
       <table className="w-full text-left">
         <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
@@ -324,6 +339,8 @@ export function Keys() {
             <th className="px-4 py-2 font-medium">label</th>
             <th className="px-4 py-2 font-medium">id</th>
             <th className="px-4 py-2 font-medium">may run</th>
+            <th className="px-4 py-2 font-medium">today</th>
+            <th className="px-4 py-2 font-medium">31 days</th>
             <th className="px-4 py-2 text-right font-medium">last seen</th>
             <th className="w-20" />
           </tr>
@@ -334,6 +351,8 @@ export function Keys() {
               <td className="px-4 py-2">{k.label !== "" ? k.label : <span className="text-dim">unlabeled</span>}</td>
               <td className={cx("px-4 py-2 text-dim", mono)}>{k.id}</td>
               <td className="px-4 py-2 text-dim">{k.models === null || k.models.length === 0 ? "everything" : k.models.join(", ")}</td>
+              <td className="tabular px-4 py-2"><UsedCell used={k.today} /></td>
+              <td className="tabular px-4 py-2"><UsedCell used={k.month} /></td>
               <td className={cx("tabular px-4 py-2 text-right", k.lastSeen === null ? "text-dim" : "text-fg")}>{k.lastSeen === null ? "never" : ago(k.lastSeen)}</td>
               <td className="px-4 py-2 text-right">
                 <button disabled={busy || k.label === ""} title={k.label === "" ? "a key with no label is removed in the config file" : undefined}
@@ -342,6 +361,17 @@ export function Keys() {
                   revoke
                 </button>
               </td>
+            </tr>
+          ))}
+          {/* Whoever else used the node: this machine with no key, and peers. */}
+          {others.map((o) => (
+            <tr key={o.caller} className="border-b border-line/60 last:border-0">
+              <td className="px-4 py-2 text-dim">{o.caller === "local" ? "this machine, no key" : o.caller.startsWith("peer:") ? `peer ${o.caller.slice(5)}` : o.caller}</td>
+              <td className="px-4 py-2 text-dim">—</td>
+              <td className="px-4 py-2 text-dim">—</td>
+              <td className="tabular px-4 py-2"><UsedCell used={o.today} /></td>
+              <td className="tabular px-4 py-2"><UsedCell used={o.month} /></td>
+              <td /><td />
             </tr>
           ))}
         </tbody>

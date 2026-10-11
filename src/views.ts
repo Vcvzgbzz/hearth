@@ -2,6 +2,7 @@
  * The read model: what /network, /control and the status page show, derived from live state
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
+import type { Row } from "./usage.js";
 import type { HearthConfig } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
@@ -44,6 +45,16 @@ export interface KeyInfo {
   id: string;
   models: string[] | null;
   lastSeen: number | null;
+  /** What it used today (UTC) and over the days that are kept. */
+  today: Row;
+  month: Row;
+}
+
+/** A caller that is not a key: this machine with none, or a peer. */
+export interface CallerUse {
+  caller: string;
+  today: Row;
+  month: Row;
 }
 
 export interface ViewDeps {
@@ -65,9 +76,11 @@ export interface ViewDeps {
   canary: () => CanaryView;
   /** The keys page's rows, with last-seen — the one per-key fact only this process can know. */
   keys: () => KeyInfo[];
+  /** Callers that are not keys, with what they used. */
+  others: () => CallerUse[];
 }
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -124,6 +137,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       flowHits: flowHits(),
       // Every api key, by label and scope, with when it last authenticated here.
       keys: keys(),
+      others: others(),
       // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
       actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
       // Where the operator placed topology nodes; the page lays out the rest.

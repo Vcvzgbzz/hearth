@@ -42,7 +42,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     modelHeader: { type: "bool", desc: "Send `x-hearth-model` on every chat answer: the id the request ran as. Turn off where callers should not see what is behind a name.", def: true },
     shutdownGraceMs: ms("How long a shutdown waits for requests in flight. 0 drops them.", 30000),
     operator: { type: "raw", desc: "The console login. Written by `hearth set-operator`." },
-    historyFile: { type: "text", desc: "A file that keeps the console's day of history and recent logs across restarts. Unset keeps them in memory." },
+    historyFile: { type: "text", desc: "A file that keeps the console's day of history, recent logs and the month of usage per caller across restarts. Unset keeps them in memory." },
     routers: { type: "raw", desc: "Rulebooks besides `flows:`: `routers.<name>` has `flows` in the same shape, and `strict` so a request runs on the model its line names or fails: no next line after a failure, no route fallback. `callers:` says who goes by one." },
     callers: { type: "raw", desc: "Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default` for `flows:`. Unset, everyone goes by `flows:`." },
     layout: { type: "raw", desc: "Where the console's topology draws the nodes you have placed. Written by its editor." },
