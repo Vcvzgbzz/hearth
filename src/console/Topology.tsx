@@ -1,16 +1,20 @@
 /**
  * Where things run: peers, this node, and the machines and hardware its backends sit on, with a
- * dot for each request in flight. Watched, not edited; where requests go is Routing.tsx.
+ * dot for each request in flight. Watched, not edited, but for one thing: which router a
+ * caller's requests go by, set by drawing a line from the caller to it. Where requests go
+ * after that is Routing.tsx.
  */
 import {
   applyNodeChanges, Background, BaseEdge, Controls, getBezierPath, Handle, Position, ReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
-import { CircuitBoard, Cpu, Flame, Globe, Server, Split } from "lucide-react";
+import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Server, Split } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
-import { control, go, select, useStore } from "./store.js";
+import { callersIn, list, obj, withCaller } from "./draft.js";
+import { change, loadDraft, showRouter, useEdit } from "./editStore.js";
+import { control, go, select, toast, useStore } from "./store.js";
 import { cx, Dot, type Tone } from "./ui.js";
 
 /** `tags`: hardware a backend uses besides the group it sits in. `tip`: what the status dot is saying. */
@@ -22,7 +26,7 @@ const CardNode = memo(function CardNode({ data }: NodeProps<Node<Card>>) {
       "w-[200px] rounded-xl border bg-panel px-3 py-2 shadow-sm transition-colors",
       data.selected ? "border-accent ring-2 ring-accent/25" : "border-line hover:border-dim/40",
     )}>
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={Position.Left} isConnectable={false} />
       <div className="flex items-center gap-2">
         <span className="text-dim">{data.icon}</span>
         <span className="truncate font-medium">{data.title}</span>
@@ -39,10 +43,29 @@ const CardNode = memo(function CardNode({ data }: NodeProps<Node<Card>>) {
           ))}
         </div>
       )}
-      <Handle type="source" position={Position.Right} />
+      <Handle type="source" position={Position.Right} isConnectable={false} />
       {/* This node stands over the router and feeds down into it. */}
-      <Handle type="source" id="down" position={Position.Bottom} />
-      <Handle type="target" id="up" position={Position.Top} />
+      <Handle type="source" id="down" position={Position.Bottom} isConnectable={false} />
+      <Handle type="target" id="up" position={Position.Top} isConnectable={false} />
+    </div>
+  );
+});
+
+/** Someone whose requests arrive here: an api key by its label, or this machine with no key. */
+type Caller = { name: string; router: string | null; busy: boolean; editable: boolean };
+
+/** A caller, with a dot to draw to the router its requests go by. */
+const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
+  return (
+    <div className="w-[200px] rounded-xl border border-line bg-panel px-3 py-2 shadow-sm" title={data.editable ? "drag the dot onto a router to say which rules this caller's requests go by" : undefined}>
+      <div className="flex items-center gap-2">
+        <span className="text-dim">{data.name === "local" ? <Monitor size={14} /> : <KeyRound size={14} />}</span>
+        <span className="truncate font-mono font-medium">{data.name}</span>
+        <span className="ml-auto"><Dot tone={data.busy ? "accent" : "info"} pulse={data.busy} /></span>
+      </div>
+      <div className="mt-0.5 truncate text-[11px] text-dim">{data.name === "local" ? "this machine" : "api key"} · {data.router === null ? "default rules" : `router ${data.router}`}</div>
+      <Handle type="source" position={Position.Right} isConnectable={data.editable} style={{ right: -6 }}
+              className={cx("!h-3.5 !w-3.5 !border-2 !border-panel", data.router === null ? "!bg-info" : "!bg-accent", !data.editable && "!pointer-events-none")} />
     </div>
   );
 });
@@ -118,7 +141,7 @@ const GhostNode = memo(function GhostNode({ data }: NodeProps<Node<Ghost>>) {
   );
 });
 
-const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode };
+const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode, caller: CallerNode };
 
 type Pulse = { key: string; back: boolean; t: number };
 /** `wire`: a route, drawn to be followed. `lit`: the way a tried request takes, or the line under the pointer. */
@@ -244,7 +267,10 @@ function backendSub(b: Backend, run: number): string {
  * Peers | this node | machines, each a stack of its backends in the hardware they use.
  * Deterministic, so nothing moves per tick.
  */
-function layout(d: UiData, sel: { kind: string; id: string } | null, router: boolean) {
+/** Who calls and which router each goes by, as the draft has it; null where there is no draft to read them from. */
+type Who = { callers: string[]; routers: Record<string, { callers: string[]; strict: boolean }> } | null;
+
+function layout(d: UiData, sel: { kind: string; id: string } | null, router: boolean, who: Who = null) {
   const self = d.net.nodes.find((n) => n.self)!;
   const peers = d.net.nodes.filter((n) => !n.self);
   const is = (kind: string, id: string) => sel?.kind === kind && sel.id === id;
@@ -378,6 +404,32 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
     return Math.max(H, (o.linked.length + o.offered.length) * CHIP - 8);
   });
   let py = mid - (blocks.reduce((a, b) => a + b, 0) + GAP * (peers.length - 1)) / 2;
+  if (router && who) {
+    // A router of their own for some callers stands under the one everyone else goes by.
+    const names = Object.keys(who.routers);
+    names.forEach((name, i) => {
+      const r = who.routers[name]!;
+      nodes.push({
+        id: `router:${name}`, type: "card", position: { x: X.self, y: mid - H / 2 + (i + 1) * (H + GAP) },
+        data: {
+          title: name, icon: <Split size={14} />, tone: r.callers.length ? "accent" : "warn",
+          sub: `${r.callers.length ? `for ${r.callers.join(", ")}` : "nobody uses it yet"}${r.strict ? " · never falls back" : ""}`,
+          tip: "A rulebook of its own for the callers wired to it. Click to open it on the Routing page.",
+        } satisfies Card,
+      });
+    });
+    // Callers stand over the peers, each with a line to the router its requests go by.
+    const base = Math.min(py, mid - H / 2) - 40;
+    who.callers.forEach((c, i) => {
+      const own = names.find((n) => who.routers[n]!.callers.includes(c)) ?? null;
+      const jobs = d.q.jobs.filter((j) => j.state === "running" && (j.caller === c || j.caller === `key:${c}`)).map((j) => j.id);
+      nodes.push({ id: `caller:${c}`, type: "caller", position: { x: X.peer, y: base - (who.callers.length - i) * (H + GAP) }, data: { name: c, router: own, busy: jobs.length > 0, editable: true } satisfies Caller });
+      edges.push({
+        id: `e:caller:${c}`, source: `caller:${c}`, target: own === null ? "router" : `router:${own}`, type: "flow",
+        data: { jobs, pulses: pulsesFor(`e:caller:${c}`, jobs), color: own === null ? "var(--info)" : "var(--accent)" },
+      });
+    });
+  }
   peers.forEach((p: NetNode, i) => {
     const block = blocks[i]!;
     nodes.push({
@@ -452,7 +504,15 @@ export function Topology() {
   // The router is drawn unless this browser was told not to.
   const [router, setRouter] = useState(() => { try { return localStorage.getItem(ROUTER) !== "off"; } catch { return true; } });
   const flip = () => setRouter((on) => { try { localStorage.setItem(ROUTER, on ? "off" : "on"); } catch { /* per-browser nicety only */ } return !on; });
-  const laid = useMemo(() => layout(data, sel, router), [data.net, data.q.jobs, data.flows, sel, router]);
+  // Who calls, and by which router, is read from the routing draft: wiring a caller here is a change to that draft.
+  const draft = useEdit((s) => s.draft);
+  const hash = data.config.hash;
+  useEffect(() => { if (!useEdit.getState().file) void loadDraft(); }, [hash]);
+  const who = useMemo<Who>(() => (draft ? {
+    callers: callersIn(draft),
+    routers: Object.fromEntries(Object.entries(obj(draft.routers)).map(([name, r]) => [name, { callers: list(obj(r).callers), strict: obj(r).strict === true }])),
+  } : null), [draft?.routers, draft?.apiKeys]);
+  const laid = useMemo(() => layout(data, sel, router, who), [data.net, data.q.jobs, data.flows, sel, router, who]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
   const dragging = useRef<string | null>(null);
@@ -461,8 +521,19 @@ export function Topology() {
   return (
     <ReactFlow
       nodes={nodes} edges={laid.edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
-      nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} zoomOnDoubleClick={false}
+      nodesDraggable={false} nodesConnectable={who !== null} elementsSelectable={false} zoomOnDoubleClick={false}
       minZoom={0.3} maxZoom={1.5} onInit={(rf) => arrive(rf)}
+      // A caller's line let go over a router sends its requests by that router; over the default one, by the rules everyone goes by.
+      onConnectEnd={(e, c) => {
+        const from = c.fromNode?.id ?? "";
+        if (!from.startsWith("caller:")) return;
+        const at = "changedTouches" in e ? e.changedTouches[0]! : e;
+        const to = document.elementFromPoint(at.clientX, at.clientY)?.closest(".react-flow__node")?.getAttribute("data-id") ?? "";
+        if (to !== "router" && !to.startsWith("router:")) return;
+        const [caller, name] = [from.slice(7), to === "router" ? null : to.slice(7)];
+        change((d) => withCaller(d, name ?? "", caller, name !== null));
+        toast("ok", `${caller} goes by ${name === null ? "the default rules" : `router ${name}`} in the draft — publish it on the Routing page`);
+      }}
       colorMode={dark ? "dark" : "light"} proOptions={{ hideAttribution: true }}
       onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes, ns))}
       onNodeDragStart={(_, n) => { dragging.current = n.id; }}
@@ -470,7 +541,7 @@ export function Topology() {
       onNodeClick={(_, n) => {
         const [kind, ...rest] = n.id.split(":");
         const id = kind === "self" ? data.net.nodes.find((x) => x.self)!.name : rest.join(":");
-        if (kind === "router") go("routing");
+        if (kind === "router") { if (useEdit.getState().draft) showRouter(rest.length ? rest.join(":") : null); go("routing"); }
         else if (kind === "self" || kind === "peer" || kind === "backend") select({ kind, id });
         else if (kind === "resource") select({ kind, id: id.split("/").pop()! });
       }}
