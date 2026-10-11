@@ -522,7 +522,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /** What a flow decided for work that is not chat: counted, and its actions that run as a step decides set off. */
   function settle(r: ReturnType<typeof resolve>, asked: string, caller: string): void {
-    countHits(r.path);
+    // ponytail: only `flows:` is counted; a router's lines show no counts until hits are kept per router.
+    if (!routerOf(caller)) countHits(r.path);
     for (const a of r.actions) {
       const action = cfg.actions[a.name];
       if (action?.on !== "decided") continue;
@@ -534,7 +535,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /** What a flow reads about this node, for a request with these needs. */
-  function worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = cfg): World {
+  /** The router a caller goes by, if one names it: by its api key's label, or `local`. */
+  const routerOf = (caller: string) => Object.values(cfg.routers).find((r) => r.callers.some((n) => n === caller || `key:${n}` === caller));
+  /** The config as a caller's requests see it: its router's rulebook in place of `flows:`. */
+  const rulesFor = (caller: string): HearthConfig => { const r = routerOf(caller); return r ? { ...cfg, flows: r.flows } : cfg; };
+
+  function worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = rulesFor(caller)): World {
     return {
       cfg: from, peers, caller, lane, need,
       local: (m) => localLoad(pool.for(m), m),
@@ -649,12 +655,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       ...(talk?.later ? { pinned: (flow: string) => { const at = placed.get(`${flow}\0${talk.key}`); return at && at.until > Date.now() ? at.end : undefined; } } : {}),
     };
     const startedAt = Date.now();
-    const flowsNow = cfg.flows;
+    const flowsNow = world.cfg.flows;
     const decision = resolve(asked, world);
     // A name this node does not offer is not found, which is a different answer from one it will not run right now.
     if (decision.unlisted) throw new Refusal(404, decision.reason);
     // Nor is one that takes paths of its own a chat model.
-    const paths = cfg.flows[decision.via[0] ?? ""]?.takes;
+    const paths = flowsNow[decision.via[0] ?? ""]?.takes;
     if (paths) throw new Refusal(404, `"${asked}" is not offered as chat: it takes ${paths.join(", ")}`);
     // What the flow chose, which a fallback from a failed peer may change again.
     let model = decision.model;
@@ -675,9 +681,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // as the step decides, or once the request has ended for one that waits to hear how.
     const fired = new Set<string>();
     const fire = (r: typeof decision): void => {
-      countHits(r.path);
+      if (flowsNow === cfg.flows) countHits(r.path);
       // A sticky flow remembers where it put this conversation, for its later turns.
-      const sticky = cfg.flows[r.path.at(-1)?.flow ?? ""]?.sticky;
+      const sticky = flowsNow[r.path.at(-1)?.flow ?? ""]?.sticky;
       if (talk && sticky !== undefined && r.target !== "unavailable") {
         const key = `${r.path.at(-1)!.flow}\0${talk.key}`;
         placed.delete(key);
@@ -1658,13 +1664,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       } else {
         // Everyone else sees what can be asked for: the names flows take, and every model as well
         // only where the flow for other names runs them as themselves.
-        const taken = Object.values(cfg.flows).filter((f) => !f.off).flatMap((f) => f.inputs).filter((id) => id !== ANY);
-        const open = Object.values(cfg.flows).some((f) => !f.off && f.inputs.includes(ANY) && f.steps.some((s) => "asked" in s.to));
+        const mine = rulesFor(c.caller).flows;
+        const taken = Object.values(mine).filter((f) => !f.off).flatMap((f) => f.inputs).filter((id) => id !== ANY);
+        const open = Object.values(mine).some((f) => !f.off && f.inputs.includes(ANY) && f.steps.some((s) => "asked" in s.to));
         const listed = new Set(upstream.data!.map((m) => m.id));
         if (!open) upstream.data = upstream.data!.filter((m) => taken.includes(m.id));
         for (const id of taken) if (!listed.has(id)) upstream.data!.push({ id });
         // Each variant a type comes in is a name of its own to ask for.
-        for (const id of taken) for (const v of variantsOf(cfg.flows, id)) upstream.data!.push({ id: `${id}:${v}` });
+        for (const id of taken) for (const v of variantsOf(mine, id)) upstream.data!.push({ id: `${id}:${v}` });
       }
       // Same for a scoped key: its picker shows what it may pick.
       if (c.models !== null) {
@@ -1936,13 +1943,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     let routed = pool.forPath(pathname);
     const held = pool.named(pathname);
     if (c.peer === null && (held !== undefined || routed?.rule.queue === true)) {
-      const taker = Object.values(cfg.flows).find((f) => !f.off && f.takes?.includes(held?.path ?? pathname));
+      const rules = rulesFor(who).flows;
+      const taker = Object.values(rules).find((f) => !f.off && f.takes?.includes(held?.path ?? pathname));
       const name = held?.name ?? viaBody ?? taker?.inputs[0] ?? routed!.rule.model;
       const r = resolve(name, worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined));
       const refuse = (status: number, why: string) => fail(res, new Refusal(status, why, status === 404 ? "invalid_request_error" : "server_error"));
       if (r.unlisted) return refuse(404, r.reason);
       // A type that says which paths it takes is not offered on any other.
-      const takes = cfg.flows[r.via[0] ?? ""]?.takes;
+      const takes = rules[r.via[0] ?? ""]?.takes;
       if (takes && !takes.includes(held?.path ?? pathname)) return refuse(404, `"${name}" is not offered on ${held?.path ?? pathname}: it takes ${takes.join(", ")}`);
       if (r.target === "unavailable") return refuse(503, `${name} is not being run: ${r.reason}`);
       if (r.target === "peer") return refuse(503, `${name} is not being run: its flow sends it to a peer, and only chat goes to a peer`);
@@ -2058,7 +2066,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           }
           logRequest(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, true);
         };
-        const fb = routed.rule.fallback;
+        // A strict router's callers get the backend the route names, or its failure.
+        const fb = routerOf(who)?.strict ? undefined : routed.rule.fallback;
         const spare = fb ? pool.get(fb.backend) : undefined;
         if (!fb || !spare) {
           await run(target, model, outBody, false);

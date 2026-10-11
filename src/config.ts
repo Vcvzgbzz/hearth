@@ -366,6 +366,8 @@ export interface HearthConfig {
   historyFile: string | null;
   /** How requests are routed, by flow name. Ids no flow takes as an input run where they are served. */
   flows: Record<string, Flow>;
+  /** Rulebooks of their own for the callers each names; everyone else goes by `flows`. */
+  routers: Record<string, Router>;
   /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
   modelHeader: boolean;
   /** `actions:`: what a flow step can set off beside routing, by name. */
@@ -649,6 +651,38 @@ export function endsOf(to: FlowTo, asked?: string): FlowEnd[] {
 
 /** Can this target be passed over when it cannot take the request? Only a peer can be down. */
 const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
+
+/**
+ * `routers.<name>`: a rulebook used in place of `flows:` for the callers it names (an api key's
+ * label, or `local`). `strict` also switches off a backend route's own fallback for them, so a
+ * request runs where its rule says or fails.
+ */
+export interface Router {
+  callers: string[];
+  strict: boolean;
+  note?: string;
+  flows: Record<string, Flow>;
+}
+
+/** `routers:`, each checked as `flows:` is; a caller goes by one router at most. */
+function routerDecls(raw: unknown, flows: (raw: unknown) => Record<string, Flow>): Record<string, Router> {
+  const out: Record<string, Router> = {};
+  const taken = new Map<string, string>();
+  for (const [name, v] of Object.entries(asRecord(raw ?? {}, "routers"))) {
+    const at = `routers.${name}`;
+    const r = asRecord(v, at);
+    only(r, ["callers", "strict", "note", "flows"], at);
+    const callers = strList(r.callers, `${at}.callers`);
+    for (const c of callers) {
+      if (taken.has(c)) throw bad(`${at}.callers`, `names "${c}", which already goes by routers.${taken.get(c)}`);
+      taken.set(c, name);
+    }
+    const own = flows(r.flows);
+    if (!Object.values(own).some((f) => f.inputs.includes(ANY))) throw bad(`${at}.flows`, `needs a flow with inputs: ["${ANY}"], as flows: does, to say what happens to a name no other flow takes`);
+    out[name] = { callers, strict: bool(r.strict, `${at}.strict`, false), ...(typeof r.note === "string" && r.note ? { note: r.note } : {}), flows: own };
+  }
+  return out;
+}
 
 /** Check a `flows:` section against a running config, as loading the file would. */
 export function flowsFor(raw: unknown, cfg: HearthConfig, actions: Record<string, unknown> = cfg.actions): Record<string, Flow> {
@@ -1498,6 +1532,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     layout: layoutDecl(root.layout),
     modelHeader: bool(root.modelHeader, "modelHeader", true),
     flows: flowDecls(root.flows, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))),
+    routers: routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path)))),
     actions,
     listen: mainListen,
     resources: resourceDecls,

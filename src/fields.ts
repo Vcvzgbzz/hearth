@@ -43,6 +43,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     shutdownGraceMs: ms("How long a shutdown waits for requests in flight. 0 drops them.", 30000),
     operator: { type: "raw", desc: "The console login. Written by `hearth set-operator`." },
     historyFile: { type: "text", desc: "A file that keeps the console's day of history and recent logs across restarts. Unset keeps them in memory." },
+    routers: { type: "raw", desc: "Rulebooks of their own for some callers: `routers.<name>` has `callers` (api key labels, or `local`), `flows` in the shape of `flows:`, and `strict` to switch off backend route fallbacks for them. Everyone else goes by `flows:`." },
     layout: { type: "raw", desc: "Where the console's topology draws the nodes you have placed. Written by its editor." },
     stateFile: { type: "raw", desc: "A pre-2.0 console sidecar, folded into this file once at startup." },
     canary: { type: "raw", desc: "Ask named models a question with one right answer, on a schedule; a seat that answers 200 with nothing is taken out of rotation. Off unless set; restart-only." },
