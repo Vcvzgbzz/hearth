@@ -248,6 +248,8 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
   const edit = (i: number, fn: (s: Doc) => Doc | null) => change((d) => editStep(d, data.name, i, fn));
   // Sending a name to the model of the same name is leaving it alone: the default, said as such.
   const own = (to: ReturnType<typeof toOf>) => to.kind === "asked" || (to.kind === "model" && (data.inputs ?? []).includes(to.model));
+  // One line is open to edit at a time; the rest read as a sentence, so a long rule stays short.
+  const [open, setOpen] = useState<number | null>(null);
   return (
     <div className={cx(
       "w-[640px] rounded-xl border bg-panel shadow-sm transition-colors",
@@ -273,19 +275,24 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
             <Handle type="source" id={`step-${i}-back`} position={Position.Left} className="!opacity-0" style={{ left: -6 }} />
             {/* Every line is the same three columns, so the where-it-goes and the counts read in line:
                 the word, the conditions, and the fixed-width place the line ends at. */}
-            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate")}>{i === last ? "Otherwise" : i === 0 ? "If" : "Else if"}</span>
+            <span className="w-4 shrink-0 text-right text-[10px] tabular text-dim/70" title={`step ${i + 1}`}>{i + 1}</span>
+            {/* The word closes a line that is open. */}
+            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate", open === i && "cursor-pointer")} onClick={() => { if (open === i) setOpen(null); }}>{i === last ? "Otherwise" : i === 0 ? "If" : "Else if"}</span>
             {i === last ? (
               <span className="min-w-0 flex-1" />
-            ) : data.editable ? (
+            ) : data.editable && (open === i || (Object.keys(when).length === 0 && to.kind !== "peer")) ? (
               // A peer can be down, so a line that sends to one may stand with no condition of its own.
               <Conds when={when} models={data.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (r) => ({ ...r, when: w }))} />
+            ) : data.editable ? (
+              <button type="button" className="nodrag nopan min-w-0 flex-1 rounded-md px-1 py-1 text-left leading-snug hover:bg-muted" title="click to change this line's conditions" onClick={() => setOpen(i)}>{sentence(when) || "it can take it"}</button>
             ) : (
               <span className="min-w-0 flex-1 truncate">{sentence(when) || "it can take it"}</span>
             )}
-            <span className="flex w-[168px] min-w-0 shrink-0 items-center gap-1.5">
+            <span className="flex w-[200px] min-w-0 shrink-0 items-center gap-1.5">
+              <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", hue(to.kind === "asked" ? "model" : to.kind).dot)} title={hue(to.kind === "asked" ? "model" : to.kind).says} />
               {to.kind !== "refuse" && <span className="shrink-0 text-dim">send to</span>}
               {data.editable ? (
-                <button type="button" className={cx(CHIP, "min-w-0 flex-1 font-mono", to.kind === "unset" && "border-warn text-warn")} title="choose where this line sends requests"
+                <button type="button" className={cx(CHIP, "min-w-0 flex-1 font-mono", to.kind === "unset" && "border-warn text-warn")} title={to.kind === "unset" ? "choose where this line sends requests" : `${toText(to)} — click to choose where this line sends requests`}
                         onClick={(e) => pick({ x: e.clientX, y: e.clientY, from: { node: id, handle: `step-${i}` } })}>
                   <span className="truncate">{to.kind === "unset" ? "choose where" : own(to) ? "its own model" : toText(to)}</span><ChevronDown size={10} className="shrink-0 text-dim" />
                 </button>
@@ -293,6 +300,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
             </span>
             {typeof s.max === "number" && <span className="shrink-0 rounded border border-line px-1 text-[10px] text-dim" title={`takes at most ${s.max} at once; the rest go on down the list`}>≤{s.max}</span>}
             {data.hits && <span className="w-7 shrink-0 text-right text-[10px] tabular text-dim" title={`decided ${data.hits[i] ?? 0} ${(data.hits[i] ?? 0) === 1 ? "request" : "requests"} since the rules last changed or the node started`}>{data.hits[i] ?? 0}×</span>}
+            {data.marks && !data.marks[i] && <span className="w-4 shrink-0" />}
             {data.marks?.[i] && ("bad" in data.marks[i]!
               ? <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-bad text-[10px] font-bold text-panel" title={(data.marks[i] as { bad: string }).bad}>!</span>
               : <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-dim/60 text-[10px] text-dim" title="Not checked: this model has not said whether it takes what this line is for. It is checked once the model has loaded, or when you describe it under Models.">?</span>)}
