@@ -155,7 +155,7 @@ export function Inspector() {
     <aside className={cx("shrink-0 overflow-auto border-l border-line bg-panel p-4 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-10", isObj(entry) ? "w-[440px]" : "w-[340px]")}>
       <div className="mb-2 flex items-center">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind}</div>
+          <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind === "resource" ? "hardware" : sel.kind}</div>
           <div className="text-base font-semibold">{title}</div>
         </div>
         {/* What it is doing is here; what it is set to is the same node's settings. */}
@@ -166,6 +166,10 @@ export function Inspector() {
         <button className={cx("text-dim hover:text-fg", !(isObj(entry) || (editable && sel.kind === "peer")) && "ml-auto")} aria-label="close" onClick={() => select(null)}><X size={16} /></button>
       </div>
       {body ?? <Empty>gone</Empty>}
+      {/* What is above is what runs now; what is below is the file, which may be ahead of it. */}
+      {section && live.config.restartPending.includes(section) && (
+        <div className="mt-3 rounded-md border border-warn/50 bg-warn/10 px-2 py-1.5 text-[11px] text-warn">Published changes to {section} are not running yet: what is shown above is what runs now, and restarting hearth applies the settings below.</div>
+      )}
       {/* Its settings, as the Config page has them, changing the same draft. */}
       {isObj(entry) && draft && (
         <div className="mt-4 border-t border-line pt-3">

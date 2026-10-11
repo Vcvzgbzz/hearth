@@ -5,9 +5,11 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { added, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, type Doc, type Facts, type Landing } from "./draft.js";
+import { added, followed, RANK, routeTyped, summary, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, type Doc, type Facts, type Landing } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 
+/** A whole draft and the router it was shown by, to go back to. */
+export type Snap = { full: Doc; router: string | null };
 export type EditSel = { kind: "flow" | "action"; id: string } | null;
 /** A request to try against the draft, and where it went. */
 export type Trial = { model: string; images: boolean; tools: boolean; long: boolean; caller?: string; lane?: string; /** State to pretend, as `<what>:<model>` (idle, used, busy, warm or held) or `now:<HH:MM>`. */ pretend?: string[] };
@@ -17,7 +19,7 @@ export type Picking = { x: number; y: number; from: { node: string; handle: stri
 /** One choice in a menu; `head` is a label between groups, `on` marks the current one. */
 export type Choice = { label: string; value?: string; hint?: string; head?: boolean; on?: boolean; off?: boolean; danger?: boolean; mono?: boolean };
 /** A list of choices open at a point on the page. */
-export type Choosing = { x: number; y: number; items: Choice[]; onPick: (value: string) => void; /** Always offer the filter, however short the list. */ search?: boolean } | null;
+export type Choosing = { x: number; y: number; items: Choice[]; onPick: (value: string) => void; /** Always offer the filter, however short the list. */ search?: boolean; /** What typing a name that is not listed makes, and the words for it. */ create?: { says: string; make: (name: string) => void } } | null;
 
 interface EditState {
   file: File | null;
@@ -34,7 +36,9 @@ interface EditState {
   /** The line under the pointer, by the start of its id, so it can be told from the ones it crosses. */
   hover: string | null;
   /** Drafts to go back to, oldest first. */
-  past: Doc[];
+  past: Snap[];
+  /** Drafts undone, to go forward to again; a new change lets them go. */
+  future: Snap[];
   /** Why there is no draft to edit, once that is known; null while one is loaded or still loading. */
   unread: string | null;
   /** The dialog that names a new thing: `flows`, or `actions:<kind>`. */
@@ -48,7 +52,7 @@ interface EditState {
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], unread: null, adding: null, focus: null, router: null, rest: null,
+  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -94,7 +98,7 @@ let stepping = false;
 useEdit.subscribe((s, prev) => {
   if (s.draft === prev.draft) return;
   keep(s);
-  if (!stepping && prev.draft && s.draft && s.file === prev.file) set({ past: [...s.past.slice(-99), prev.draft] });
+  if (!stepping && prev.draft && s.draft && s.file === prev.file) set({ past: [...s.past.slice(-99), { full: whole(prev)!, router: prev.router }], future: [] });
 });
 
 /**
@@ -138,21 +142,33 @@ export const dirty = (s: Shown) => JSON.stringify(s.file?.doc ?? null) !== JSON.
 /** How many things the draft changes: a rule, a backend, the layout each count once however much of them moved. */
 export const changed = (s: Shown): number =>
   s.file?.doc && s.draft ? new Set(opsOf(s.file.doc, whole(s)!).map((op) => op.path.slice(0, 2).join("."))).size : 0;
+/** How many edits the draft holds: each one made here counts, and after a reload, each thing that differs from the file. */
+export const edits = (s: EditState): number => (s.past.length > 0 && dirty(s) ? s.past.length : changed(s));
 export const revert = () => { set((s) => ({ ...show(s.file?.doc ?? null, s.router), err: null, pending: [], trial: null, tried: null })); toast("ok", "draft discarded — undo brings it back"); };
 export function undo(): void {
-  const { past } = useEdit.getState();
-  if (past.length === 0) return;
+  const now = useEdit.getState();
+  const back = now.past.at(-1);
+  if (!back || !now.draft) return;
   stepping = true;
-  set({ draft: past.at(-1)!, past: past.slice(0, -1), err: null });
+  set({ ...show(back.full, back.router), past: now.past.slice(0, -1), future: [...now.future, { full: whole(now)!, router: now.router }], err: null });
+  stepping = false;
+}
+/** Go forward again to what was just undone. */
+export function redo(): void {
+  const now = useEdit.getState();
+  const on = now.future.at(-1);
+  if (!on || !now.draft) return;
+  stepping = true;
+  set({ ...show(on.full, on.router), future: now.future.slice(0, -1), past: [...now.past, { full: whole(now)!, router: now.router }], err: null });
   stepping = false;
 }
 export const editSelect = (sel: EditSel) => set({ sel });
 export const pick = (picking: Picking) => set({ picking });
 export const hover = (id: string | null) => { if (useEdit.getState().hover !== id) set({ hover: id }); };
 /** Open a menu under whatever was clicked. */
-export function choose(e: { currentTarget: Element }, items: Choice[], onPick: (value: string) => void): void {
+export function choose(e: { currentTarget: Element }, items: Choice[], onPick: (value: string) => void, create?: NonNullable<Choosing>["create"]): void {
   const r = e.currentTarget.getBoundingClientRect();
-  set({ choosing: { x: r.left, y: r.bottom + 4, items, onPick } });
+  set({ choosing: { x: r.left, y: r.bottom + 4, items, onPick, ...(create ? { create, search: true } : {}) } });
 }
 /** Open a menu at a point on the page: where the pointer was right-clicked, say. */
 export const chooseAt = (x: number, y: number, items: Choice[], onPick: (value: string) => void, search = false) => set({ choosing: { x, y, items, onPick, search } });
@@ -192,13 +208,15 @@ export function rename(sel: NonNullable<EditSel>, to: string): void {
 }
 
 /** Give a type another name, one that is routed or one still waiting to be. */
-export function retype(from: string, to: string): void {
+export function retype(from: string, to: string, order: string[] = []): void {
   const { draft, pending } = useEdit.getState();
   const name = to.trim();
   if (!draft || !name || name === from) return;
   const next = retyped(draft, from, name);
   if (!next || pending.includes(name)) { toast("bad", `"${name}" is taken, or not a name a type can have`); return; }
-  set({ draft: next, err: null, pending: pending.map((p) => (p === from ? name : p)) });
+  // It keeps its place in the list, which is otherwise the order the file names things in.
+  const placed = order.includes(from) ? order.map((n) => (n === from ? name : n)).reduce<Doc>((d, n, k) => put(d, "layout", RANK + n, { x: 0, y: k }), next) : next;
+  set({ draft: placed, err: null, pending: pending.map((p) => (p === from ? name : p)) });
 }
 
 /** Take a type off the Router: nothing takes that name any more. */
@@ -252,9 +270,11 @@ export function wire(from: { node: string; handle: string | null }, to: Landing)
     next = out.also(to.action);
   } else {
     const known = facts();
-    const no = known && refusal(out.when, to, known, out.paths);
+    // A name drawn straight to a model that is not chat becomes a type for the paths that model answers on.
+    const typed = known && out.name !== undefined && to.kind === "model" && known.kind(to.model) === "paths" ? known.paths(to.model) : [];
+    const no = typed.length ? null : known && refusal(out.when, to, known, out.paths);
     if (no) { toast("bad", no); return; }
-    next = out.send(to);
+    next = typed.length && to.kind === "model" ? routeTyped(draft, out.name!, to.model, typed) : out.send(to);
   }
   if (next) set((s) => ({ draft: next, err: null, pending: s.pending.filter((p) => p !== out.name) }));
 }
@@ -265,6 +285,9 @@ export function connect(from: { node: string; handle: string | null }, node: str
   const to = end.kind.lands?.(end.id);
   if (to) wire(from, to);
 }
+
+/** Have a caller go where everyone else does again. */
+export const follow = (caller: string) => change((d) => followed(d, caller));
 
 /** A name clients will ask for that nothing serves: listed on the node until it is sent somewhere. */
 export const addName = (id: string) => set((s) => (id && !s.pending.includes(id) ? { pending: [...s.pending, id] } : {}));
@@ -309,7 +332,7 @@ export async function review(): Promise<void> {
     set({
       err: null,
       plan: {
-        before: file.text, after: dry.text, restartPending: dry.restartPending, notes: problems(draft, facts() ?? undefined), naming: true, verb: "publish",
+        before: file.text, after: dry.text, restartPending: dry.restartPending, notes: problems(draft, facts() ?? undefined), naming: true, verb: "publish", summary: summary(file.doc, draft),
         commit: async (name) => {
           try {
             const out = await request<{ restartPending: string[] }>("PATCH", "/config", { ...body, ...(name ? { name } : {}) });
@@ -367,7 +390,7 @@ export async function goBack(v: Version): Promise<void> {
 /** Show another router's rulebook, or with null the rules everyone else goes by. Undo starts afresh there. */
 export function showRouter(router: string | null): void {
   stepping = true;
-  set((s) => ({ ...show(whole(s), router), past: [], sel: null, pending: [], trial: null, tried: null }));
+  set((s) => ({ ...show(whole(s), router), sel: null, pending: [], trial: null, tried: null }));
   stepping = false;
 }
 
@@ -377,9 +400,7 @@ export function addRouter(name: string, copy: boolean): void {
   const full = whole(s);
   if (!full || !s.draft) return;
   const flows = copy ? s.draft.flows : { "anything-else": { inputs: ["*"], steps: [{ to: { refuse: "that is not something this router offers" } }] } };
-  stepping = true;
-  set({ ...show(put(full, "routers", name, { flows }), name), past: [], sel: null, pending: [] });
-  stepping = false;
+  set({ ...show(put(full, "routers", name, { flows }), name), sel: null, pending: [] });
   toast("ok", `router ${name} added — choose who uses it`);
 }
 
@@ -392,8 +413,6 @@ export function removeRouter(name: string): void {
   // Whoever went by it goes where everyone else does.
   const callers = Object.fromEntries(Object.entries(obj(full.callers)).filter(([, r]) => r !== name));
   const { routers: _r, layout: _l, callers: _c, ...rest } = full;
-  stepping = true;
-  set({ ...show({ ...rest, ...(Object.keys(callers).length ? { callers } : {}), ...(Object.keys(others).length ? { routers: others } : {}), ...(Object.keys(layout).length ? { layout } : {}) }, null), past: [], sel: null, pending: [] });
-  stepping = false;
-  toast("ok", `router ${name} deleted — discard draft brings it back`);
+  set({ ...show({ ...rest, ...(Object.keys(callers).length ? { callers } : {}), ...(Object.keys(others).length ? { routers: others } : {}), ...(Object.keys(layout).length ? { layout } : {}) }, null), sel: null, pending: [] });
+  toast("ok", `router ${name} deleted — undo brings it back`);
 }

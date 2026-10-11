@@ -753,8 +753,10 @@ line; **route a name** brings one onto the map.
   have: a model sits level with the lines that reach it, rules stand in the
   order of the names that enter them, and a box that would lie on another is
   drawn below it.
+- **+ type** takes a name typed straight into it. Drawn onto a model that is
+  not chat, a new type takes the paths that model answers on.
 - **A type's ⋯** on the Router (it shows as you point at the name) renames it,
-  moves it up or down the list, or removes it; double-clicking the name
+  moves it up, down, to the top or to the bottom, or removes it; double-clicking the name
   renames it too. The new name follows into the rule that takes it. The order
   is kept with the layout.
 - **Try a request** along the bottom asks the node where a request would go
@@ -772,7 +774,8 @@ line; **route a name** brings one onto the map.
   or delete it.
 - **Keys**: with a rule or an action selected, Delete or Backspace removes it,
   Ctrl/⌘+D makes a second one, and Ctrl/⌘+C then Ctrl/⌘+V pastes a copy. A
-  copied rule takes no names until you give it some. Ctrl/⌘+Z undoes. A rule
+  copied rule takes no names until you give it some. Ctrl/⌘+Z undoes and
+  Ctrl/⌘+Shift+Z redoes, across routers and both pages; Escape closes the panel. A rule
   and an action also carry a bin of their own.
 - **?** beside the buttons says what each thing on the map means. A rule or an
   action is renamed by clicking its name, on the map or in the panel, and the
@@ -1485,11 +1488,12 @@ setting for testing a model without wondering whether something else answered.
 A step's `max`, a flow's `sticky` and the line counts are kept by flow name, so
 two routers with a flow of the same name share them; only `flows:` is counted.
 
-The Topology page draws this node as a frame with its callers inside: `default`
-(everyone else), `local`, and every labelled api key, each with a line to the
+The Topology page draws this node as a frame with its callers inside:
+**everyone else**, `local`, and every labelled api key, each with a line to the
 router its requests go by, and each router under the default one. Drag a
-caller's dot onto a router to send it there. A caller with a dashed line only
-follows `default`; one you have sent somewhere stays there when `default` moves.
+caller onto a router to send it there, or click it to choose from a list, which
+also offers "wherever everyone else goes". A caller drawn faint only follows
+everyone else; one you have sent somewhere stays there when they move.
 The change joins the routing draft and is published from the Routing page.
 Clicking a router opens its rules there.
 
@@ -1498,9 +1502,11 @@ draft: **+ backend**, **+ hardware** and **+ machine** add one; clicking a
 backend, a card or a machine opens its settings beside the picture; and a
 backend's card is dragged onto other hardware or another machine to say where
 it runs. Hardware and machines with nothing on them yet are drawn empty, to be
-dragged onto. Backends drawn as chips (more than three on one card) are moved
-from their settings. **review & publish** there shows the diff and says what
-needs a restart before anything is written.
+dragged onto, and the small chips of a crowded card drag the same way.
+**review & publish** there lists what changes in plain words above the diff
+and says what needs a restart before anything is written; **versions** is
+beside it. What is published but not running yet stays said on the strip, with
+the restart button, and in the panel of anything it concerns.
 
 On the Routing page the first button says which rulebook is on the map. Its
 menu switches between them and starts a new one, from the rules shown or from

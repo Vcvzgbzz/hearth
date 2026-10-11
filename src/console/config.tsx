@@ -13,7 +13,7 @@ import { go, request, RequestError, toast, useStore } from "./store.js";
 import { Button, Card, cx, mono, Pill, Switch } from "./ui.js";
 
 export type File = { text: string; hash: string; doc: Record<string, unknown> | null };
-export type Plan = { before: string; after: string; restartPending: string[]; /** Write it, under a name for the list of versions when one was typed. */ commit: (name?: string) => Promise<void>; /** Offer to name this version. */ naming?: boolean; /** What the button that writes says. */ verb?: string; /** Things worth knowing before writing: the file loads, but may not do what was meant. */ notes?: string[] };
+export type Plan = { before: string; after: string; restartPending: string[]; /** Write it, under a name for the list of versions when one was typed. */ commit: (name?: string) => Promise<void>; /** Offer to name this version. */ naming?: boolean; /** What it changes, a line per thing, in the map's words. */ summary?: string[]; /** What the button that writes says. */ verb?: string; /** Things worth knowing before writing: the file loads, but may not do what was meant. */ notes?: string[] };
 export type Err = { message: string; path: string | null };
 type Path = (string | number)[];
 
@@ -38,7 +38,7 @@ export const NEW: Record<string, { noun: string; scope: Scope; keys: string[]; l
   peers: { noun: "peer", scope: "peer", keys: ["url", "token", "accept"] },
   models: { noun: "model", scope: "model", keys: ["lane", "note"] },
   resources: { noun: "hardware", scope: "resource", keys: ["kind", "shared"] },
-  servers: { noun: "server", scope: "server", keys: ["host"] },
+  servers: { noun: "machine", scope: "server", keys: ["host"] },
   flows: { noun: "flow", scope: "flow", keys: ["inputs"] },
   actions: { noun: "action", scope: "action", keys: ["log", "call"] },
   "scheduler.lanes": { noun: "lane", scope: "lane", keys: ["priority"] },
@@ -568,7 +568,7 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
             );
           })}
           {problem && <div className="text-[12px] text-bad">{problem}</div>}
-          <div className="text-[11px] text-dim">{note ?? "Everything else is under “add setting” once it exists."} Nothing is written until you review &amp; save.</div>
+          <div className="text-[11px] text-dim">{note ?? "Everything else is under “add setting” once it exists."} Nothing is written until you review it.</div>
         </div>
         <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
           <Button onClick={() => ref.current?.close()}>cancel</Button>
@@ -593,6 +593,13 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
           {plan.restartPending.length ? <Pill tone="warn">restart to apply {plan.restartPending.join(", ")}</Pill> : <Pill tone="ok">applies live</Pill>}
           <button className="ml-auto text-dim hover:text-fg" onClick={onClose} aria-label="close"><X size={16} /></button>
         </div>
+        {(plan.summary ?? []).length > 0 && (
+          <div className="max-h-40 overflow-auto border-b border-line px-4 py-2 text-[12px]" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-0.5 font-medium">What this changes</div>
+            {plan.summary!.map((n) => <div key={n} className="text-dim">• {n}</div>)}
+            {plan.restartPending.length > 0 && <div className="mt-1 text-warn">Publishing writes the file. {plan.restartPending.join(", ")} only take effect after hearth is restarted, which the header then offers.</div>}
+          </div>
+        )}
         {(plan.notes ?? []).length > 0 && (
           <div className="border-b border-line bg-warn/10 px-4 py-2 text-[12px] text-warn" onClick={(e) => e.stopPropagation()}>
             <div className="font-medium">This will save, but check these first:</div>

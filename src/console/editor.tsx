@@ -3,12 +3,12 @@
  * with a node's full settings, the list of places a line can go, and the row that tries a
  * request against the draft.
  */
-import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Split, RotateCcw, Save, Search, Trash2, Undo2, X, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Redo2, Split, RotateCcw, Save, Search, Trash2, Undo2, X, Zap } from "lucide-react";
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, dirty, duplicate, editSelect, facts, focusOn, goBack, loadDraft, paste, pick, remove, removeRouter, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
+import { addRouter, change, choose, chooseAt, closeMenu, copy, dirty, duplicate, edits, editSelect, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeRouter, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { useStore } from "./store.js";
@@ -116,13 +116,30 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
 /** A caller as the console names it: everyone not sent somewhere else is "default". */
 const said = (caller: string) => (caller === EVERYONE ? "default" : caller);
 
+/** The versions that have been published, to see what one changed and go back to it. */
+export function VersionsButton() {
+  return (
+    <button type="button" aria-label="published versions" title="the versions that have been published: see what one changed, and go back to it" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 text-[12px] text-dim hover:bg-muted hover:text-fg"
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  void versions().then((all) => chooseAt(r.left, r.bottom + 4, all.length === 0 ? [{ label: "nothing has been published from here yet", off: true }] : [
+                    { label: "go back to", head: true },
+                    // Newest first; the one that is the file as it stands is marked, and is nowhere to go back to.
+                    ...all.map((v) => ({ label: v.name || "unnamed", value: v.hash, hint: `${new Date(v.at).toLocaleString()}${v.hash === useEdit.getState().file?.hash ? " · the file now" : ""}`, off: v.hash === useEdit.getState().file?.hash })).reverse(),
+                  ], (hash) => { const v = all.findLast((x) => x.hash === hash); if (v) void goBack(v); }, all.length > 8));
+                }}>
+          <History size={13} />versions
+    </button>
+  );
+}
+
 /** A first place for a choice between several to start from: something a backend already serves. */
 const anyModel = (draft: Doc | null): string =>
   list(Object.values(obj(draft?.backends)).flatMap((b) => list(obj(b).serves)))[0] ?? Object.keys(obj(draft?.models))[0] ?? "";
 
 /** The strip over the graph: add things, and review what the draft changes. */
 export function EditBar() {
-  const { draft, err, plan, past, unread, adding, router } = useEdit();
+  const { draft, err, plan, past, future, unread, adding, router } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
   // The map's keys, from anywhere on the page unless something is being typed into or a list is open:
@@ -140,20 +157,21 @@ export function EditBar() {
       // Text that is selected on the page is what a copy is for, before any node.
       else if (mod && k === "c" && s.sel && !String(getSelection() ?? "")) copy(s.sel);
       else if (mod && k === "v" && !e.shiftKey) paste();
-      else if (mod && k === "z" && !e.shiftKey) undo();
+      else if (mod && k === "z") (e.shiftKey ? redo : undo)();
+      else if (e.key === "Escape" && s.sel) editSelect(null);
       else return;
       e.preventDefault();
     };
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   }, []);
-  const changes = useEdit(changed);
+  const changes = useEdit(edits);
   // The draft follows the file: read on arrival, and again whenever the file moves, with any changes here carried over.
   useEffect(() => { void loadDraft(); }, [hash]);
   // With nothing to edit the map is still drawn, and says why it cannot be changed.
   if (!draft) {
     return (
-      <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel/95 px-3 py-2 text-[12px] shadow-sm">
+      <div className="relative z-10 mx-3 mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[12px] shadow-sm">
         <span className={unread ? "text-warn" : "text-dim"}>{unread ?? "Reading hearth.yaml…"}</span>
         {unread && <span className="text-dim">Until then this is a picture of the routing in force.</span>}
         <div className="ml-auto"><Button onClick={() => void loadDraft()}>try again</Button></div>
@@ -163,7 +181,7 @@ export function EditBar() {
   const issues = problems(draft, facts() ?? undefined);
   return (
     <>
-      <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel/95 px-3 py-2 shadow-sm">
+      <div className="relative z-10 mx-3 mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 shadow-sm">
         {/* Which rulebook is on the map: the one everyone goes by, or a router some callers have to themselves. */}
         <button type="button" aria-label="the router being edited" title="which rulebook is on the map: the default one, or a router some callers have to themselves"
                 className={cx("flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[13px] hover:bg-muted", router === null ? "border-line bg-panel" : "border-accent bg-accent/10")}
@@ -214,21 +232,12 @@ export function EditBar() {
                 onClick={(e) => choose(e, LEGEND.map(([label, hint]) => ({ label, hint })), () => {})}>
           <CircleHelp size={14} />
         </button>
-        <button type="button" aria-label="published versions" title="the versions that have been published: see what one changed, and go back to it" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 text-[12px] text-dim hover:bg-muted hover:text-fg"
-                onClick={(e) => {
-                  const r = e.currentTarget.getBoundingClientRect();
-                  void versions().then((all) => chooseAt(r.left, r.bottom + 4, all.length === 0 ? [{ label: "nothing has been published from here yet", off: true }] : [
-                    { label: "go back to", head: true },
-                    // Newest first; the one that is the file as it stands is marked, and is nowhere to go back to.
-                    ...all.map((v) => ({ label: v.name || "unnamed", value: v.hash, hint: `${new Date(v.at).toLocaleString()}${v.hash === useEdit.getState().file?.hash ? " · the file now" : ""}`, off: v.hash === useEdit.getState().file?.hash })).reverse(),
-                  ], (hash) => { const v = all.findLast((x) => x.hash === hash); if (v) void goBack(v); }, all.length > 8));
-                }}>
-          <History size={13} />versions
-        </button>
+        <VersionsButton />
         {router === null && <span className="ml-2 truncate text-[11px] text-dim max-2xl:hidden">A draft: nothing changes until you publish. Right-click for more.</span>}
         <div className="ml-auto flex items-center gap-2">
           {isDirty && <span className="flex items-center gap-1.5 text-[12px] text-accent"><span className="size-1.5 rounded-full bg-accent" />draft · {changes} {changes === 1 ? "change" : "changes"}</span>}
           <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
+          {future.length > 0 && <Button onClick={redo}><Redo2 size={13} />redo</Button>}
           <Button disabled={!isDirty} onClick={revert}><RotateCcw size={13} />discard draft</Button>
           <Button tone="primary" disabled={!isDirty} onClick={() => void review()}><Save size={13} />review &amp; publish</Button>
         </div>
@@ -285,10 +294,13 @@ export function Picker() {
   // A rule that takes a backend's own path may send to any model; a chat rule only to one that answers chat.
   const chat = !(out?.paths ?? false);
   // What cannot take a chat request is left out, unless it is searched for by name: then it is shown, and says why not.
-  const models = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => list(obj(b).serves)).concat(Object.keys(obj(draft.models))))].filter(hit)
+  // Every model a backend serves or a route of its names, and every one the file describes.
+  const models = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => [...list(obj(b).serves), ...(Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).model)).filter(Boolean)]).concat(Object.keys(obj(draft.models))))].filter(hit)
     .filter((m) => !chat || q.trim() !== "" || known?.kind(m) !== "paths");
   const peers = Object.keys(obj(draft.peers)).filter(hit);
-  const flows = Object.keys(obj(draft.flows)).filter((f) => f !== self && hit(f));
+  // A flow that only says where one name runs is a line on the map, not a rule to hand work to.
+  const flows = Object.entries(obj(draft.flows)).filter(([f, v]) => f !== self && hit(f) && !list(obj(v).inputs).includes("*")
+    && directTo(f, { inputs: list(obj(v).inputs), steps: (Array.isArray(obj(v).steps) ? (obj(v).steps as unknown[]) : []).map(obj) }) === null).map(([f]) => f);
   // A rule one name enters can send it on as itself; with several names there is no single "itself" to offer.
   const entering = self ? list(obj(obj(draft.flows)[self]).inputs) : [];
   // With several names entering, "its own model" is whichever of them was asked for.
@@ -344,13 +356,27 @@ export function Menu() {
   const fits = m.items.filter((i) => i.head || i.label.toLowerCase().includes(q.trim().toLowerCase()));
   // A heading with nothing left under it goes too.
   const shown = fits.filter((i, k) => !i.head || (fits[k + 1] !== undefined && !fits[k + 1]!.head));
+  // A name typed that is not one of the choices can be made, where the list says how.
+  const typed = q.trim();
+  const make = m.create && typed !== "" && !m.items.some((i) => !i.head && (i.value ?? i.label) === typed) ? m.create : null;
   return (
     <div className="fixed inset-0 z-50" onClick={closeMenu} onKeyDown={(e) => { if (e.key === "Escape") closeMenu(); }}>
       <div role="menu" className="absolute min-w-44 max-w-sm rounded-xl border border-line bg-panel p-1.5 shadow-2xl" onClick={(e) => e.stopPropagation()}
            style={{ left: Math.min(m.x, innerWidth - 300), ...(m.y + 340 > innerHeight ? { bottom: innerHeight - m.y + 34 } : { top: m.y }) }}>
         {long && <input autoFocus aria-label="filter" placeholder={m.search ? "find a rule, an action, a name or a model…" : "filter…"} value={q} onChange={(e) => setQ(e.target.value)}
-                        onKeyDown={(e) => { const first = shown.find((i) => !i.head && !i.off); if (e.key === "Enter" && first) { closeMenu(); m.onPick(first.value ?? first.label); } }} className="mb-1 h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />}
+                        onKeyDown={(e) => {
+                          const first = shown.find((i) => !i.head && !i.off && i.value?.charCodeAt(0) !== 0);
+                          if (e.key !== "Enter") return;
+                          // What was typed wins over a near match: a new name is what typing one is for.
+                          if (make) { closeMenu(); make.make(typed); } else if (first) { closeMenu(); m.onPick(first.value ?? first.label); }
+                        }} className="mb-1 h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />}
         <div className="max-h-72 overflow-auto">
+          {make && (
+            <button role="menuitem" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-accent hover:bg-line/60" onClick={() => { closeMenu(); make.make(typed); }}>
+              <Plus size={12} />{make.says} <span className={mono}>{typed}</span><span className="ml-auto text-[10px] text-dim">Enter</span>
+            </button>
+          )}
+          {!make && shown.length === 0 && <div className="px-2 py-1.5 text-[12px] text-dim">nothing by that name</div>}
           {shown.map((i, k) => i.head ? (
             <div key={k} className="px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-dim">{i.label}</div>
           ) : (
@@ -360,7 +386,7 @@ export function Menu() {
               {/* What a choice is comes first and whole; what it means sits under it. */}
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{i.label}</span>
-                {i.hint && <span className="block truncate font-sans text-[11px] font-normal text-dim">{i.hint}</span>}
+                {i.hint && <span className="block whitespace-normal font-sans text-[11px] font-normal text-dim">{i.hint}</span>}
               </span>
               {i.on && <span className="shrink-0 text-accent">✓</span>}
             </button>
@@ -605,7 +631,7 @@ function Names({ flow, names, options }: { flow: string; names: string[]; option
       {typing === null ? (
         <button type="button" className={cx(PICK, "h-7 border-dashed text-dim")}
                 onClick={(e) => choose(e, [{ label: "A new name…", value: "\u0000new", hint: "one nothing serves yet, like auto" }, { label: "a name this node already answers to", head: true }, ...options.filter((o) => !names.includes(o)).map((o) => ({ label: o, mono: true }))],
-                  (v) => (v === "\u0000new" ? setTyping("") : add(v)))}>
+                  (v) => (v === "\u0000new" ? setTyping("") : add(v)), { says: "a new name:", make: add })}>
           <Plus size={12} />a model name
         </button>
       ) : (

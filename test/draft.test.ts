@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, withCaller, callersIn, routerFor, usersOf, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, put, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -335,6 +335,31 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual(withCaller(withCaller(full, "*", "direct"), "*", null).callers, { local: "direct" });
   assert.equal(withCaller(full, "local", null).callers, undefined);
   assert.doesNotThrow(() => parseConfig(withCaller(moved, "app", null)));
+}
+
+// --- a name sent straight to a model that is not chat, and a draft said in words ------------------------
+{
+  const piped = { ...withRest(doc(), "asked"), backends: { ...(doc().backends as object), voice: { url: "http://127.0.0.1:9", kind: "none", routes: [{ path: "/speak", model: "say", lane: "chat" }, { path: "/upstream/{model}/hum", lane: "chat" }] } } } as Doc;
+  const live = { net: { nodes: [{ name: "me", self: true, up: true, free: 1, slots: 1, queued: 0 }] }, routing: {} } as unknown as UiData;
+  // The paths a model answers on: one that names it, and any that carry the model in the path.
+  assert.deepEqual(factsOf(piped, live).paths("say"), ["/speak", "/upstream/{model}/hum"]);
+  // Drawn straight to it, a name becomes a type of its own that takes those paths, and the file loads.
+  const typed = routeTyped(piped, "Speech", "say", ["/speak"]);
+  assert.deepEqual((typed.flows as Record<string, Doc>).Speech, { takes: ["/speak"], inputs: ["Speech"], steps: [{ to: "say" }] });
+  assert.doesNotThrow(() => parseConfig(typed));
+
+  // A type moves any number of places in one go.
+  assert.deepEqual(ordered(movedName(doc(), ["a", "b", "c", "d"], "d", -3).layout as never, ["a", "b", "c", "d"]), ["d", "a", "b", "c"]);
+  // A caller no longer sent anywhere of its own goes where everyone else does.
+  const pinned = { ...doc(), routers: { r: { flows: {} } }, callers: { local: "r", "*": "r" } } as Doc;
+  assert.deepEqual([followed(pinned, "local").callers, followed(followed(pinned, "local"), "*").callers], [{ "*": "r" }, undefined]);
+
+  // What a draft changes, a line per thing, in the words the map uses.
+  const after = placed(put(withCaller({ ...pinned, backends: { ...(doc().backends as object), extra: { url: "http://127.0.0.1:1" } } }, "local", null), "resources", "gpu0", { kind: "gpu", shared: true }), "self", { x: 1, y: 1 });
+  assert.deepEqual(summary(pinned, pointStep(after, "pick", 1, { kind: "model", model: "other" })!), [
+    "hardware gpu0: shared changed", "backend extra: added", "rule pick: its lines or what enters it changed", "caller local: now goes by the default router", "where things are placed on the maps",
+  ]);
+  assert.deepEqual(summary(pinned, pinned), []);
 }
 
 // --- what is written is the change and nothing else -------------------------------------------------

@@ -15,7 +15,7 @@ import type { UiData } from "./types.js";
 import { useStore } from "./store.js";
 
 /** What the draft adds to the picture: what a rule may name, the request being tried, and what is known about each model. */
-type Editing = { /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
+type Editing = { /** The router whose rules these are; null for the default one. */ router: string | null; /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
 
 /** Widths and heights the layout steps by. A node drawn beside a rule is `SIDE` tall, plus a row per place for a fastest-of. */
 const RULE = { width: 570, head: 36, row: 32 };
@@ -119,7 +119,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     id: "self", type: "hub", position: { x: 0, y: 0 },
     data: {
       // The same router the topology draws between this node and what runs its requests.
-      title: "Router", editable: Boolean(edit),
+      title: edit?.router ? `Router · ${edit.router}` : "Router", editable: Boolean(edit),
       sub: `${self.name} · ${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`,
       rows: names.map((id) => ({
         id, on: edit?.asked === id && tried !== null, loose: (edit?.pending ?? []).includes(id) && !ruleOf(id) && !direct.has(id),
@@ -263,7 +263,7 @@ export function Routing() {
     const self = view.net.nodes.find((n) => n.self);
     const models = [...new Set([...(view.catalog ?? []), ...(self?.backends ?? []).flatMap((b) => b.serves ?? []), ...Object.keys((edit.draft.models ?? {}) as object)])].sort();
     const lanes = Object.keys(((edit.draft.scheduler as { lanes?: object } | undefined)?.lanes ?? {}) as object);
-    return layout(view, edit.sel, { rest: restOf(edit.draft).mode, models, lanes, tried: edit.tried, asked: edit.trial?.model ?? null, pending: edit.pending, facts: factsOf(edit.draft, data),
+    return layout(view, edit.sel, { router: edit.router, rest: restOf(edit.draft).mode, models, lanes, tried: edit.tried, asked: edit.trial?.model ?? null, pending: edit.pending, facts: factsOf(edit.draft, data),
       // What was counted is the default router's: on another router's map no line shows a count.
       changed: (rule) => edit.router !== null || JSON.stringify((edit.draft!.flows as Record<string, unknown> | undefined)?.[rule]) !== JSON.stringify((edit.file?.doc?.flows as Record<string, unknown> | undefined)?.[rule]) });
   }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
@@ -297,7 +297,7 @@ export function Routing() {
       nodes={nodes} edges={edges} nodeTypes={VIEWS} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={editing} elementsSelectable={false} zoomOnDoubleClick={false}
       // The strip over the map is two rows tall when it has something to say.
-      minZoom={0.3} maxZoom={1.5} onInit={(rf) => { flow.current = rf; arrive(rf, 120); }}
+      minZoom={0.3} maxZoom={1.5} onInit={(rf) => { flow.current = rf; arrive(rf, 0); }}
       colorMode={dark ? "dark" : "light"} proOptions={{ hideAttribution: true }}
       snapToGrid snapGrid={[20, 20]}
       onNodesChange={(changes) => {

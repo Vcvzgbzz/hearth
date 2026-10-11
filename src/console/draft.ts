@@ -96,8 +96,8 @@ export function draftView(doc: Doc, live: UiData): UiData {
     };
   });
   const peers: NetNode[] = Object.entries(obj(doc.peers)).map(([name, p]) =>
-    live.net.nodes.find((n) => !n.self && n.name === name)
-      ?? { name, up: false, map: obj(obj(p).models) as Record<string, string>, free: null, slots: null, queued: null });
+    // What a peer lends is the draft's to say, whether or not the peer has been heard from: a link is drawn the same either way.
+    ({ up: false, free: null, slots: null, queued: null, ...live.net.nodes.find((n) => !n.self && n.name === name), name, map: obj(obj(p).models) as Record<string, string> }));
   // What holds a card right now is the running node's to say; what the card is, the draft's.
   const resources: Resource[] = Object.entries(obj(doc.resources)).map(([name, r]) => ({
     holder: null, backends: [], ...(live.net.resources ?? []).find((x) => x.name === name),
@@ -213,6 +213,16 @@ export function routeId(doc: Doc, id: string, to: To): Doc {
   return put(out, "flows", name, { inputs: [id], steps: [{ to: rawTo(to) }] });
 }
 
+/**
+ * Send a name straight to a model that is not chat: a flow of its own that takes the paths that
+ * model answers on, which is what makes the name callable there.
+ */
+export function routeTyped(doc: Doc, id: string, model: string, takes: string[]): Doc {
+  const sent = routeId(doc, id, { kind: "model", model });
+  const hit = Object.entries(obj(sent.flows)).find(([, f]) => list(obj(f).inputs).length === 1 && list(obj(f).inputs)[0] === id);
+  return hit && takes.length ? put(sent, "flows", hit[0], { takes, ...obj(hit[1]) }) : sent;
+}
+
 /** A rule to start from: a common shape with its conditions in place and its destinations left to choose. */
 export const TEMPLATES: { label: string; hint: string; name: string; steps: Doc[] }[] = [
   { label: "Borrow an idle model", hint: "use a bigger model while nobody else is", name: "borrow-idle", steps: [{ when: { idle: { ms: 300_000 }, ready: true }, to: "", max: 2 }, { to: "" }] },
@@ -301,7 +311,8 @@ export function movedName(doc: Doc, names: string[], name: string, by: number): 
   const i = names.indexOf(name);
   const j = i + by;
   if (i < 0 || j < 0 || j >= names.length) return doc;
-  const next = names.map((n, k) => (k === i ? names[j]! : k === j ? names[i]! : n));
+  const next = names.filter((n) => n !== name);
+  next.splice(j, 0, name);
   return next.reduce<Doc>((d, n, k) => put(d, "layout", RANK + n, { x: 0, y: k }), doc);
 }
 
@@ -493,6 +504,46 @@ export function withCaller(doc: Doc, caller: string, router: string | null): Doc
   return Object.keys(kept).length ? { ...others, callers: kept } : others;
 }
 
+/** Stop saying where a caller goes, so it goes where everyone else does. */
+export function followed(doc: Doc, caller: string): Doc {
+  const { [caller]: _, ...kept } = obj(doc.callers);
+  const { callers: _c, ...others } = doc;
+  return Object.keys(kept).length ? { ...others, callers: kept } : others;
+}
+
+const NOUN: Record<string, string> = { backends: "backend", resources: "hardware", servers: "machine", flows: "rule", routers: "router", models: "model", actions: "action", peers: "peer" };
+
+/** What a draft changes, in the words the map uses: one line per thing added, removed or changed. */
+export function summary(from: Doc, to: Doc): string[] {
+  const out: string[] = [];
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  for (const key of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    if (same(from[key], to[key])) continue;
+    if (key === "layout") { out.push("where things are placed on the maps"); continue; }
+    if (key === "callers") {
+      for (const c of new Set([...Object.keys(obj(from.callers)), ...Object.keys(obj(to.callers))])) {
+        const [was, now] = [text(obj(from.callers)[c]), text(obj(to.callers)[c])];
+        const who = c === EVERYONE ? "everyone else" : `caller ${c}`;
+        if (was !== now) out.push(now === "" ? `${who}: no longer sent anywhere of its own` : `${who}: now goes by ${now === "default" ? "the default router" : `router ${now}`}`);
+      }
+      continue;
+    }
+    const noun = NOUN[key];
+    if (!noun || !isObj(from[key] ?? {}) || !isObj(to[key] ?? {})) { out.push(`setting ${key}: changed`); continue; }
+    const [a, b] = [obj(from[key]), obj(to[key])];
+    for (const id of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (same(a[id], b[id])) continue;
+      if (!(id in a)) out.push(`${noun} ${id}: added`);
+      else if (!(id in b)) out.push(`${noun} ${id}: removed`);
+      else {
+        const keys = [...new Set([...Object.keys(obj(a[id])), ...Object.keys(obj(b[id]))])].filter((k) => !same(obj(a[id])[k], obj(b[id])[k]));
+        out.push(`${noun} ${id}: ${key === "flows" ? "its lines or what enters it" : keys.join(", ")} changed`);
+      }
+    }
+  }
+  return out;
+}
+
 /** Remember where a node was put, to the pixel: a layout is a picture, not a measurement. */
 export const placed = (doc: Doc, id: string, at: { x: number; y: number }): Doc =>
   put(doc, "layout", id, { x: Math.round(at.x), y: Math.round(at.y) });
@@ -535,6 +586,8 @@ export interface Facts {
    * `paths` (image generation and the like), which routing never sees.
    */
   kind: (name: string) => "chat" | "paths";
+  /** The paths a model that is not chat answers on, as its backend declares them. */
+  paths: (name: string) => string[];
   /** What a model here, or a peer's copy of one, is known to take; null when nothing has said. */
   stats: (end: End) => { context?: number; vision?: boolean; tools?: boolean } | null;
 }
@@ -552,8 +605,17 @@ export function factsOf(doc: Doc, live: UiData): Facts {
   };
   // A backend that declares paths of its own answers its models on those, not as chat.
   const paths = (backend: string) => (Array.isArray(obj(obj(doc.backends)[backend]).routes) ? (obj(obj(doc.backends)[backend]).routes as unknown[]).length : (self?.backends ?? []).find((b) => b.name === backend)?.routes?.length ?? 0) > 0;
+  const routesOf = (backend: string): { path: string; model?: string }[] => (Array.isArray(obj(obj(doc.backends)[backend]).routes)
+    ? (obj(obj(doc.backends)[backend]).routes as unknown[]).map((r) => ({ path: text(obj(r).path), ...(text(obj(r).model) ? { model: text(obj(r).model) } : {}) }))
+    : (self?.backends ?? []).find((b) => b.name === backend)?.routes ?? []);
   return {
     kind: (name) => { const on = owner(name); return on !== undefined && paths(on) ? "paths" : "chat"; },
+    paths: (name) => {
+      const on = owner(name);
+      const wire = text(obj(obj(doc.models)[name]).as) || name;
+      // A path with the model in it serves every model on the backend; one without belongs to the model its route names.
+      return on === undefined ? [] : routesOf(on).filter((r) => r.path.includes("{model}") || r.model === undefined || r.model === wire).map((r) => r.path);
+    },
     stats: (end) => {
       if (end.kind === "peer") return (end.model && live.net.nodes.find((n) => !n.self && n.name === end.peer)?.stats?.[end.model]) || null;
       const declared = obj(obj(obj(doc.models)[end.model]).stats);

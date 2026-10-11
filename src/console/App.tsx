@@ -342,10 +342,13 @@ export default function App() {
           <div className="flex min-h-0 flex-1 flex-col p-5">
             <Card className="flex min-h-[420px] flex-1 flex-col overflow-hidden">
               <div className="flex min-h-0 flex-1">
-                <div className="relative min-w-0 flex-1">
-                  {/* Its own instance: the two pictures share nothing but the node they draw. */}
-                  <Routing />
+                {/* The strip stands over the map, not on it: nothing drawn is ever under it. */}
+                <div className="flex min-w-0 flex-1 flex-col">
                   <EditBar />
+                  <div className="relative min-h-0 flex-1">
+                    {/* Its own instance: the two pictures share nothing but the node they draw. */}
+                    <Routing />
+                  </div>
                   <Picker />
                   <Menu />
                 </div>

@@ -6,7 +6,7 @@
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronDown, MoreHorizontal, Plus, Split, Trash2, X, Zap } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import { ACTIONS, ANY, editStep, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
 import { addName, change, choose, dropName, editSelect, hover, pick, remove, rename, retype, type Choice } from "./editStore.js";
@@ -72,7 +72,9 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
     const these = rest.filter((c) => c.about === about);
     return these.length ? [{ label: `about ${about}`, head: true }, ...these.map((c) => ({ label: nameOf(c), value: c.key, ...(c.kind === "bool" && c.hint ? { hint: c.hint } : {}) }))] : [];
   });
-  const add = (key: string) => { const c = CONDS.find((x) => x.key === key); if (c) onChange({ ...when, [c.key]: seedOf(c) }); };
+  // The condition just added takes the keys, so its value can be typed at once.
+  const [fresh, setFresh] = useState<string | null>(null);
+  const add = (key: string) => { const c = CONDS.find((x) => x.key === key); if (c) { setFresh(c.key); onChange({ ...when, [c.key]: seedOf(c) }); } };
   return (
     <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
       {have.map((c, n) => {
@@ -90,14 +92,14 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
             ) : c.kind === "num" ? (
               <>
                 <span>{c.before}</span>
-                <input aria-label={c.before} type="number" min={0} className={cx(FIELD, "w-16 tabular")} value={typeof v === "number" ? v : ""} onChange={(e) => onChange({ ...when, [c.key]: Number(e.target.value) })} />
+                <input aria-label={c.before} type="number" min={0} autoFocus={fresh === c.key} className={cx(FIELD, "w-16 tabular")} value={typeof v === "number" ? v : ""} onChange={(e) => onChange({ ...when, [c.key]: Number(e.target.value) })} />
                 <span>{c.after}</span>
                 {drop}
               </>
             ) : c.kind === "list" ? (
               <>
                 <span>{c.before}</span>
-                <input aria-label={c.before} className={cx(FIELD, "w-28 font-mono")} placeholder={c.hint} value={list(v).join(", ")}
+                <input aria-label={c.before} autoFocus={fresh === c.key} className={cx(FIELD, "w-28 font-mono")} placeholder={c.hint} value={list(v).join(", ")}
                        onChange={(e) => onChange({ ...when, [c.key]: e.target.value.split(",").map((x) => x.trim()).filter((x, k, all) => x !== "" || k === all.length - 1) })} />
                 {drop}
               </>
@@ -164,13 +166,39 @@ const hue = (kind: string) => HUE[kind] ?? HUE.unset!;
 // Big enough to see and to grab at the size the whole picture is drawn.
 const PORT = "!h-3.5 !w-3.5 !border-2 !border-panel";
 
-/** A name that is renamed where it stands: typed over, then Enter or a click away. */
-function Renamed({ name, label, onRename, className }: { name: string; label: string; onRename: (to: string) => void; className?: string }) {
+/**
+ * A name that is renamed where it stands: a click starts typing, Enter or a press anywhere else keeps
+ * it, Escape does not. `start` begins typing as soon as it is drawn.
+ */
+function Renamed({ name, label, onRename, className, start, wide, onEnd }: { name: string; label: string; onRename: (to: string) => void; className?: string; start?: boolean; /** Fill the row it is in. */ wide?: boolean; onEnd?: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [typed, setTyped] = useState<string | null>(start ? name : null);
+  const fresh = useRef(false);
+  const end = (keep: boolean) => {
+    const to = typed;
+    setTyped(null);
+    ref.current?.blur();
+    if (keep && to !== null && to.trim() !== name) onRename(to);
+    onEnd?.();
+  };
+  // While a name is being typed the keys stay with it, whatever the map redraws underneath.
+  useEffect(() => { if (typed !== null && document.activeElement !== ref.current) ref.current?.focus(); });
+  const typing = typed !== null;
+  useEffect(() => { if (typing) ref.current?.select(); }, [typing]);
+  useEffect(() => {
+    if (!typing) return;
+    const away = (e: PointerEvent) => { if (e.target !== ref.current) end(true); };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  });
   return (
-    <input key={name} aria-label={label} title="click to rename" defaultValue={name} spellCheck={false} style={{ width: `${name.length + 2}ch` }}
-           className={cx("nodrag nopan min-w-0 shrink rounded border border-transparent bg-transparent px-0.5 font-mono font-medium hover:border-line focus:border-accent focus:outline-none", className)}
-           onBlur={(e) => { onRename(e.target.value); e.target.value = name; }}
-           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = name; e.currentTarget.blur(); } }} />
+    <input ref={ref} aria-label={label} title="click to rename" value={typed ?? name} readOnly={!typing} spellCheck={false} style={wide ? undefined : { width: `${(typed ?? name).length + 2}ch` }}
+           className={cx("nodrag nopan min-w-0 rounded border bg-transparent px-0.5 font-mono focus:outline-none", wide ? "flex-1" : "shrink font-medium", typing ? "border-accent" : "border-transparent hover:border-line", className)}
+           // The press starts it, not the click that follows: the map swallows a click that comes straight after a drag.
+           onPointerDown={(e) => { e.stopPropagation(); if (!typing) { fresh.current = true; setTyped(name); } }}
+           // The click that completes that press would put the caret where it landed: the whole name stays selected instead.
+           onClick={(e) => { e.stopPropagation(); if (fresh.current) { fresh.current = false; e.currentTarget.select(); } }} onChange={(e) => setTyped(e.target.value)}
+           onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") end(true); if (e.key === "Escape") end(false); }} />
   );
 }
 const BIN = "nodrag nopan grid h-6 w-6 shrink-0 place-items-center rounded-md text-dim hover:bg-muted hover:text-bad";
@@ -346,8 +374,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
           {/* A name sent to a peer leaves on the peers' side. */}
           <Handle type="source" id={`ask-${r.id}-back`} position={Position.Left} className="!opacity-0 !pointer-events-none" style={{ left: -6 }} />
           {renaming === r.id
-            ? <input autoFocus aria-label={`new name for ${r.id}`} defaultValue={r.id} spellCheck={false} className="nodrag nopan h-5 min-w-0 flex-1 rounded border border-accent bg-panel px-1 font-mono text-[11px] focus:outline-none"
-                     onBlur={(e) => { setRenaming(null); retype(r.id, e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = r.id; e.currentTarget.blur(); } }} />
+            ? <Renamed start wide name={r.id} label={`new name for ${r.id}`} className="h-5 bg-panel text-[11px]" onRename={(to) => retype(r.id, to, order)} onEnd={() => setRenaming(null)} />
             : <span className={cx("truncate font-mono", r.loose && "text-warn")} onDoubleClick={() => { if (data.editable && r.id !== ANY) setRenaming(r.id); }}>{r.id === ANY ? "anything else" : r.id}</span>}
           {(r.variants ?? []).length > 0 && <span className="ml-1.5 min-w-0 truncate text-[10px] text-dim" title={`also asked for as ${r.variants!.map((v) => `${r.id}:${v}`).join(", ")}`}>:{r.variants!.join(" :")}</span>}
           {r.loose && <span className="ml-auto shrink-0 text-[10px] text-warn">drag me →</span>}
@@ -357,11 +384,14 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
                       { label: "Rename…", value: "rename", hint: "or double-click the name" },
                       { label: "Move up", value: "up", off: order.indexOf(r.id) === 0 },
                       { label: "Move down", value: "down", off: order.indexOf(r.id) === order.length - 1 },
-                      { label: "Remove", value: "remove", danger: true, hint: "nothing takes this name any more" },
+                      { label: "Move to the top", value: "top", off: order.indexOf(r.id) === 0 },
+                      { label: "Move to the bottom", value: "bottom", off: order.indexOf(r.id) === order.length - 1 },
+                      { label: "Remove from this router", value: "remove", danger: true, hint: "it is no longer offered here; other routers are untouched" },
                     ], (v) => {
+                      const at = order.indexOf(r.id);
                       if (v === "rename") setRenaming(r.id);
                       else if (v === "remove") dropName(r.id);
-                      else change((d) => movedName(d, order, r.id, v === "up" ? -1 : 1));
+                      else change((d) => movedName(d, order, r.id, v === "up" ? -1 : v === "down" ? 1 : v === "top" ? -at : order.length - 1 - at));
                     })}>
               <MoreHorizontal size={12} />
             </button>
@@ -373,8 +403,8 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
       {/* What becomes of every name that is not a type, in one line, to be changed where it is read. */}
       {(() => {
         const n = (data.others ?? []).length;
-        const says = data.rest === "asked" ? `any other name runs as itself${n ? ` (${n} now)` : ""}`
-          : data.rest === "refuse" ? `any other name is refused${n ? ` (${n} models not offered)` : ""}`
+        const says = data.rest === "asked" ? `other names run as themselves${n ? ` (${n})` : ""}`
+          : data.rest === "refuse" ? `other names are refused${n ? ` (${n} models)` : ""}`
           : data.rest === "rule" ? "any other name: decided by a rule" : "any other name: not said yet";
         const line = cx("w-full border-t border-line px-3 py-1.5 text-left text-[10px]", data.rest === "none" ? "text-warn" : "text-dim");
         return data.editable && data.rest !== "rule"
@@ -392,7 +422,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
         <div className="px-1.5 pb-1.5">
           <button type="button" className="nodrag nopan flex h-7 w-full items-center justify-center gap-1 rounded-md border border-dashed border-line text-[11px] text-dim hover:border-accent hover:text-fg"
                   onClick={(e) => choose(e, [{ label: "A new type…", value: "\u0000new", hint: "a name of your own, like LLM or ImageGen" }, { label: "a model, offered or routed under its own name", head: true }, ...(data.others ?? []).map((o) => ({ label: o, mono: true }))],
-                    (v) => (v === "\u0000new" ? setTyping("") : add(v)))}>
+                    (v) => (v === "\u0000new" ? setTyping("") : add(v)), { says: "a new type:", make: add })}>
             <Plus size={12} />type
           </button>
         </div>
