@@ -49,16 +49,33 @@ export const useEdit = create<EditState>(() => ({
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-// A draft outlives a reload and a closed tab: it is kept beside the file it was made on, and carried over if that file has moved since.
-const KEPT = "hearth.draft";
+// A draft outlives the browser: the node keeps it beside the file it was made on, and it is carried over if that file has moved since.
+type Kept = { base: Doc; draft: Doc } | null;
+let keeping: ReturnType<typeof setTimeout> | null = null;
+let toKeep: Kept = null;
+/** Hand the node what is to be kept, or with null have it let go. */
+const send = (): void => {
+  if (keeping === null) return;
+  clearTimeout(keeping);
+  keeping = null;
+  // Keeping is a convenience: where it fails, a reload starts from the file.
+  void (toKeep ? request("PUT", "/config/draft", toKeep) : request("DELETE", "/config/draft")).catch(() => {});
+};
+/** Let go of the draft the node keeps, and of any change still on its way there. */
+const forget = async (): Promise<void> => {
+  if (keeping !== null) clearTimeout(keeping);
+  keeping = null;
+  await request("DELETE", "/config/draft").catch(() => {});
+};
 const keep = (s: Pick<EditState, "file" | "draft">): void => {
   // With no file read there is nothing to compare a draft with: what was kept stays kept.
   if (!s.file) return;
-  try {
-    if (s.file?.doc && s.draft && dirty(s)) localStorage.setItem(KEPT, JSON.stringify({ base: s.file.doc, draft: s.draft }));
-    else localStorage.removeItem(KEPT);
-  } catch { /* storage is a convenience: without it a reload starts from the file */ }
+  toKeep = s.file.doc && s.draft && dirty(s) ? { base: s.file.doc, draft: s.draft } : null;
+  // Typing changes the draft at every key; the node hears once it pauses.
+  if (keeping !== null) clearTimeout(keeping);
+  keeping = setTimeout(send, 600);
 };
+addEventListener("pagehide", send);
 // Every change to the draft is one step back for undo, and is kept across a reload.
 let stepping = false;
 useEdit.subscribe((s, prev) => {
@@ -84,7 +101,8 @@ export async function loadDraft(): Promise<void> {
   const now = useEdit.getState();
   let mine: { base: Doc; draft: Doc } | null = now.file?.doc && now.draft && dirty(now) ? { base: now.file.doc, draft: now.draft } : null;
   if (!mine && !now.file) {
-    try { mine = JSON.parse(localStorage.getItem(KEPT) ?? "null") as typeof mine; } catch { mine = null; }
+    try { mine = (await request<{ draft: Kept }>("GET", "/config/draft")).draft; } catch { mine = null; }
+    if (!isObj(mine?.base) || !isObj(mine?.draft)) mine = null;
   }
   stepping = true;
   set({ unread: null });
@@ -94,7 +112,7 @@ export async function loadDraft(): Promise<void> {
     if ("doc" in moved) set({ file, draft: moved.doc, err: null, plan: null });
     // Changes kept from before a reload that no longer fit the file are let go, and said so: there is nothing on screen to keep editing.
     else if (!now.draft) {
-      try { localStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
+      void forget();
       set({ file, draft: file.doc, err: null, plan: null, past: [] });
       toast("bad", `Unsaved changes from before could not be carried over: ${moved.clash} has changed in the file since.`);
     }
@@ -277,16 +295,49 @@ export async function review(): Promise<void> {
     set({
       err: null,
       plan: {
-        before: file.text, after: dry.text, restartPending: dry.restartPending, notes: problems(draft, facts() ?? undefined),
-        commit: async () => {
+        before: file.text, after: dry.text, restartPending: dry.restartPending, notes: problems(draft, facts() ?? undefined), naming: true, verb: "publish",
+        commit: async (name) => {
           try {
-            const out = await request<{ restartPending: string[] }>("PATCH", "/config", body);
+            const out = await request<{ restartPending: string[] }>("PATCH", "/config", { ...body, ...(name ? { name } : {}) });
             toast("ok", out.restartPending.length ? `published — restart to apply ${out.restartPending.join(", ")}` : "published: the draft is now what runs");
             stepping = true;
-            // Saved: nothing is left to carry over a reload.
-            try { localStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
+            // Published: nothing is left to carry over.
             set({ file: null, draft: null, pending: [] });
             stepping = false;
+            await forget();
+            await loadDraft();
+          } catch (e) {
+            fail(e);
+          }
+        },
+      },
+    });
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/** A version of the file that was published: when, under what name, and the hash it is asked for by. */
+export type Version = { at: string; name: string; hash: string };
+export const versions = async (): Promise<Version[]> => (await request<{ versions: Version[] }>("GET", "/config/versions")).versions;
+
+/** Show what going back to a version would change in the file, and write it only on confirm. */
+export async function goBack(v: Version): Promise<void> {
+  const { file } = useEdit.getState();
+  if (!file) return;
+  const fail = (e: unknown) => set({ plan: null, err: { message: said(e), path: null } });
+  try {
+    const dry = await request<{ text: string; restartPending: string[] }>("POST", "/config/versions", { hash: v.hash, dryRun: true });
+    set({
+      err: null,
+      plan: {
+        before: file.text, after: dry.text, restartPending: dry.restartPending, verb: "go back to this",
+        notes: dirty(useEdit.getState()) ? ["Your draft stays: it is carried over to the file as it will be then, where it still fits."] : [],
+        commit: async () => {
+          try {
+            await request("POST", "/config/versions", { hash: v.hash });
+            toast("ok", `back to ${v.name || "that version"}`);
+            set({ plan: null });
             await loadDraft();
           } catch (e) {
             fail(e);

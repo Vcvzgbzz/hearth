@@ -13,7 +13,7 @@ import { go, request, RequestError, toast, useStore } from "./store.js";
 import { Button, Card, cx, mono, Pill, Switch } from "./ui.js";
 
 export type File = { text: string; hash: string; doc: Record<string, unknown> | null };
-export type Plan = { before: string; after: string; restartPending: string[]; commit: () => Promise<void>; /** Things worth knowing before writing: the file loads, but may not do what was meant. */ notes?: string[] };
+export type Plan = { before: string; after: string; restartPending: string[]; /** Write it, under a name for the list of versions when one was typed. */ commit: (name?: string) => Promise<void>; /** Offer to name this version. */ naming?: boolean; /** What the button that writes says. */ verb?: string; /** Things worth knowing before writing: the file loads, but may not do what was meant. */ notes?: string[] };
 export type Err = { message: string; path: string | null };
 type Path = (string | number)[];
 
@@ -583,6 +583,7 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
 
 export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [name, setName] = useState("");
   const lines = lineDiff(plan.before, plan.after);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-6" onClick={onClose}>
@@ -606,9 +607,11 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
           ))}
         </pre>
         <div className="flex justify-end gap-2 border-t border-line px-4 py-3" onClick={(e) => e.stopPropagation()}>
+          {plan.naming && <input aria-label="a name for this version" placeholder="name this version (optional), e.g. image types added" maxLength={80} value={name} onChange={(e) => setName(e.target.value)}
+                                 className="mr-auto h-8 min-w-0 flex-1 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />}
           <Button onClick={onClose}>keep editing</Button>
-          <Button tone="primary" disabled={busy} onClick={() => { setBusy(true); void plan.commit().finally(() => setBusy(false)); }}>
-            <Save size={13} />save
+          <Button tone="primary" disabled={busy} onClick={() => { setBusy(true); void plan.commit(name.trim() || undefined).finally(() => setBusy(false)); }}>
+            <Save size={13} />{plan.verb ?? "save"}
           </Button>
         </div>
       </Card>

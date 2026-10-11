@@ -391,6 +391,39 @@ operator:
   await a.node.close();
 }
 
+// --- a draft kept by the node, and versions to go back to ----------------------------------------------
+{
+  const path = join(dir, "versions.yaml");
+  writeFileSync(path, ORIGINAL);
+  const h = await boot(path);
+  const at = (route: string, method = "GET", body?: unknown) =>
+    fetch(`${h.url}${route}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).then(async (r) => ({ status: r.status, body: (await r.json()) as Record<string, any> }));
+
+  // A draft is kept beside the file and changes nothing about what runs; letting go removes it.
+  const before = await h.file();
+  assert.equal((await at("/config/draft")).body.draft, null);
+  await at("/config/draft", "PUT", { base: {}, draft: { note: "mine" } });
+  assert.deepEqual([(await at("/config/draft")).body.draft, existsSync(`${path}.draft.json`), (await h.file()).hash], [{ base: {}, draft: { note: "mine" } }, true, before.hash]);
+  await at("/config/draft", "DELETE");
+  assert.deepEqual([(await at("/config/draft")).body.draft, existsSync(`${path}.draft.json`)], [null, false]);
+
+  // A write is a version under the name it was given; the file as it stood before the first is one too. A dry run is not.
+  assert.deepEqual((await at("/config/versions")).body.versions, []);
+  await h.patch({ ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }], dryRun: true });
+  await h.patch({ ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }], name: "a deeper queue" });
+  const kept = (await at("/config/versions")).body.versions as { name: string; hash: string }[];
+  assert.deepEqual([kept.map((v) => v.name), kept[0]!.hash, kept[1]!.hash], [["before the first change made here", "a deeper queue"], before.hash, (await h.file()).hash]);
+
+  // Going back shows what it would change first, then makes that version the file again, as a version of its own.
+  const dry = await at("/config/versions", "POST", { hash: before.hash, dryRun: true });
+  assert.deepEqual([dry.status, dry.body.hash, (await h.file()).hash], [200, before.hash, kept[1]!.hash]);
+  assert.equal((await at("/config/versions", "POST", { hash: before.hash })).status, 200);
+  assert.deepEqual([(await h.file()).hash, readFileSync(path, "utf8")], [before.hash, ORIGINAL]);
+  assert.equal(((await at("/config/versions")).body.versions as { name: string }[]).at(-1)!.name, "back to before the first change made here");
+  assert.equal((await at("/config/versions", "POST", { hash: "nope" })).status, 404);
+  await h.node.close();
+}
+
 backend.closeAllConnections();
 backend.close();
 console.log("configfile.test.ts ok");

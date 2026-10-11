@@ -141,6 +141,11 @@ export class ConfigRefusal extends Refusal {
   }
 }
 
+/** A version of the file that was written through the node: when, the name it was given (may be empty), and its hash. */
+export interface Version { at: string; name: string; hash: string }
+/** How many versions are kept; older ones go. */
+const KEEP_VERSIONS = 50;
+
 /** Write via temp file, fsync and rename, keeping the file's mode; in place where only the file is writable. */
 export function writeFileAtomic(path: string, text: string): void {
   let mode = 0o600;
@@ -355,6 +360,59 @@ export class ConfigFile {
     return (cfg as unknown as Record<string, unknown>)[key];
   }
 
+  /** The console's draft, kept beside the file so it outlasts a browser; null when there is none. */
+  draft(): unknown {
+    if (!this.path) return null;
+    try {
+      return JSON.parse(readFileSync(`${this.path}.draft.json`, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Keep a draft, or with null let go of the one kept. It is the console's to read: nothing here applies it. */
+  keepDraft(draft: unknown): void {
+    if (!this.path) throw new ConfigRefusal(409, "this node was not loaded from a config file, so there is nowhere to keep a draft", null);
+    if (draft === null) rmSync(`${this.path}.draft.json`, { force: true });
+    else writeFileAtomic(`${this.path}.draft.json`, JSON.stringify(draft));
+  }
+
+  private kept(): (Version & { text: string })[] {
+    try {
+      const all = JSON.parse(readFileSync(`${this.path}.versions.json`, "utf8")) as unknown;
+      return Array.isArray(all) ? all as (Version & { text: string })[] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** What has been written through here, oldest first: when, and the name it was given. */
+  versions(): Version[] {
+    return this.path ? this.kept().map(({ text: _, ...v }) => v) : [];
+  }
+
+  /** Remember what was just written. A save never fails for want of its place in the list. */
+  private remember(was: string, text: string, name: string): void {
+    try {
+      const all = this.kept();
+      // The file as it stood before the first change made here is somewhere to go back to as well.
+      if (all.length === 0 && was) all.push({ at: new Date().toISOString(), name: "before the first change made here", hash: hashOf(was), text: was });
+      all.push({ at: new Date().toISOString(), name, hash: hashOf(text), text });
+      writeFileAtomic(`${this.path}.versions.json`, JSON.stringify(all.slice(-KEEP_VERSIONS)));
+    } catch (e) {
+      this.log.warn("config.version_not_kept", { error: String(e) });
+    }
+  }
+
+  /** Write an earlier version back as the file, through the same checks as any other save. */
+  restore(hash: string, dryRun: boolean): CommitResult {
+    if (!this.path) throw new ConfigRefusal(409, "this node was not loaded from a config file, so there is no file to edit", null);
+    const v = this.kept().findLast((x) => x.hash === hash);
+    if (!v) throw new ConfigRefusal(404, "no version by that hash is kept", null);
+    this.syncFromDisk();
+    return this.commit(v.text, dryRun, `back to ${v.name || v.at}`);
+  }
+
   status(): ConfigStatus {
     return { path: this.path, hash: this.hash, savedAt: this.savedAt, restartPending: [...this.pending], error: this.error };
   }
@@ -405,7 +463,7 @@ export class ConfigFile {
    * Edit the YAML itself: path ops, or the whole text. `baseHash` is the file the caller last saw;
    * if it moved since, ops still apply when the paths they touch did not change, and text never does.
    */
-  patch(req: { baseHash?: string; ops?: ConfigOp[]; text?: string; dryRun?: boolean }): CommitResult {
+  patch(req: { baseHash?: string; ops?: ConfigOp[]; text?: string; dryRun?: boolean; /** What to call this version in the list of them. */ name?: string }): CommitResult {
     if (!this.path) throw new ConfigRefusal(409, "this node was not loaded from a config file, so there is no file to edit", null);
     const base = this.lastText;
     const baseHash = this.hash;
@@ -455,7 +513,7 @@ export class ConfigFile {
       }
       out = unmaskSecrets(this.render(doc), table);
     }
-    return this.commit(out, req.dryRun === true);
+    return this.commit(out, req.dryRun === true, req.name);
   }
 
   /** What the file the caller last held was masking, so its stand-ins come home on the way in. */
@@ -469,7 +527,7 @@ export class ConfigFile {
   }
 
   /** Validate, write, apply. Nothing is written unless the result loads, and nothing applies unless it was written. */
-  private commit(text: string, dryRun: boolean): CommitResult {
+  private commit(text: string, dryRun: boolean, name = ""): CommitResult {
     const next = this.parse(text, 422);
     const masked = this.masked(text);
     if (dryRun) return { hash: hashOf(text), text: masked, restartPending: this.restartPendingFor(next) };
@@ -479,10 +537,11 @@ export class ConfigFile {
       } catch (e) {
         throw new ConfigRefusal(500, `could not write ${this.path}: ${String(e)} — nothing changed`, null);
       }
+      this.remember(this.lastText, text, name);
       this.lastText = text;
       this.hash = hashOf(text);
       this.savedAt = new Date().toISOString();
-      this.log.info("config.saved", { path: this.path, hash: this.hash });
+      this.log.info("config.saved", { path: this.path, hash: this.hash, ...(name ? { name } : {}) });
     }
     this.apply(next);
     return { hash: this.hash, text: masked, restartPending: [...this.pending] };

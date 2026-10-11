@@ -1024,6 +1024,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     { path: "/control", auth: "local", handler: routeControl },
     { path: "/restart", methods: ["POST"], auth: "local", handler: routeRestart },
     { path: "/config", methods: ["GET", "PATCH", "POST"], auth: "local", handler: routeConfig },
+    { path: "/config/draft", methods: ["GET", "PUT", "DELETE"], auth: "local", handler: routeConfigDraft },
+    { path: "/config/versions", methods: ["GET", "POST"], auth: "local", handler: routeConfigVersions },
     { path: "/flows/try", methods: ["POST"], auth: "local", handler: routeFlowsTry },
     { path: "/queue", auth: "local", handler: routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: routeQueueEvents },
@@ -1362,8 +1364,36 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         ...(ops ? { ops: ops as never } : {}),
         ...(typeof body.text === "string" ? { text: body.text } : {}),
         dryRun: body.dryRun === true,
+        ...(typeof body.name === "string" ? { name: body.name.trim().slice(0, 80) } : {}),
       });
       if (body.dryRun !== true) log.info("config.patched", { hash: out.hash, restartPending: out.restartPending });
+      json(res, 200, { ...config.status(), ...out });
+    } catch (e) {
+      failConfig(res, e);
+    }
+  }
+
+  /** The console's draft of the file: kept here so it is there tomorrow and from another browser. Nothing reads it but the console. */
+  async function routeConfigDraft(c: Call): Promise<void> {
+    const { req, res } = c;
+    try {
+      if (req.method === "PUT") config.keepDraft(await readJson(req));
+      else if (req.method === "DELETE") config.keepDraft(null);
+      json(res, 200, { draft: config.draft() });
+    } catch (e) {
+      failConfig(res, e);
+    }
+  }
+
+  /** The versions written through the node, and `POST { hash, dryRun? }` to make one of them the file again. */
+  async function routeConfigVersions(c: Call): Promise<void> {
+    const { req, res } = c;
+    try {
+      if (req.method === "GET") { json(res, 200, { versions: config.versions() }); return; }
+      const body = await readJson(req);
+      if (typeof body.hash !== "string") throw new Refusal(400, "hash must be the hash of a kept version");
+      const out = config.restore(body.hash, body.dryRun === true);
+      if (body.dryRun !== true) log.info("config.restored", { hash: out.hash });
       json(res, 200, { ...config.status(), ...out });
     } catch (e) {
       failConfig(res, e);

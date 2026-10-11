@@ -236,7 +236,9 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/queue/events` | local | the caller's own jobs, pushed over SSE: a `snapshot` on connect, then `jobs` whenever the list changes (queued, started, finished, moved in line). One connection serves every job a client has, so it never needs to poll |
 | `X-Hearth-Job: <id>` | request header | the client's own id for this request (letters, digits, `._:-`, up to 128). It comes back as the job's `id` on `/queue` and `/queue/events`, so a client can match updates to its own work |
 | `X-Hearth-Queue: stream` | request header | on a streamed chat, open the stream while the request waits and send `: hearth-queue {"position":N}` comments (how many are ahead, the running turn included). OpenAI-style parsers skip comments. A failure after that arrives as an SSE `data: {"error": …}` frame, since the 200 is already sent |
-| `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text |
+| `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
+| `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
+| `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
 | `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
 | `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |
@@ -776,9 +778,17 @@ What you edit is a draft: nothing is written and nothing about routing changes
 until you publish it. The strip along the top counts what the draft changes and
 says what still needs attention; **undo** steps back, **discard draft** drops
 it, and **review & publish** shows the change to the file as a diff, checks
-that it loads, and writes it only when you confirm. A draft is kept in the
-browser, so it survives a reload or a closed tab, and if the file changes
-underneath it your changes are carried over.
+that it loads, and writes it only when you confirm. The node keeps the draft
+beside the config file (`<file>.draft.json`), so it is there the next day and
+from another browser, and if the file changes underneath it your changes are
+carried over.
+
+A publish can be given a name. **versions** lists what has been written through
+the node, newest first, with the file as it stood before the first change;
+picking one shows what going back would change and writes it on confirm. The
+last 50 are kept in `<file>.versions.json`, with the same permissions as the
+config file since they are copies of it. A hand edit to the file is not a
+version.
 
 The **Topology** page is the other picture: the machines, hardware and
 backends, and the requests in flight. It is watched, not edited; backends,
