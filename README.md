@@ -930,10 +930,33 @@ own admission control. A model resolves to exactly one backend and waits only
 there, so a 20ms embedding never sits behind a 40s generation. That is the whole
 point: sharing one queue would make the second backend worse than useless.
 
-Nothing schedules *across* backends. hearth works out where a job belongs and
-queues it there, and that is all. This is not the multi-GPU scheduler, which is
-still out of scope — a job never gets placed somewhere other than where its
-model lives.
+A model id still belongs to one backend. To spread one name over several, give
+each backend's copy an id of its own and let a flow choose between them:
+
+```yaml
+backends:
+  gpu0: { url: "http://127.0.0.1:8080", concurrency: 1, serves: [chat-0] }
+  gpu1: { url: "http://127.0.0.1:8081", concurrency: 1, serves: [chat-1] }
+
+models:
+  # Each backend knows the weights by the same name; `as:` sends that name.
+  chat-0: { backend: gpu0, as: my-model }
+  chat-1: { backend: gpu1, as: my-model }
+
+flows:
+  chat:
+    inputs: [chat]
+    steps:
+      - to: { fastest: [chat-0, chat-1] }
+```
+
+A request for `chat` runs on whichever would start it soonest, by queue depth
+and whether the model is loaded; a tie stays with the one listed first. If the
+one chosen fails before anything reaches the client, the request is tried on
+the next. Each backend keeps its own queue and its own slots, so this spreads
+work at the moment a request arrives and never moves one that is already
+queued. It compares depth, not predicted duration, and there is no round-robin
+or weighting.
 
 ### Backends on another machine
 
@@ -2112,9 +2135,10 @@ Better to know this before you deploy it than after.
   would corrupt it. Before any bytes reach the client, failover is invisible.
 - Estimates are crude. `fastest` compares queue depth, not predicted duration.
   Depth is a real signal, but a duration model is a research project.
-- No scheduling across backends. A node can front several local backends, but
-  nothing moves a job between them or balances across them. A model belongs to
-  one backend and queues there.
+- No rebalancing. A flow's `fastest` spreads one name over several backends as
+  each request arrives (see [More than one local backend](#more-than-one-local-backend)),
+  but a job that is queued stays where it was put, and nothing weighs one
+  backend against another beyond queue depth and what is loaded.
 - No end-user auth. `apiKeys` is a coarse gate. Per-account fairness belongs in
   the application, which is the thing that knows who the accounts are.
 - Only chat completions and the paths a backend declares under `routes` are
