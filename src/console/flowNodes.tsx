@@ -5,7 +5,7 @@
  * them by node type; how each behaves when a line is drawn is NODES in draft.ts.
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronDown, MoreHorizontal, Plus, Split, Trash2, X, Zap } from "lucide-react";
+import { ChevronDown, CircuitBoard, Cpu, MoreHorizontal, Plus, Split, Trash2, X, Zap } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 
 import { ACTIONS, ANY, editStep, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
@@ -355,10 +355,14 @@ export type Hub = {
   rest?: "asked" | "refuse" | "rule" | "none";
 };
 
+// The type whose row is being dragged up or down the list, between the press and the drop.
+let moving: string | null = null;
+
 /** This node's router: the model names it sends somewhere, each with a line to where requests for it go. */
 export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   const [typing, setTyping] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
   const add = (v: string) => { setTyping(null); addName(v.trim()); };
   const order = data.rows.map((r) => r.id);
   return (
@@ -369,7 +373,14 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
       </div>
       {data.rows.length > 0 && <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wide text-dim" title="the names callers may ask for">types</div>}
       {data.rows.map((r) => (
-        <div key={r.id} className={cx("group relative flex h-[22px] items-center px-3 text-[11px] hover:bg-muted", r.on && "bg-accent/15", r.fixed && "text-dim")} title={r.fixed ?? `drag the dot to say where requests for ${r.id} go`}
+        <div key={r.id} className={cx("nodrag nopan group relative flex h-[22px] items-center px-3 text-[11px] hover:bg-muted", r.on && "bg-accent/15", r.fixed && "text-dim", over === r.id && "border-t-2 border-accent")}
+             title={r.fixed ?? `drag the dot to say where requests for ${r.id} go; drag the name to move it up or down the list`}
+             // A row is dragged by its name to another row's place; the dot at its end draws its line instead.
+             draggable={data.editable && r.id !== ANY && renaming !== r.id}
+             onDragStart={(e) => { if ((e.target as Element).closest?.(".react-flow__handle, button, input")) { e.preventDefault(); return; } moving = r.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", r.id); }}
+             onDragOver={(e) => { if (moving && moving !== r.id) { e.preventDefault(); setOver(r.id); } }} onDragLeave={() => setOver((o) => (o === r.id ? null : o))}
+             onDragEnd={() => { moving = null; setOver(null); }}
+             onDrop={(e) => { e.preventDefault(); const from = moving; moving = null; setOver(null); if (from && from !== r.id) change((d) => movedName(d, order, from, order.indexOf(r.id) - order.indexOf(from))); }}
              onMouseEnter={() => hover(`e:ask:${r.id}`)} onMouseLeave={() => hover(null)}>
           {/* A name sent to a peer leaves on the peers' side. */}
           <Handle type="source" id={`ask-${r.id}-back`} position={Position.Left} className="!opacity-0 !pointer-events-none" style={{ left: -6 }} />
@@ -435,7 +446,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   );
 });
 
-export type Dest = { title: string; sub: string; /** `model` or `peer`. */ kind: string; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
+export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -444,7 +455,14 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
     <div title={data.shut ? `${data.title} is not a chat model: only a rule that takes its path can send here` : undefined}
          className={cx("w-[200px] rounded-xl border bg-panel px-3 py-1.5 shadow-sm", data.on ? "border-accent bg-accent/10" : "border-line", open && !data.shut && RING, open && data.shut && "opacity-40")}>
       <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : hue(data.kind).dot, "!opacity-100")} style={{ left: -6 }} />
-      <div className="truncate font-mono text-[12px] font-medium">{data.title}</div>
+      <div className="flex items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium">{data.title}</span>
+        {(data.hardware ?? []).map((h) => (
+          <span key={h.name} title={`runs on ${h.name}`} className={cx("inline-flex shrink-0 items-center gap-0.5 rounded border px-1 text-[9px] uppercase", h.cpu ? "border-line text-dim" : "border-ok/50 text-ok")}>
+            {h.cpu ? <Cpu size={9} /> : <CircuitBoard size={9} />}{h.name}
+          </span>
+        ))}
+      </div>
       <div className={cx("truncate text-[10px]", data.down ? "text-bad" : "text-dim")}>{data.sub}</div>
     </div>
   );

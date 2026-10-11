@@ -113,6 +113,20 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
   });
 }
 
+/** The versions button for a page with no map: it brings the list, the review and the file they need with it. */
+export function VersionsHere() {
+  const plan = useEdit((s) => s.plan);
+  const hash = useStore((s) => s.data?.config.hash);
+  useEffect(() => { void loadDraft(); }, [hash]);
+  return (
+    <>
+      <VersionsButton />
+      <Menu />
+      {plan && <Review plan={plan} onClose={() => useEdit.setState({ plan: null })} />}
+    </>
+  );
+}
+
 /** A caller as the console names it: everyone not sent somewhere else is "default". */
 const said = (caller: string) => (caller === EVERYONE ? "default" : caller);
 
@@ -334,7 +348,10 @@ export function Picker() {
           {models.length > 0 && <div className={head}>a model on this node</div>}
           {models.map((m) => {
             const shut = chat && known?.kind(m) === "paths";
-            return <button key={m} disabled={shut} title={shut ? `${m} is not a chat model, and this rule takes chat requests. To send it requests on its own path, open the rule and set "It takes" to that path.` : undefined} className={cx(row, mono, "disabled:opacity-40")} onClick={() => send({ kind: "model", model: m })}>{m}{shut && <span className="ml-auto font-sans text-[10px] text-dim">not chat: set what the rule takes</span>}</button>;
+            const on = text(obj(obj(draft.models)[m]).backend) || Object.entries(obj(draft.backends)).find(([, b]) => list(obj(b).serves).includes(m) || (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).some((r) => text(obj(r).model) === m))?.[0];
+            const hw = on ? list(obj(obj(draft.backends)[on]).resources) : [];
+            return <button key={m} disabled={shut} title={shut ? `${m} is not a chat model, and this rule takes chat requests. To send it requests on its own path, open the rule and set "It takes" to that path.` : undefined} className={cx(row, mono, "disabled:opacity-40")} onClick={() => send({ kind: "model", model: m })}>{m}{shut ? <span className="ml-auto font-sans text-[10px] text-dim">not chat: set what the rule takes</span>
+              : hw.length > 0 && <span className="ml-auto shrink-0 font-sans text-[10px] uppercase text-dim" title={`runs on ${hw.join(", ")}, behind the ${on} backend`}>{hw.join(" · ")}</span>}</button>;
           })}
           {peers.length > 0 && <div className={head}>a peer</div>}
           {peers.map((p) => <button key={p} className={row} onClick={() => send({ kind: "peer", peer: p, model: null })}>{p}</button>)}
@@ -651,7 +668,7 @@ function Gone() {
 
 /** What is selected on the map, with room to work: a rule line by line, or an action's settings as the Config page shows them. */
 export function EditRail() {
-  const { draft, sel, err } = useEdit();
+  const { draft, sel, err, pending } = useEdit();
   const data = useStore((s) => s.data);
   if (!draft || !sel) return null;
   const section = SECTION[sel.kind];
@@ -663,6 +680,11 @@ export function EditRail() {
   const paths = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).path)).filter(Boolean)))];
   // What runs this action, so taking it away is not a surprise.
   const users = sel.kind === "action" ? linesRunning(draft, sel.id) : [];
+  // The names a rule can be given: the draft's own types and the ones still waiting for a line, then every model.
+  // A type the draft has renamed or removed is still in what the running node lists, and is left out.
+  const mine = new Set(Object.values(obj(draft.flows)).flatMap((f) => list(obj(f).inputs)));
+  const gone = new Set(Object.values(data?.flows ?? {}).flatMap((f) => f.inputs).filter((n) => !mine.has(n)));
+  const offered = [...new Set([...pending, ...mine, ...refsOf(draft, catalog).models])].filter((n) => n !== "*" && !gone.has(n));
   return (
     <aside className="w-[480px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-10 max-lg:max-w-full">
       <div className="mb-3 flex items-center gap-2">
@@ -714,7 +736,7 @@ export function EditRail() {
                 </button>
               </div>
               <div className="mb-1 text-[12px] font-medium">When a request asks for</div>
-              <Names flow={sel.id} names={list(entry.inputs)} options={refsOf(draft, catalog).models} />
+              <Names flow={sel.id} names={list(entry.inputs)} options={offered} />
               {list(entry.inputs).length === 0 && <div className="mt-1 text-[11px] text-warn">Nothing reaches this rule yet. Add a model name here, or drag a name's blue dot from the node onto the rule.</div>}
               <div className="mb-1 mt-4 text-[12px] font-medium">decide where it goes</div>
               <Lines name={sel.id} flow={entry} />

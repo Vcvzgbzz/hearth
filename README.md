@@ -756,7 +756,8 @@ line; **route a name** brings one onto the map.
 - **+ type** takes a name typed straight into it. Drawn onto a model that is
   not chat, a new type takes the paths that model answers on.
 - **A type's ⋯** on the Router (it shows as you point at the name) renames it,
-  moves it up, down, to the top or to the bottom, or removes it; double-clicking the name
+  moves it up, down, to the top or to the bottom, or removes it; dragging a
+  type's name onto another's place moves it there; double-clicking the name
   renames it too. The new name follows into the rule that takes it. The order
   is kept with the layout.
 - **Try a request** along the bottom asks the node where a request would go
@@ -765,6 +766,9 @@ line; **route a name** brings one onto the map.
   that cannot be arranged on demand (a model idle or just used, full, loaded,
   needing a swap, its hardware held, a line at its limit, a time of day, a
   caller, a lane) so each line can be tried.
+- **A model's box carries the hardware it runs on** as a small tag, and so does
+  each model in the list of places to send a line, so two copies of one model
+  (one on a card, one on the CPU) are told apart at a glance.
 - **Dots and lines are coloured** by what they are plugged into: green for a
   model here, violet for a peer, blue for a rule, teal for the fastest of
   several, red for a refusal, amber for an action, grey for nowhere yet.

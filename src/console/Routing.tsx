@@ -85,6 +85,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     nodes.push({
       id: `model:${model}`, type: "dest", position: { x: endX, y },
       data: {
+        hardware: (where?.resources ?? []).map((name) => ({ name, cpu: (d.net.resources ?? []).find((r) => r.name === name)?.kind === "cpu" })),
         title: model, kind: "model", on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
         sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.server ? ` · ${where.server}` : ""}`,
       } satisfies Dest,
