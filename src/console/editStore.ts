@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { added, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, TEMPLATES, type Doc, type Facts, type Landing } from "./draft.js";
+import { added, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, type Doc, type Facts, type Landing } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 
 export type EditSel = { kind: "flow" | "action"; id: string } | null;
@@ -39,15 +39,28 @@ interface EditState {
   unread: string | null;
   /** The dialog that names a new thing: `flows`, or `actions:<kind>`. */
   adding: string | null;
+  /** The router whose rulebook `draft` shows as its `flows`; null for the rules everyone else goes by. */
+  router: string | null;
+  /** The whole draft that view was taken of: what `draft` leaves out while a router is being edited. */
+  rest: Doc | null;
   /** A node to bring into view, or `*` for the whole map; a new object each time so asking twice works. */
   focus: { node: string } | null;
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], unread: null, adding: null, focus: null,
+  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], unread: null, adding: null, focus: null, router: null, rest: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+type Shown = Pick<EditState, "file" | "draft" | "router" | "rest">;
+/** The whole draft, whichever router's rulebook is being shown. */
+export const whole = (s: Pick<EditState, "draft" | "router" | "rest">): Doc | null => (s.draft && s.router !== null ? unscoped(s.draft, s.rest ?? s.draft, s.router) : s.draft);
+/** A whole draft as what is shown of it: the router's view where there still is such a router, else the rules everyone goes by. */
+const show = (full: Doc | null, router: string | null): Pick<EditState, "draft" | "router" | "rest"> => {
+  const at = full && router !== null && isObj(obj(full.routers)[router]) ? router : null;
+  return { draft: full && scoped(full, at), router: at, rest: full };
+};
 
 // A draft outlives the browser: the node keeps it beside the file it was made on, and it is carried over if that file has moved since.
 type Kept = { base: Doc; draft: Doc } | null;
@@ -67,10 +80,10 @@ const forget = async (): Promise<void> => {
   keeping = null;
   await request("DELETE", "/config/draft").catch(() => {});
 };
-const keep = (s: Pick<EditState, "file" | "draft">): void => {
+const keep = (s: Shown): void => {
   // With no file read there is nothing to compare a draft with: what was kept stays kept.
   if (!s.file) return;
-  toKeep = s.file.doc && s.draft && dirty(s) ? { base: s.file.doc, draft: s.draft } : null;
+  toKeep = s.file.doc && s.draft && dirty(s) ? { base: s.file.doc, draft: whole(s)! } : null;
   // Typing changes the draft at every key; the node hears once it pauses.
   if (keeping !== null) clearTimeout(keeping);
   keeping = setTimeout(send, 600);
@@ -99,21 +112,21 @@ export async function loadDraft(): Promise<void> {
   }
   if (!file.doc) { set({ file: null, draft: null, unread: "This node's hearth.yaml does not load as it stands: fix it on the Config page, then routing can be edited here." }); return; }
   const now = useEdit.getState();
-  let mine: { base: Doc; draft: Doc } | null = now.file?.doc && now.draft && dirty(now) ? { base: now.file.doc, draft: now.draft } : null;
+  let mine: { base: Doc; draft: Doc } | null = now.file?.doc && now.draft && dirty(now) ? { base: now.file.doc, draft: whole(now)! } : null;
   if (!mine && !now.file) {
     try { mine = (await request<{ draft: Kept }>("GET", "/config/draft")).draft; } catch { mine = null; }
     if (!isObj(mine?.base) || !isObj(mine?.draft)) mine = null;
   }
   stepping = true;
   set({ unread: null });
-  if (!mine) set({ file, draft: file.doc, err: null, plan: null, past: [] });
+  if (!mine) set({ file, ...show(file.doc, now.router), err: null, plan: null, past: [] });
   else {
     const moved = rebase(mine.base, mine.draft, file.doc);
-    if ("doc" in moved) set({ file, draft: moved.doc, err: null, plan: null });
+    if ("doc" in moved) set({ file, ...show(moved.doc, now.router), err: null, plan: null });
     // Changes kept from before a reload that no longer fit the file are let go, and said so: there is nothing on screen to keep editing.
     else if (!now.draft) {
       void forget();
-      set({ file, draft: file.doc, err: null, plan: null, past: [] });
+      set({ file, ...show(file.doc, null), err: null, plan: null, past: [] });
       toast("bad", `Unsaved changes from before could not be carried over: ${moved.clash} has changed in the file since.`);
     }
     else set({ err: { message: `Someone else changed ${moved.clash} while you were editing it. Discard your changes to see theirs, or keep editing and save over it from the Config page.`, path: null } });
@@ -121,11 +134,11 @@ export async function loadDraft(): Promise<void> {
   stepping = false;
 }
 
-export const dirty = (s: Pick<EditState, "file" | "draft">) => JSON.stringify(s.file?.doc ?? null) !== JSON.stringify(s.draft);
+export const dirty = (s: Shown) => JSON.stringify(s.file?.doc ?? null) !== JSON.stringify(whole(s));
 /** How many things the draft changes: a rule, a backend, the layout each count once however much of them moved. */
-export const changed = (s: Pick<EditState, "file" | "draft">): number =>
-  s.file?.doc && s.draft ? new Set(opsOf(s.file.doc, s.draft).map((op) => op.path.slice(0, 2).join("."))).size : 0;
-export const revert = () => { set((s) => ({ draft: s.file?.doc ?? null, err: null, pending: [], trial: null, tried: null })); toast("ok", "draft discarded — undo brings it back"); };
+export const changed = (s: Shown): number =>
+  s.file?.doc && s.draft ? new Set(opsOf(s.file.doc, whole(s)!).map((op) => op.path.slice(0, 2).join("."))).size : 0;
+export const revert = () => { set((s) => ({ ...show(s.file?.doc ?? null, s.router), err: null, pending: [], trial: null, tried: null })); toast("ok", "draft discarded — undo brings it back"); };
 export function undo(): void {
   const { past } = useEdit.getState();
   if (past.length === 0) return;
@@ -286,7 +299,8 @@ export async function tryRequest(trial: Trial | null): Promise<void> {
 export async function review(): Promise<void> {
   // The file may have moved since the draft was read: carry the draft over first, so the save is against what is there.
   await loadDraft();
-  const { file, draft, err } = useEdit.getState();
+  const { file, err } = useEdit.getState();
+  const draft = whole(useEdit.getState());
   if (!file?.doc || !draft || err) return;
   const body = { baseHash: file.hash, ops: opsOf(file.doc, draft) };
   const fail = (e: unknown) => set({ plan: null, err: { message: said(e), path: e instanceof RequestError ? e.path : null } });
@@ -348,4 +362,36 @@ export async function goBack(v: Version): Promise<void> {
   } catch (e) {
     fail(e);
   }
+}
+
+/** Show another router's rulebook, or with null the rules everyone else goes by. Undo starts afresh there. */
+export function showRouter(router: string | null): void {
+  stepping = true;
+  set((s) => ({ ...show(whole(s), router), past: [], sel: null, pending: [], trial: null, tried: null }));
+  stepping = false;
+}
+
+/** A new router, starting from the rules being shown or from one that refuses everything, and show it. */
+export function addRouter(name: string, copy: boolean): void {
+  const s = useEdit.getState();
+  const full = whole(s);
+  if (!full || !s.draft) return;
+  const flows = copy ? s.draft.flows : { "anything-else": { inputs: ["*"], steps: [{ to: { refuse: "that is not something this router offers" } }] } };
+  stepping = true;
+  set({ ...show(put(full, "routers", name, { callers: [], flows }), name), past: [], sel: null, pending: [] });
+  stepping = false;
+  toast("ok", `router ${name} added — choose who uses it`);
+}
+
+/** Take a router away, with the places kept for its map; its callers go by the rules everyone else does. */
+export function removeRouter(name: string): void {
+  const full = whole(useEdit.getState());
+  if (!full) return;
+  const { [name]: _, ...others } = obj(full.routers);
+  const layout = Object.fromEntries(Object.entries(obj(full.layout)).filter(([id]) => !id.startsWith(`routing@${name}/`)));
+  const { routers: _r, layout: _l, ...rest } = full;
+  stepping = true;
+  set({ ...show({ ...rest, ...(Object.keys(others).length ? { routers: others } : {}), ...(Object.keys(layout).length ? { layout } : {}) }, null), past: [], sel: null, pending: [] });
+  stepping = false;
+  toast("ok", `router ${name} deleted — discard draft brings it back`);
 }

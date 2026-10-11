@@ -3,12 +3,12 @@
  * with a node's full settings, the list of places a line can go, and the row that tries a
  * request against the draft.
  */
-import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, RotateCcw, Save, Search, Trash2, Undo2, X, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Split, RotateCcw, Save, Search, Trash2, Undo2, X, Zap } from "lucide-react";
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, arranged, directTo, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, withDo, type Doc, type To } from "./draft.js";
-import { change, changed, choose, chooseAt, closeMenu, copy, dirty, duplicate, editSelect, facts, focusOn, goBack, loadDraft, paste, pick, remove, rename, revert, review, setAdding, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
+import { ACTIONS, arranged, callersIn, directTo, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, dirty, duplicate, editSelect, facts, focusOn, goBack, loadDraft, paste, pick, remove, removeRouter, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { useStore } from "./store.js";
@@ -119,7 +119,7 @@ const anyModel = (draft: Doc | null): string =>
 
 /** The strip over the graph: add things, and review what the draft changes. */
 export function EditBar() {
-  const { draft, err, plan, past, unread, adding } = useEdit();
+  const { draft, err, plan, past, unread, adding, router } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
   // The map's keys, from anywhere on the page unless something is being typed into or a list is open:
@@ -161,6 +161,38 @@ export function EditBar() {
   return (
     <>
       <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel/95 px-3 py-2 shadow-sm">
+        {/* Which rulebook is on the map: the one everyone goes by, or a router some callers have to themselves. */}
+        <button type="button" aria-label="the router being edited" title="which rulebook is on the map: the default one, or a router some callers have to themselves"
+                className={cx("flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[13px] hover:bg-muted", router === null ? "border-line bg-panel" : "border-accent bg-accent/10")}
+                onClick={(e) => choose(e, [
+                  { label: "edit the rules of", head: true },
+                  { label: "The default router", value: "show:", hint: "everyone no other router names", on: router === null },
+                  ...Object.entries(obj(draft.routers)).map(([name, r]) => ({ label: name, value: `show:${name}`, mono: true, on: router === name, hint: list(obj(r).callers).length ? `used by ${list(obj(r).callers).join(", ")}` : "nobody uses it yet" })),
+                  { label: "a router of their own for some callers", head: true },
+                  { label: "New, starting from these rules…", value: "new:copy", hint: "then change what should differ" },
+                  { label: "New, refusing everything…", value: "new:empty", hint: "then add only what its callers may ask for" },
+                ], (v) => (v.startsWith("show:") ? showRouter(v.slice(5) || null) : setAdding(`routers:${v.slice(4)}`)))}>
+          <Split size={13} className="text-accent" /><span className={router === null ? "" : mono}>{router ?? "default router"}</span><ChevronDown size={12} className="text-dim" />
+        </button>
+        {router !== null && (() => {
+          const mine = obj(obj(draft.routers)[router]);
+          const uses = list(mine.callers);
+          return (
+            <>
+              <button type="button" title="whose requests go by this router; everyone else goes by the default one" className={cx("flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12px] hover:bg-muted", uses.length ? "border-line" : "border-warn text-warn")}
+                      onClick={(e) => choose(e, [{ label: "requests from", head: true }, ...callersIn(draft).map((c) => ({ label: c, mono: true, on: uses.includes(c), hint: c === "local" ? "this machine, with no api key" : "the api key with this label" }))],
+                        (c) => change((d) => withCaller(d, router, c, !uses.includes(c))))}>
+                {uses.length ? `used by ${uses.join(", ")}` : "used by nobody yet"}<ChevronDown size={12} className="text-dim" />
+              </button>
+              <button type="button" aria-pressed={mine.strict === true} title="A request runs on the model its rule names or fails: a backend's own fallback to another model is switched off for these callers."
+                      className={cx("h-8 rounded-lg border px-3 text-[12px] transition-colors", mine.strict === true ? "border-accent bg-accent/15" : "border-line hover:bg-muted")}
+                      onClick={() => change((d) => { const { strict: _, ...r } = obj(obj(d.routers)[router]); return put(d, "routers", router, mine.strict === true ? r : { ...r, strict: true }); })}>
+                never fall back
+              </button>
+              <button type="button" aria-label={`delete router ${router}`} title="delete this router: its callers go by the default one again" className="grid h-8 w-8 place-items-center rounded-lg border border-line text-dim hover:bg-muted hover:text-bad" onClick={() => removeRouter(router)}><Trash2 size={13} /></button>
+            </>
+          );
+        })()}
         <button type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-3 text-[13px] hover:bg-muted"
                 onClick={(e) => choose(e, ruleChoices(), (v) => startRule(v.slice(5)))}>
           <Plus size={13} />rule
@@ -190,7 +222,7 @@ export function EditBar() {
                 }}>
           <History size={13} />versions
         </button>
-        <span className="ml-2 truncate text-[11px] text-dim max-2xl:hidden">A draft: nothing changes until you publish. Right-click for more.</span>
+        {router === null && <span className="ml-2 truncate text-[11px] text-dim max-2xl:hidden">A draft: nothing changes until you publish. Right-click for more.</span>}
         <div className="ml-auto flex items-center gap-2">
           {isDirty && <span className="flex items-center gap-1.5 text-[12px] text-accent"><span className="size-1.5 rounded-full bg-accent" />draft · {changes} {changes === 1 ? "change" : "changes"}</span>}
           <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
@@ -209,6 +241,11 @@ export function EditBar() {
                      editSelect({ kind: "flow", id });
                      setAdding(null);
                    }} />
+      )}
+      {adding?.startsWith("routers:") && (
+        <NewDialog spec={{ noun: "router", scope: "flow", keys: [] }} taken={Object.keys(obj(draft.routers))} onClose={() => setAdding(null)}
+                   note="A router is a rulebook of its own. Next, choose whose requests go by it; everyone else keeps the default router."
+                   onCreate={(id) => { addRouter(id, adding === "routers:copy"); setAdding(null); }} />
       )}
       {adding?.startsWith("actions:") && (
         <NewDialog spec={{ noun: "action", scope: "action", keys: [adding.slice(8)] }} taken={Object.keys(obj(draft.actions))} onClose={() => setAdding(null)}

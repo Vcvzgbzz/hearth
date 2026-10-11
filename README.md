@@ -176,6 +176,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
+| `routers.<name>` | none | A rulebook of its own for some callers: `callers` (api key labels, or `local`), `flows` in the shape of `flows:`, and `strict: true` to switch off backend route fallbacks for them. See [Routers](#routers). |
 | `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](#editing-on-the-graph); nodes without one are laid out |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](#flows) |
 | `historyFile` | unset | a file that keeps the console's day of history and its recent log lines across restarts, written every minute and at shutdown. Unset keeps them in memory |
@@ -1428,6 +1429,39 @@ to choose from unless two models answer the same path.
 Requests a peer borrows are served as the model it was lent and do not pass
 through types. Maintenance calls that hearth forwards without queueing (a
 model swapper's own endpoints) are not affected.
+
+#### Routers
+
+`flows:` is the rulebook everyone goes by. A router is another one, for the
+callers it names: an api key by its label, or `local` for this machine with no
+key. A caller goes by one router at most; anyone no router names keeps `flows:`.
+
+```yaml
+routers:
+  direct:
+    callers: [local]
+    strict: true
+    flows:
+      chat: { inputs: [chat], steps: [{ to: my-model }] }
+      anything-else: { inputs: ["*"], steps: [{ to: { refuse: "not offered here" } }] }
+```
+
+Here a request from this machine for `chat` runs on `my-model` whatever the
+rules in `flows:` would have done with it, and nothing else is offered to it.
+A router's callers are listed its own names on `/v1/models`. Each router needs
+its own flow for `*`, as `flows:` does.
+
+`strict: true` also switches off a backend route's `fallback` for those
+callers, so a request runs on the model its rule names or fails. That is the
+setting for testing a model without wondering whether something else answered.
+
+A step's `max`, a flow's `sticky` and the line counts are kept by flow name, so
+two routers with a flow of the same name share them; only `flows:` is counted.
+
+On the Routing page the first button says which rulebook is on the map. Its
+menu switches between them and starts a new one, from the rules shown or from
+one that refuses everything. With a router shown, the buttons beside it say
+whose requests go by it, set **never fall back**, and delete it.
 
 #### Actions
 

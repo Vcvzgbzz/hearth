@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, withCaller, callersIn, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -306,6 +306,27 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   // Ends sit level with the lines that reach them, in that order, never closer than a step; one no line reaches goes last.
   const from: Record<string, number[]> = { low: [300, 340], high: [20], mid: [40], none: [] };
   assert.deepEqual(Object.fromEntries(beside(["low", "high", "mid", "none"], (id) => from[id]!, 50)), { high: 0, mid: 50, low: 295, none: 345 });
+}
+
+// --- a router's rulebook as the one on the map --------------------------------------------------------
+{
+  const own = { only: { inputs: ["auto"], steps: [{ to: "chat" }] }, rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] } };
+  const full: Doc = { ...withRest(doc(), "asked"), apiKeys: [{ key: "k", label: "app" }, "bare"], routers: { direct: { callers: ["local"], strict: true, flows: own }, other: { callers: [], flows: own } },
+    layout: { self: { x: 1, y: 1 }, "routing/flow:pick": { x: 2, y: 2 }, "routing@direct/flow:only": { x: 3, y: 3 } } };
+  // The view has the router's flows as `flows` and its own places; the default rulebook's places are left out of it.
+  const view = scoped(full, "direct");
+  assert.deepEqual([view.flows, view.layout], [own, { self: { x: 1, y: 1 }, "routing/flow:only": { x: 3, y: 3 } }]);
+  assert.equal(scoped(full, null), full);
+  // Untouched, it goes back as it came; an edit to its flows or its map lands in the router and nowhere else.
+  assert.deepEqual(unscoped(view, full, "direct"), full);
+  const edited = unscoped(placed(pointStep(view, "only", 0, { kind: "model", model: "other" })!, "routing/flow:only", { x: 9, y: 9 }), full, "direct");
+  assert.deepEqual([(edited.routers as Record<string, Doc>).direct!.flows, edited.flows, (edited.routers as Record<string, Doc>).other, edited.layout],
+    [{ ...own, only: { inputs: ["auto"], steps: [{ to: "other" }] } }, full.flows, (full.routers as Doc).other, { ...(full.layout as object), "routing@direct/flow:only": { x: 9, y: 9 } }]);
+  assert.doesNotThrow(() => parseConfig(edited));
+  // A caller goes by one router: given to another, it leaves the first.
+  assert.deepEqual(callersIn(full), ["local", "app"]);
+  const given = withCaller(full, "other", "local", true).routers as Record<string, Doc>;
+  assert.deepEqual([given.direct!.callers, given.other!.callers], [[], ["local"]]);
 }
 
 // --- what is written is the change and nothing else -------------------------------------------------

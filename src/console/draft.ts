@@ -433,6 +433,46 @@ export function beside(ends: string[], from: (end: string) => number[], step: nu
   return out;
 }
 
+/**
+ * A draft as one router's rulebook: its flows stand as `flows`, and its map has places of its own
+ * (kept as `routing@<router>/...`). With `null` the draft is its own view: the rules everyone else goes by.
+ */
+export function scoped(doc: Doc, router: string | null): Doc {
+  if (router === null) return doc;
+  const pre = `routing@${router}/`;
+  const layout = Object.fromEntries(Object.entries(obj(doc.layout)).flatMap(([id, at]) =>
+    (id.startsWith(pre) ? [[`routing/${id.slice(pre.length)}`, at]] : id.startsWith("routing/") ? [] : [[id, at]])));
+  return { ...doc, flows: obj(obj(obj(doc.routers)[router]).flows), ...(isObj(doc.layout) ? { layout } : {}) };
+}
+
+/** The whole draft again, from one router's view of it and `whole`, the draft that view was taken of. */
+export function unscoped(view: Doc, whole: Doc, router: string | null): Doc {
+  if (router === null) return view;
+  const pre = `routing@${router}/`;
+  const layout = {
+    ...Object.fromEntries(Object.entries(obj(whole.layout)).filter(([id]) => id.startsWith("routing/"))),
+    ...Object.fromEntries(Object.entries(obj(view.layout)).map(([id, at]) => [id.startsWith("routing/") ? pre + id.slice(8) : id, at])),
+  };
+  const { layout: _, ...rest } = view;
+  return {
+    ...rest, flows: whole.flows,
+    routers: { ...obj(view.routers), [router]: { ...obj(obj(view.routers)[router]), flows: view.flows } },
+    ...(Object.keys(layout).length ? { layout } : {}),
+  };
+}
+
+/** Who can be given a router: each api key by its label, and whoever calls from this machine without one. */
+export const callersIn = (doc: Doc): string[] =>
+  ["local", ...(Array.isArray(doc.apiKeys) ? doc.apiKeys : []).map((k) => text(obj(k).label)).filter(Boolean)];
+
+/** Give a caller to a router, or take it away; a caller goes by one router, so it leaves any other. */
+export function withCaller(doc: Doc, router: string, caller: string, on: boolean): Doc {
+  return { ...doc, routers: Object.fromEntries(Object.entries(obj(doc.routers)).map(([name, r]) => {
+    const others = list(obj(r).callers).filter((c) => c !== caller);
+    return [name, { ...obj(r), callers: name === router && on ? [...others, caller] : others }];
+  })) };
+}
+
 /** Remember where a node was put, to the pixel: a layout is a picture, not a measurement. */
 export const placed = (doc: Doc, id: string, at: { x: number; y: number }): Doc =>
   put(doc, "layout", id, { x: Math.round(at.x), y: Math.round(at.y) });
