@@ -85,27 +85,30 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
     <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
       {have.map((c, n) => {
         const v = when[c.key];
-        const drop = <button type="button" aria-label="remove this condition" title="remove this condition" className="nodrag nopan text-dim hover:text-bad" onClick={() => onChange(without(c.key))}><X size={11} /></button>;
+        // Every word and every value stands on its own, so a line breaks between them
+        // and never splits a phrase or hides a value under another piece of the line.
+        const lead = n > 0 ? <span className="shrink-0 text-dim">and</span> : null;
+        const drop = <button type="button" aria-label="remove this condition" title="remove this condition" className="nodrag nopan shrink-0 text-dim hover:text-bad" onClick={() => onChange(without(c.key))}><X size={11} /></button>;
         return (
-          <span key={c.key} className="flex min-w-0 items-center gap-1">
-            {n > 0 && <span className="text-dim">and</span>}
+          <span key={c.key} className="flex min-w-0 flex-wrap items-center gap-1">
+            {lead}
             {c.kind === "bool" ? (
-              <button type="button" className={CHIP}
+              <button type="button" className={cx(CHIP, "shrink-0")}
                       onClick={(e) => choose(e, [{ label: c.yes, value: "yes", on: v !== false }, { label: c.no, value: "no", on: v === false }, { label: "Remove this condition", value: "drop", danger: true }],
                         (x) => onChange(x === "drop" ? without(c.key) : { ...when, [c.key]: x === "yes" }))}>
                 <span className="truncate">{v === false ? c.no : c.yes}</span><ChevronDown size={10} className="shrink-0 text-dim" />
               </button>
             ) : c.kind === "num" ? (
               <>
-                <span>{c.before}</span>
-                <input aria-label={c.before} type="number" min={0} autoFocus={fresh === c.key} className={cx(FIELD, "w-16 tabular")} value={typeof v === "number" ? v : ""} onChange={(e) => onChange({ ...when, [c.key]: Number(e.target.value) })} />
-                <span>{c.after}</span>
+                <span className="shrink-0 whitespace-nowrap">{c.before}</span>
+                <input aria-label={c.before} type="number" min={0} autoFocus={fresh === c.key} className={cx(FIELD, "w-16 shrink-0 tabular")} value={typeof v === "number" ? v : ""} onChange={(e) => onChange({ ...when, [c.key]: Number(e.target.value) })} />
+                <span className="shrink-0 whitespace-nowrap">{c.after}</span>
                 {drop}
               </>
             ) : c.kind === "list" ? (
               <>
-                <span>{c.before}</span>
-                <input aria-label={c.before} autoFocus={fresh === c.key} className={cx(FIELD, "w-28 font-mono")} placeholder={c.hint} value={list(v).join(", ")}
+                <span className="shrink-0 whitespace-nowrap">{c.before}</span>
+                <input aria-label={c.before} autoFocus={fresh === c.key} className={cx(FIELD, "w-28 shrink-0 font-mono")} placeholder={c.hint} value={list(v).join(", ")}
                        onChange={(e) => onChange({ ...when, [c.key]: e.target.value.split(",").map((x) => x.trim()).filter((x, k, all) => x !== "" || k === all.length - 1) })} />
                 {drop}
               </>
@@ -116,22 +119,22 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
               const write = (n: string, values: string[]) => onChange({ ...when, [c.key]: Object.fromEntries([[n, values], ...all.slice(1)]) });
               return (
                 <>
-                  <span>the header</span>
-                  <input aria-label="header name" autoFocus={fresh === c.key} spellCheck={false} className={cx(FIELD, "w-24 font-mono", name === "" && "border-warn")} placeholder="x-name" value={name}
+                  <span className="shrink-0 whitespace-nowrap">the header</span>
+                  <input aria-label="header name" autoFocus={fresh === c.key} spellCheck={false} className={cx(FIELD, "w-24 shrink-0 font-mono", name === "" && "border-warn")} placeholder="x-name" value={name}
                          onChange={(e) => write(e.target.value.trim().toLowerCase(), list(vals))} />
-                  <span>{c.key === "header" ? "is" : "is not"}</span>
-                  <input aria-label={c.key === "header" ? "the values it may have" : "the values it may not have"} spellCheck={false} className={cx(FIELD, "w-24 font-mono")} placeholder={c.key === "header" ? "any value" : "sent at all"} value={list(vals).join(", ")}
+                  <span className="shrink-0 whitespace-nowrap">{c.key === "header" ? "is" : "is not"}</span>
+                  <input aria-label={c.key === "header" ? "the values it may have" : "the values it may not have"} spellCheck={false} className={cx(FIELD, "w-24 shrink-0 font-mono")} placeholder={c.key === "header" ? "any value" : "sent at all"} value={list(vals).join(", ")}
                          onChange={(e) => write(name, e.target.value.split(",").map((x) => x.trim()).filter((x, k, parts) => x !== "" || k === parts.length - 1))} />
                   {drop}
                 </>
               );
             })() : c.kind === "time" ? (
               <>
-                <span>it is between</span>
+                <span className="shrink-0 whitespace-nowrap">it is between</span>
                 {(["from", "to"] as const).map((k) => (
                   <span key={k} className="flex items-center gap-1">
-                    {k === "to" && <span>and</span>}
-                    <input aria-label={k === "from" ? "from this time of day" : "until this time of day"} type="time" className={cx(FIELD, "tabular")} value={text(obj(v)[k])}
+                    {k === "to" && <span className="shrink-0 text-dim">and</span>}
+                    <input aria-label={k === "from" ? "from this time of day" : "until this time of day"} type="time" className={cx(FIELD, "shrink-0 tabular")} value={text(obj(v)[k])}
                            onChange={(e) => onChange({ ...when, time: { ...obj(v), [k]: e.target.value } })} />
                   </span>
                 ))}
@@ -139,16 +142,16 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
               </>
             ) : (
               <>
-                <button type="button" className={cx(CHIP, "font-mono")}
+                <button type="button" className={cx(CHIP, "shrink-0 font-mono")}
                         onClick={(e) => choose(e, [{ label: "the target", value: "", hint: "where this line sends work", on: !text(obj(v).model) }, { label: "a model", head: true }, ...models.map((m) => ({ label: m, mono: true, on: text(obj(v).model) === m }))],
                           (m) => { const { model: _, ...keep } = obj(v); onChange({ ...when, idle: m ? { ...keep, model: m } : keep }); })}>
                   <span className="truncate">{text(obj(v).model) || "the target"}</span><ChevronDown size={10} className="shrink-0 text-dim" />
                 </button>
-                <span>has been idle</span>
+                <span className="shrink-0 whitespace-nowrap">has been idle</span>
                 {/* The file keeps milliseconds; a person thinks in minutes. */}
-                <input aria-label="minutes idle" type="number" min={0} step="any" className={cx(FIELD, "w-12 tabular")} value={typeof obj(v).ms === "number" ? (obj(v).ms as number) / 60_000 : ""}
+                <input aria-label="minutes idle" type="number" min={0} step="any" className={cx(FIELD, "w-12 shrink-0 tabular")} value={typeof obj(v).ms === "number" ? (obj(v).ms as number) / 60_000 : ""}
                        onChange={(e) => onChange({ ...when, idle: { ...obj(v), ms: Math.round(Number(e.target.value) * 60_000) } })} />
-                <span>min</span>
+                <span className="shrink-0 whitespace-nowrap">min</span>
                 {drop}
               </>
             )}
@@ -260,22 +263,26 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                onMouseEnter={() => hover(`e:${id}:${i}`)} onMouseLeave={() => hover(null)}>
             {/* Work sent to a peer leaves on the peers' side. */}
             <Handle type="source" id={`step-${i}-back`} position={Position.Left} className="!opacity-0" style={{ left: -6 }} />
-            {i === last ? <span className="flex-1 font-medium">Otherwise</span> : (
-              <>
-                <span className="font-medium">If</span>
-                {data.editable
-                  // A peer can be down, so a line that sends to one may stand with no condition of its own.
-                  ? <Conds when={when} models={data.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (r) => ({ ...r, when: w }))} />
-                  : <span className="min-w-0 flex-1 truncate">{sentence(when) || "it can take it"}</span>}
-              </>
+            {/* Every line is the same three columns, so the where-it-goes and the counts read in line:
+                the word, the conditions, and the fixed-width place the line ends at. */}
+            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate")}>{i === last ? "Otherwise" : "If"}</span>
+            {i === last ? (
+              <span className="min-w-0 flex-1" />
+            ) : data.editable ? (
+              // A peer can be down, so a line that sends to one may stand with no condition of its own.
+              <Conds when={when} models={data.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (r) => ({ ...r, when: w }))} />
+            ) : (
+              <span className="min-w-0 flex-1 truncate">{sentence(when) || "it can take it"}</span>
             )}
-            {to.kind !== "refuse" && <span className="shrink-0 text-dim">send to</span>}
-            {data.editable ? (
-              <button type="button" className={cx(CHIP, "max-w-[130px] shrink-0 font-mono", to.kind === "unset" && "border-warn text-warn")} title="choose where this line sends requests"
-                      onClick={(e) => pick({ x: e.clientX, y: e.clientY, from: { node: id, handle: `step-${i}` } })}>
-                <span className="truncate">{to.kind === "unset" ? "choose where" : own(to) ? "its own model" : toText(to)}</span><ChevronDown size={10} className="shrink-0 text-dim" />
-              </button>
-            ) : <span className="max-w-[130px] shrink-0 truncate font-mono" title={toText(to)}>{own(to) ? "its own model" : toText(to)}</span>}
+            <span className="flex w-[168px] min-w-0 shrink-0 items-center gap-1.5">
+              {to.kind !== "refuse" && <span className="shrink-0 text-dim">send to</span>}
+              {data.editable ? (
+                <button type="button" className={cx(CHIP, "min-w-0 flex-1 font-mono", to.kind === "unset" && "border-warn text-warn")} title="choose where this line sends requests"
+                        onClick={(e) => pick({ x: e.clientX, y: e.clientY, from: { node: id, handle: `step-${i}` } })}>
+                  <span className="truncate">{to.kind === "unset" ? "choose where" : own(to) ? "its own model" : toText(to)}</span><ChevronDown size={10} className="shrink-0 text-dim" />
+                </button>
+              ) : <span className="min-w-0 flex-1 truncate font-mono" title={toText(to)}>{own(to) ? "its own model" : toText(to)}</span>}
+            </span>
             {typeof s.max === "number" && <span className="shrink-0 rounded border border-line px-1 text-[10px] text-dim" title={`takes at most ${s.max} at once; the rest go on down the list`}>≤{s.max}</span>}
             {data.hits && <span className="w-7 shrink-0 text-right text-[10px] tabular text-dim" title={`decided ${data.hits[i] ?? 0} ${(data.hits[i] ?? 0) === 1 ? "request" : "requests"} since the rules last changed or the node started`}>{data.hits[i] ?? 0}×</span>}
             {data.marks?.[i] && ("bad" in data.marks[i]!

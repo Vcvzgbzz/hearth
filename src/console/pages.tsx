@@ -1,12 +1,12 @@
 /** The pages beside the topology, and the inspector sheet that opens over it. */
-import { Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronRight, Trash2, X } from "lucide-react";
+import { Fragment, useEffect, useState } from "react";
 
 import type { UiData } from "./types.js";
 import { Refs, refsOf, Value } from "./config.js";
 import { draftView, isObj, obj, put } from "./draft.js";
 import { change, useEdit } from "./editStore.js";
-import { control, go, select, useStore } from "./store.js";
+import { control, evict, go, mintKey, revokeKey, select, useStore, warm } from "./store.js";
 import { ago, Card, cx, Empty, mono, Pill, Switch, type Tone } from "./ui.js";
 
 const selfOf = (d: UiData) => d.net.nodes.find((n) => n.self)!;
@@ -216,6 +216,12 @@ export function Models() {
   };
   const state = (m: string): [Tone, string] =>
     d.net.readyNow.includes(m) ? ["ok", "warm"] : (d.net.unknownWarm ?? []).includes(m) ? ["dim", "unknown"] : ["info", "cold"];
+  const [busy, setBusy] = useState<string | null>(null);
+  const act = (k: string, fn: () => Promise<void>): void => {
+    if (busy !== null) return;
+    setBusy(k);
+    void fn().finally(() => setBusy(null));
+  };
   return (
     <Card className="overflow-hidden">
       <table className="w-full text-left">
@@ -223,6 +229,7 @@ export function Models() {
           <tr>
             <th className="px-4 py-2 font-medium">model</th>
             <th className="px-2 py-2 font-medium">state</th>
+            <th className="px-2 py-2 font-medium">actions</th>
             <th className="px-2 py-2 font-medium">served by</th>
             <th className="px-2 py-2 font-medium">context</th>
             <th className="px-2 py-2 font-medium">lent</th>
@@ -238,6 +245,18 @@ export function Models() {
               <tr key={m} className="border-b border-line/60 last:border-0 hover:bg-muted/40">
                 <td className={cx("px-4 py-2", mono)}>{m}</td>
                 <td className="px-2 py-2"><Pill tone={tone}>{word}</Pill></td>
+                <td className="px-2 py-2">
+                  {local.has(m) ? (
+                    <button disabled={busy !== null}
+                            onClick={() => {
+                              if (word === "warm" && !confirm(`Evict ${m}? It leaves the card and the next request for it pays the reload.`)) return;
+                              act(word === "warm" ? `evict:${m}` : `warm:${m}`, word === "warm" ? () => evict(m) : () => warm(m));
+                            }}
+                            className={cx("text-[12px] hover:text-fg disabled:opacity-40", word === "warm" ? "text-dim" : "text-accent")}>
+                      {word === "warm" ? "evict" : "warm"}
+                    </button>
+                  ) : <span className="text-dim">—</span>}
+                </td>
                 <td className="px-2 py-2 text-dim">{where(m).join(", ")}</td>
                 <td className="tabular px-2 py-2 text-dim">{stats?.context ? `${Math.round(stats.context / 1024)}k` : "—"}</td>
                 <td className="px-2 py-2">
@@ -252,6 +271,103 @@ export function Models() {
         </tbody>
       </table>
       {ids.length === 0 && <Empty>No models yet — backends report theirs once reachable.</Empty>}
+    </Card>
+  );
+}
+
+/* ----------------------------------------------------------------- keys */
+
+/**
+ * The keys that open /v1 here: who holds one, what it may run, when it last spoke. The
+ * secrets live in hearth.yaml and never come back into this page — a mint hands its
+ * plaintext over once, and after that only the label and a hash are shown, the way the
+ * config page does.
+ */
+export function Keys() {
+  const keys = useStore((s) => s.data!.keys ?? []);
+  const catalog = useStore((s) => s.data!.catalog);
+  const [label, setLabel] = useState("");
+  const [scope, setScope] = useState("");
+  const [shown, setShown] = useState<{ label: string; key: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const mint = async () => {
+    const l = label.trim();
+    if (l === "" || busy) return;
+    setBusy(true);
+    const models = scope.split(",").map((s) => s.trim()).filter(Boolean);
+    const key = await mintKey(l, models.length > 0 ? models : null);
+    setBusy(false);
+    if (key !== null) {
+      setShown({ label: l, key });
+      setCopied(false);
+      setLabel("");
+      setScope("");
+    }
+  };
+  const copy = async (key: string) => {
+    try {
+      await navigator.clipboard.writeText(key);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* the text stays selectable either way */ }
+  };
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-line px-4 py-2.5">
+        <div className="font-medium">Keys</div>
+        <div className="text-[11px] text-dim">Bearer keys for /v1 on this node. They live in hearth.yaml and a change takes effect at once; what is shown here is a label and a hash, never the secret.</div>
+      </div>
+      <table className="w-full text-left">
+        <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
+          <tr>
+            <th className="px-4 py-2 font-medium">label</th>
+            <th className="px-4 py-2 font-medium">id</th>
+            <th className="px-4 py-2 font-medium">may run</th>
+            <th className="px-4 py-2 text-right font-medium">last seen</th>
+            <th className="w-20" />
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map((k) => (
+            <tr key={k.label || k.id} className="border-b border-line/60 last:border-0">
+              <td className="px-4 py-2">{k.label !== "" ? k.label : <span className="text-dim">unlabeled</span>}</td>
+              <td className={cx("px-4 py-2 text-dim", mono)}>{k.id}</td>
+              <td className="px-4 py-2 text-dim">{k.models === null || k.models.length === 0 ? "everything" : k.models.join(", ")}</td>
+              <td className={cx("tabular px-4 py-2 text-right", k.lastSeen === null ? "text-dim" : "text-fg")}>{k.lastSeen === null ? "never" : ago(k.lastSeen)}</td>
+              <td className="px-4 py-2 text-right">
+                <button disabled={busy || k.label === ""} title={k.label === "" ? "a key with no label is removed in the config file" : undefined}
+                        onClick={() => { if (confirm(`Revoke ${k.label}? It stops working straight away.`)) void revokeKey(k.label); }}
+                        className="text-[12px] text-bad hover:underline disabled:opacity-40">
+                  revoke
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {keys.length === 0 && <Empty>No keys yet. Without any, only this machine may call /v1.</Empty>}
+      <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" maxLength={40}
+               className="h-8 w-40 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
+        <input value={scope} onChange={(e) => setScope(e.target.value)} placeholder="models, comma-separated (blank = everything)"
+               className="h-8 w-72 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
+        <button disabled={busy || label.trim() === ""} onClick={() => void mint()}
+                className="h-8 rounded-md bg-accent px-3 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40">
+          {busy ? "minting…" : "mint a key"}
+        </button>
+        {catalog.length > 0 && <span className="text-[11px] text-dim">here: {catalog.join(", ")}</span>}
+      </div>
+      {shown !== null && (
+        <div className="border-t border-line bg-muted/40 px-4 py-3">
+          <div className="text-[12px] text-dim">The key for <b className="text-fg">{shown.label}</b> — shown once; after this it exists only in hearth.yaml.</div>
+          <div className="mt-1.5 flex items-center gap-2">
+            <code className={cx("flex-1 select-all overflow-x-auto whitespace-nowrap rounded-md border border-line bg-bg px-3 py-2", mono)}>{shown.key}</code>
+            <button onClick={() => void copy(shown.key)} className="h-8 rounded-md border border-line px-3 text-[12px] hover:bg-muted">{copied ? "copied" : "copy"}</button>
+            <button onClick={() => setShown(null)} className="h-8 rounded-md px-2 text-[12px] text-dim hover:text-fg">done</button>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
@@ -358,9 +474,48 @@ function DayChart({ day }: { day: Day }) {
   );
 }
 
+/**
+ * The individual calls behind a model's row: newest first, capped, and the
+ * wait-vs-run split each one actually spent. Only the timing is kept here —
+ * prompts and replies never pass through hearth, so there is nothing to show.
+ */
+function CallsPanel({ calls }: { calls: Call[] }) {
+  const shown: Call[] = [];
+  for (let i = calls.length - 1; i >= 0 && shown.length < 40; i--) shown.push(calls[i]!);
+  if (shown.length === 0) return <p className="text-[12px] text-dim">No calls in this window.</p>;
+  const max = Math.max(1, ...shown.map((c) => c.waitedMs + c.ms));
+  return (
+    <div className="max-h-80 overflow-y-auto pr-1">
+      <div className="sticky top-0 grid grid-cols-[88px_56px_1fr_70px] gap-2 bg-bg pb-1 text-[10px] uppercase text-dim">
+        <span>time</span>
+        <span>result</span>
+        <span>waited, then ran</span>
+        <span className="text-right">total</span>
+      </div>
+      {shown.map((c, i) => {
+        const total = c.waitedMs + c.ms;
+        return (
+          <div key={`${c.t}-${i}`} className="grid grid-cols-[88px_56px_1fr_70px] items-center gap-2 py-0.5 text-[12px]">
+            <span className="tabular text-dim">{new Date(c.t).toLocaleTimeString()}</span>
+            <span className={c.ok ? "text-ok" : "text-bad"}>{c.ok ? "ok" : "failed"}</span>
+            <span className="flex h-[7px] overflow-hidden rounded-full bg-line/40"
+                  title={c.backend !== null ? `waited ${secs(c.waitedMs)} in ${c.backend}'s queue, ran ${secs(c.ms)} on ${c.backend}` : `waited ${secs(c.waitedMs)}, ran ${secs(c.ms)}`}>
+              <span className="h-full bg-line" style={{ width: `${(c.waitedMs / max) * 100}%` }} />
+              <span className={c.ok ? "h-full bg-accent" : "h-full bg-bad"} style={{ width: `${(c.ms / max) * 100}%` }} />
+            </span>
+            <span className="tabular text-right text-dim">{secs(total)}</span>
+          </div>
+        );
+      })}
+      <p className="pt-1 text-[10px] text-dim">newest first, up to 40 · only the timing is kept; prompts and replies never pass through hearth</p>
+    </div>
+  );
+}
+
 /** Finished requests per model over the last ten minutes or the last day: how many, how long they waited and ran. */
 export function History() {
   const [range, setRange] = useState<"10m" | "24h">("10m");
+  const [open, setOpen] = useState<string | null>(null);
   const live = useStore((s) => s.data!.calls ?? []);
   const day = useDay(range === "24h");
   const calls = range === "24h" ? day?.calls ?? [] : live;
@@ -395,8 +550,17 @@ export function History() {
             const run95 = pct(cs.map((c) => c.ms), 95);
             const failed = cs.filter((c) => !c.ok).length;
             return (
-              <tr key={m} className="border-b border-line/60 last:border-0">
-                <td className={cx("px-4 py-2", mono)}>{m}</td>
+              <Fragment key={m}>
+                <tr className={cx("border-b border-line/60 last:border-0", open === m && "bg-muted/40")}>
+                  <td className={cx("px-4 py-2", mono)}>
+                    <span className="flex items-center gap-1.5">
+                      <button type="button" onClick={() => setOpen(open === m ? null : m)} aria-label={`the individual calls for ${m}`}
+                              className="rounded p-0.5 text-dim hover:bg-line/70 hover:text-fg">
+                        <ChevronRight size={12} className={cx("transition-transform", open === m && "rotate-90")} />
+                      </button>
+                      {m}
+                    </span>
+                  </td>
                 <td className="tabular px-4 py-2">{cs.length}</td>
                 <td className={cx("tabular px-4 py-2", failed ? "text-bad" : "text-dim")}>{failed}</td>
                 <td className="tabular px-4 py-2 text-dim">{secs(pct(cs.map((c) => c.waitedMs), 50))}</td>
@@ -408,7 +572,15 @@ export function History() {
                     <span className="bg-accent" style={{ width: `${(run95 / longest) * 100}%` }} />
                   </div>
                 </td>
-              </tr>
+                </tr>
+                {open === m && (
+                  <tr className="border-b border-line/60 bg-bg/70">
+                    <td colSpan={7} className="px-4 py-2.5">
+                      <CallsPanel calls={cs} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>

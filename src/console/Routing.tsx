@@ -3,7 +3,7 @@
  * them pass through, what a rule's lines end at and what they set off. Only what is routed is
  * drawn. The nodes are flowNodes.tsx's; what a drawn line changes is draft.ts's.
  */
-import { applyNodeChanges, Background, Controls, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
+import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ANY, beside as besideLines, directTo, draftView, factsOf, list, nodeOf, ordered, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
@@ -21,6 +21,9 @@ type Editing = { /** The router whose rules these are; null for the default one.
 const RULE = { width: 570, head: 36, row: 32 };
 const SIDE = { refuse: 66, fastest: 70, place: 28, action: 70 };
 const GAP = 24;
+
+/** What each kind of box is on the small map in the corner: the same theme colours the box itself wears. */
+const MINI: Record<string, string> = { hub: "var(--dim)", flow: "var(--info)", fastest: "var(--pick)", refuse: "var(--bad)", action: "var(--warn)" };
 
 /** How tall the node a line's target is drawn as beside its rule; 0 for a model, a peer or another rule, which are not drawn there. */
 const sideOf = (to: To): number => (to.kind === "refuse" ? SIDE.refuse : to.kind === "fastest" ? SIDE.fastest + to.of.length * SIDE.place : 0);
@@ -329,6 +332,12 @@ export function Routing() {
       onNodeContextMenu={(e, n) => { e.preventDefault(); if (editing) contextMenu(e, n.id); }}
     >
       <Background gap={20} size={1} color="var(--border)" />
+      <MiniMap
+        pannable zoomable
+        maskColor={dark ? "rgba(0,0,0,0.6)" : "rgba(90,100,120,0.25)"}
+        nodeColor={(n) => MINI[n.type ?? ""] ?? ((n.data as { kind?: string }).kind === "peer" ? "var(--peer)" : "var(--ok)")}
+        style={{ width: 160, height: 110, background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 8 }}
+      />
       <Controls showInteractive={false} position="bottom-left" />
     </ReactFlow>
   );

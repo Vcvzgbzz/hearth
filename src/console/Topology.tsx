@@ -8,7 +8,7 @@ import {
   applyNodeChanges, Background, BaseEdge, Controls, getBezierPath, Handle, Position, ReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
-import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Plus, Redo2, RotateCcw, Save, Server, Split, Undo2, Users } from "lucide-react";
+import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Plus, Redo2, RotateCcw, Save, Server, Split, Undo2, Users, Waypoints } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
@@ -56,20 +56,27 @@ const CardNode = memo(function CardNode({ data }: NodeProps<Node<Card>>) {
 /** Someone whose requests arrive here: an api key by its label, or this machine with no key. */
 type Caller = { name: string; router: string | null; /** It only goes where everyone else does. */ follows: boolean; busy: boolean; editable: boolean };
 
-/** A caller, with a dot to draw to the router its requests go by. */
+/** A caller, as a chip among the others that go by the same router. */
 const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
   return (
-    <div className="w-[200px] rounded-xl border border-line bg-panel px-3 py-2 shadow-sm" title={`${data.name === EVERYONE ? "Any caller not listed here" : data.name === "local" ? "Requests from this machine, with no api key" : "Requests with the api key of this label"}.${data.editable ? " Drag it onto a router to say which rules its requests go by, or click it to choose." : ""}`}>
-      <div className="flex items-center gap-2">
-        <span className="text-dim">{data.name === EVERYONE ? <Users size={14} /> : data.name === "local" ? <Monitor size={14} /> : <KeyRound size={14} />}</span>
-        <span className={cx("truncate font-medium", data.name !== EVERYONE && "font-mono")}>{data.name === EVERYONE ? "everyone else" : data.name}</span>
-        <span className="ml-auto"><Dot tone={data.busy ? "accent" : "info"} pulse={data.busy} /></span>
-      </div>
-      <div className="mt-0.5 truncate text-[11px] text-dim">{data.follows ? "follows everyone else" : data.router === null ? "default router" : `router ${data.router}`}</div>
-      {/* The whole card starts the line, so it can be dragged from anywhere on it; the dot is where the line leaves. */}
-      {data.editable && <Handle type="source" id="body" position={Position.Left} className="body !rounded-xl !border-0" style={{ top: 0, left: 0, width: "100%", height: "100%", transform: "none" }} />}
-      <Handle type="source" id="dot" position={Position.Left} isConnectable={data.editable} style={{ left: -6 }}
-              className={cx("!h-3.5 !w-3.5 !border-2 !border-panel", data.follows ? "!bg-dim" : data.router === null ? "!bg-info" : "!bg-accent", !data.editable && "!pointer-events-none")} />
+    <div className="flex h-[30px] w-[150px] items-center gap-1.5 rounded-lg border border-line bg-panel px-2 shadow-sm" title={`${data.name === EVERYONE ? "Any caller not listed here" : data.name === "local" ? "Requests from this machine, with no api key" : "Requests with the api key of this label"}.${data.follows ? " It goes wherever everyone else does." : ""}${data.editable ? " Drag it onto a router, or onto the callers of one, to say which rules its requests go by; or click it to choose." : ""}`}>
+      <span className="shrink-0 text-dim">{data.name === EVERYONE ? <Users size={12} /> : data.name === "local" ? <Monitor size={12} /> : <KeyRound size={12} />}</span>
+      <span className={cx("truncate text-[12px]", data.name !== EVERYONE && "font-mono", data.follows && "text-dim")}>{data.name === EVERYONE ? "everyone else" : data.name}</span>
+      <span className="ml-auto shrink-0"><Dot tone={data.busy ? "accent" : "info"} pulse={data.busy} /></span>
+      {/* The whole chip starts the line, so it can be dragged from anywhere on it. */}
+      {data.editable && <Handle type="source" id="body" position={Position.Left} className="body !rounded-lg !border-0" style={{ top: 0, left: 0, width: "100%", height: "100%", transform: "none" }} />}
+    </div>
+  );
+});
+
+/** The callers that go by one router, with the one line that takes them all to it. */
+type Bay = { label: string; own: boolean };
+
+const BayNode = memo(function BayNode({ data }: NodeProps<Node<Bay>>) {
+  return (
+    <div className={cx("h-full w-full rounded-2xl border border-dashed", data.own ? "border-accent/50" : "border-info/50")}>
+      <div className="truncate px-2.5 pt-1.5 text-[10px] uppercase tracking-wide text-dim">{data.label}</div>
+      <Handle type="source" id="down" position={Position.Bottom} isConnectable={false} />
     </div>
   );
 });
@@ -191,7 +198,7 @@ const HomeNode = memo(function HomeNode({ data }: NodeProps<Node<Home>>) {
   );
 });
 
-const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode, caller: CallerNode, home: HomeNode };
+const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode, caller: CallerNode, bay: BayNode, home: HomeNode };
 
 type Pulse = { key: string; back: boolean; t: number };
 /** `wire`: a route, drawn to be followed. `lit`: the way a tried request takes, or the line under the pointer. */
@@ -283,8 +290,9 @@ export const edgeTypes = { flow: FlowEdge };
 
 const W = 200;
 const H = 64;
-/** How tall a caller's card is drawn, and the head of the frame the callers stand in. */
-const CALLER = 54;
+/** A caller's chip, the box of them that go by one router, and the head of the frame those boxes stand in. */
+const CALLER = { w: 150, h: 30, gap: 6, cols: 2 };
+const BAY = { head: 24, pad: 10 };
 const HOME = 56;
 const GAP = 12;
 /** A hardware group: the padding around its backends and the height of its title. */
@@ -323,7 +331,7 @@ function backendSub(b: Backend, run: number): string {
 /** Who calls and which router each goes by, as the draft has it; null where there is no draft to read them from. */
 type Who = { /** Machines the draft names, with or without anything on them yet. */ servers: string[]; callers: { name: string; router: string | null; follows: boolean }[]; routers: Record<string, { users: string[]; strict: boolean }> } | null;
 
-function layout(d: UiData, sel: { kind: string; id: string } | null, router: boolean, who: Who = null) {
+function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = null) {
   drops.clear();
   const self = d.net.nodes.find((n) => n.self)!;
   const peers = d.net.nodes.filter((n) => !n.self);
@@ -342,9 +350,9 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
     else if (j.backend) runningIds.set(j.backend, [...(runningIds.get(j.backend) ?? []), j.id]);
   }
   const X = { peer: 0, self: 290, group: 620 };
-  // With the router drawn it takes this node's place between peers and hardware, and this node stands over it:
-  // one decision sends a request to a peer or to a backend here, so both sides hang off the one router.
-  const hub = router ? "router" : "self";
+  // What stands between this node and where requests run: one decision sends a request to a peer or to a backend here,
+  // so both sides hang off it. With several routers drawn it is the point their requests come together at.
+  const hub = who ? "join" : "router";
 
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -431,34 +439,31 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
     y += height + 24;
   }
   const mid = Math.max(y - 24, H) / 2;
-  if (router) {
-    // What stands between this node and its hardware: routing decides which backend a request runs on.
-    const local = d.q.jobs.filter((j) => j.state === "running").map((j) => j.id);
+  const local = d.q.jobs.filter((j) => j.state === "running").map((j) => j.id);
+  if (who) {
+    // Drawn only: nothing in the file is it.
+    nodes.push({
+      id: "join", type: "card", position: { x: X.self, y: mid - H / 2 },
+      data: {
+        title: "Dispatch", icon: <Waypoints size={14} />, tone: local.length ? "accent" : "info", busy: local.length > 0,
+        sub: local.length ? `${local.length} on ${local.length === 1 ? "its" : "their"} way` : "to a peer or a backend here",
+        tip: "Whichever router decides, the request goes on from here: to a peer, or to a backend on this machine.",
+      } satisfies Card,
+    });
+  } else {
+    // The one router there is: routing decides which backend a request runs on.
     const rules = Object.values(d.flows ?? {}).filter((f) => !f.off).length;
     nodes.push({
       id: "router", type: "card", position: { x: X.self, y: mid - H / 2 },
       data: {
-        title: who ? "default router" : "Router", icon: <Split size={14} />, tone: local.length ? "accent" : "info", busy: local.length > 0,
-        sub: who ? `for ${who.callers.filter((c) => c.router === null).map((c) => (c.name === EVERYONE ? "everyone else" : c.name)).join(", ") || "nobody now"}`
-          : rules ? `${rules} routing ${rules === 1 ? "rule" : "rules"}` : "each name to its own model",
+        title: "Router", icon: <Split size={14} />, tone: local.length ? "accent" : "info", busy: local.length > 0,
+        sub: rules ? `${rules} routing ${rules === 1 ? "rule" : "rules"}` : "each name to its own model",
         tip: "Decides where each request runs. Click to open the Routing page.",
       } satisfies Card,
     });
-    // With the callers drawn, each one's own line says which router it reaches: this node needs none of its own.
-    if (!who) edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local) } });
+    edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local) } });
   }
   const load = `${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`;
-  // With its callers known, this node is the frame they stand in, over the router their requests go on to.
-  const home = router && who ? who.callers.length : 0;
-  const tall = HOME + home * (CALLER + GAP) - GAP + PAD;
-  nodes.unshift(home ? {
-    id: "self", type: "home", position: { x: X.self - PAD, y: mid - H / 2 - 56 - tall }, style: { width: W + PAD * 2, height: tall },
-    data: { title: self.name, sub: load, selected: is("self", self.name) } satisfies Home,
-  } : {
-    id: "self", type: "card", position: { x: X.self, y: mid - H / 2 - (router ? H + 56 : 0) },
-    data: { title: self.name, icon: <Flame size={14} className="text-accent" />, tone: "accent", selected: is("self", self.name), sub: load } satisfies Card,
-  });
-
   // Each peer gets a block tall enough for its offer: linked models first, then what is only on offer.
   const offerOf = (p: NetNode) => {
     const served = new Set(p.serves ?? []);
@@ -471,33 +476,64 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
     return Math.max(H, (o.linked.length + o.offered.length) * CHIP - 8);
   });
   let py = mid - (blocks.reduce((a, b) => a + b, 0) + GAP * (peers.length - 1)) / 2;
-  if (router && who) {
-    // A router of their own for some callers stands under the one everyone else goes by.
-    const names = Object.keys(who.routers);
-    names.forEach((name, i) => {
-      const r = who.routers[name]!;
-      nodes.push({
-        id: `router:${name}`, type: "card", position: { x: X.self, y: mid - H / 2 + (i + 1) * (H + GAP) },
-        data: {
-          title: name, icon: <Split size={14} />, tone: r.users.length ? "accent" : "warn",
-          sub: `${r.users.length ? `for ${r.users.map((u) => (u === EVERYONE ? "everyone else" : u)).join(", ")}` : "nobody uses it yet"}${r.strict ? " · never falls back" : ""}`,
-          tip: "A rulebook of its own for the callers wired to it. Click to open it on the Routing page.",
-        } satisfies Card,
-      });
-    });
-    // Each caller stands inside this node's frame, with a line to the router its requests go by.
+  // With its callers known, this node is the frame they stand in, boxed by the router they go by: one line a router, however many callers.
+  // Those with a router of their own stand to the left; whoever goes by the default one stands over where they all meet.
+  const ranks = Object.keys(who?.routers ?? {});
+  const bays = (who ? [...ranks.slice().reverse(), null] : []).flatMap((name) => {
+    const callers = who!.callers.filter((c) => c.router === name);
+    if (callers.length === 0) return [];
+    const cols = Math.min(CALLER.cols, callers.length);
+    const w = Math.max(cols * (CALLER.w + CALLER.gap) - CALLER.gap + BAY.pad * 2, 150);
+    return [{ name, callers, w, h: BAY.head + Math.ceil(callers.length / cols) * (CALLER.h + CALLER.gap) - CALLER.gap + BAY.pad, x: 0 }];
+  });
+  let wide = PAD;
+  for (const b of bays) { b.x = wide; wide += b.w + GAP; }
+  wide += PAD - GAP;
+  const tall = HOME + Math.max(0, ...bays.map((b) => b.h)) + PAD;
+  const main = bays.find((b) => b.name === null);
+  const left = main ? X.self + W / 2 - main.x - main.w / 2 : X.self - GAP - wide;
+  // Each router stands right under the callers that use it, in a row between the frame and everything else.
+  const under = Math.min(mid - H / 2, 0, py) - 56 - H;
+  nodes.unshift(bays.length ? {
+    id: "self", type: "home", position: { x: left, y: under - 28 - tall }, style: { width: wide, height: tall },
+    data: { title: self.name, sub: load, selected: is("self", self.name) } satisfies Home,
+  } : {
+    id: "self", type: "card", position: { x: X.self, y: mid - H / 2 - H - 56 },
+    data: { title: self.name, icon: <Flame size={14} className="text-accent" />, tone: "accent", selected: is("self", self.name), sub: load } satisfies Card,
+  });
+  if (who) {
     // A request from someone not drawn (a key with no label) is one of everyone else's.
     const named = who.callers.map((c) => c.name);
     const mine = (c: string) => d.q.jobs.filter((j) => j.state === "running" && !j.offbox
       && (c === EVERYONE ? !named.includes(j.caller) && !named.includes(j.caller.replace(/^key:/, "")) : j.caller === c || j.caller === `key:${c}`)).map((j) => j.id);
-    who.callers.forEach((c, i) => {
-      const jobs = mine(c.name);
-      nodes.push({ id: `caller:${c.name}`, type: "caller", parentId: "self", extent: "parent" as const, position: { x: PAD, y: HOME + i * (CALLER + GAP) }, data: { ...c, busy: jobs.length > 0, editable: true } satisfies Caller });
-      edges.push({
-        id: `e:caller:${c.name}`, source: `caller:${c.name}`, sourceHandle: "dot", target: c.router === null ? "router" : `router:${c.router}`, type: "flow",
-        data: { jobs, pulses: pulsesFor(`e:caller:${c.name}`, jobs), wire: true, color: c.follows ? "var(--dim)" : c.router === null ? "var(--info)" : "var(--accent)", ...(c.follows ? { faint: true } : {}) },
+    // One nobody uses yet waits to the left of the frame.
+    let spare = 0;
+    for (const name of [null, ...ranks]) {
+      const bay = bays.find((b) => b.name === name);
+      const users = name === null ? who.callers.filter((c) => c.router === null).map((c) => c.name) : who.routers[name]!.users;
+      const id = name === null ? "router" : `router:${name}`;
+      const jobs = (bay?.callers ?? []).flatMap((c) => mine(c.name));
+      nodes.push({
+        id, type: "card", position: { x: bay ? left + bay.x + bay.w / 2 - W / 2 : left - ++spare * (W + GAP), y: under },
+        data: {
+          title: name ?? "default router", icon: <Split size={14} />, tone: jobs.length ? "accent" : users.length ? "info" : "warn", busy: jobs.length > 0,
+          sub: `${users.length ? `for ${users.map((u) => (u === EVERYONE ? "everyone else" : u)).join(", ")}` : "nobody uses it yet"}${name !== null && who.routers[name]!.strict ? " · never falls back" : ""}`,
+          tip: name === null ? "The rules everyone goes by unless wired to a router of their own. Click to open the Routing page." : "A rulebook of its own for the callers wired to it. Click to open it on the Routing page.",
+        } satisfies Card,
       });
-    });
+      // Every router's requests come together at the one point they are sent on from.
+      edges.push({ id: `e:${id}`, source: id, sourceHandle: "down", target: "join", targetHandle: "up", type: "flow", data: { jobs, pulses: pulsesFor(`e:${id}`, jobs), wire: true, color: "var(--dim)" } });
+      if (!bay) continue;
+      const box = `bay:${name ?? ""}`;
+      nodes.push({ id: box, type: "bay", parentId: "self", extent: "parent" as const, position: { x: bay.x, y: HOME }, style: { width: bay.w, height: bay.h }, data: { label: name === null ? "by the default router" : `by ${name}`, own: name !== null } satisfies Bay });
+      bay.callers.forEach((c, i) => {
+        nodes.push({ id: `caller:${c.name}`, type: "caller", parentId: box, extent: "parent" as const, position: { x: BAY.pad + (i % CALLER.cols) * (CALLER.w + CALLER.gap), y: BAY.head + Math.floor(i / CALLER.cols) * (CALLER.h + CALLER.gap) }, data: { ...c, busy: mine(c.name).length > 0, editable: true } satisfies Caller });
+      });
+      edges.push({
+        id: `e:${box}`, source: box, sourceHandle: "down", target: id, targetHandle: "up", type: "flow",
+        data: { jobs, pulses: pulsesFor(`e:${box}`, jobs), wire: true, color: name === null ? "var(--info)" : "var(--accent)" },
+      });
+    }
   }
   peers.forEach((p: NetNode, i) => {
     const block = blocks[i]!;
@@ -574,15 +610,11 @@ export function arrive(rf: ReactFlowInstance, top = 84): void {
   }, 250);
 }
 
-const ROUTER = "hearth.router";
 
 export function Topology() {
   const live = useStore((s) => s.data)!;
   const sel = useStore((s) => s.sel);
   const dark = document.documentElement.classList.contains("dark");
-  // The router is drawn unless this browser was told not to.
-  const [router, setRouter] = useState(() => { try { return localStorage.getItem(ROUTER) !== "off"; } catch { return true; } });
-  const flip = () => setRouter((on) => { try { localStorage.setItem(ROUTER, on ? "off" : "on"); } catch { /* per-browser nicety only */ } return !on; });
   // Who calls, and by which router, is read from the routing draft: wiring a caller here is a change to that draft.
   const draft = useEdit((s) => s.draft);
   const plan = useEdit((s) => s.plan);
@@ -608,7 +640,7 @@ export function Topology() {
     callers: callersIn(draft).map((name) => { const at = routerFor(draft, name); return { name, router: at.router, follows: !at.own }; }),
     routers: Object.fromEntries(Object.entries(obj(draft.routers)).map(([name, r]) => [name, { users: usersOf(draft, name), strict: obj(r).strict === true }])),
   } : null), [draft?.routers, draft?.callers, draft?.apiKeys, draft?.servers]);
-  const laid = useMemo(() => layout(data, sel, router, who), [data.net, data.q.jobs, data.flows, sel, router, who]);
+  const laid = useMemo(() => layout(data, sel, who), [data.net, data.q.jobs, data.flows, sel, who]);
   // The picture is fitted again once, when the draft's part of it (callers, routers, empty frames) first arrives.
   const drafted = who !== null;
   useEffect(() => { if (drafted && flow.current) arrive(flow.current, 0); }, [drafted]);
@@ -660,8 +692,12 @@ export function Topology() {
         if (!from.startsWith("caller:")) return;
         const at = "changedTouches" in e ? e.changedTouches[0]! : e;
         const to = document.elementFromPoint(at.clientX, at.clientY)?.closest(".react-flow__node")?.getAttribute("data-id") ?? "";
-        if (to !== "router" && !to.startsWith("router:")) return;
-        const [caller, name] = [from.slice(7), to === "router" ? null : to.slice(7)];
+        // Let go over a router, or over the callers that already go by one.
+        const over = to.startsWith("caller:") ? `bay:${who?.callers.find((x) => x.name === to.slice(7))?.router ?? ""}` : to;
+        if (over !== "router" && !over.startsWith("router:") && !over.startsWith("bay:")) return;
+        const [caller, name] = [from.slice(7), over === "router" ? null : over.slice(over.indexOf(":") + 1) || null];
+        const now = who?.callers.find((x) => x.name === caller);
+        if (now && !now.follows && now.router === name) return;
         change((d) => withCaller(d, caller, name));
         toast("ok", `${caller === EVERYONE ? "everyone else" : caller} goes by ${name === null ? "the default router" : `router ${name}`} in the draft — publish it on the Routing page`);
       }}
@@ -696,9 +732,6 @@ export function Topology() {
     >
       <Background gap={20} size={1} color="var(--border)" />
       <Controls showInteractive={false} position="bottom-left" />
-      <label className="absolute right-3 top-3 z-10 flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-panel/95 px-2 py-1 text-[11px] text-dim">
-        <input type="checkbox" checked={router} onChange={flip} />show the router
-      </label>
       {draft && adding && (
         <Refs.Provider value={refsOf(draft, live.catalog ?? [])}>
           <NewDialog spec={NEW[adding]!} taken={Object.keys(obj(draft[adding]))} onClose={() => setAdding(null)}

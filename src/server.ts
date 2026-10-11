@@ -4,7 +4,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
@@ -23,7 +23,7 @@ import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_HTML } from "./ui.js";
-import { createViews } from "./views.js";
+import { createViews, type KeyInfo } from "./views.js";
 import { multipartField, replaceMultipartField } from "./multipart.js";
 import { send, type UpstreamResponse } from "./upstream.js";
 
@@ -300,6 +300,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   /** A local identity, and what it may run: null is everything. */
   type Local = { caller: string; models: string[] | null };
 
+  /** When each key last authenticated here — the one per-key fact the config file cannot hold. */
+  const keySeen = new Map<string, number>();
+
   /** A local caller by api key; with no keys configured, loopback and nothing else. */
   function localCaller(req: IncomingMessage): Local | null {
     const given = bearer(req);
@@ -312,7 +315,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     let i = 0;
     for (const k of cfg.apiKeys) {
       if (secretEq(given, k)) {
-        return { caller: "key:" + (cfg.apiKeyLabels[i] || keyId(k)), models: cfg.apiKeyModels[i] ?? null };
+        const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
+        keySeen.set(caller, Date.now());
+        return { caller, models: cfg.apiKeyModels[i] ?? null };
       }
       i++;
     }
@@ -1048,8 +1053,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     { path: "/queue", auth: "local", handler: routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: routeQueueEvents },
 
+    // Mint and revoke write the config file, and the node follows it at once.
+    { path: ["/keys/mint", "/keys/revoke"], methods: ["POST"], auth: "local", handler: routeKeys },
+
     // The OpenAI surface: a peer may send us work here, and so may we.
     { path: "/v1/warm", methods: ["POST"], auth: "either", envelope: "openai", handler: routeWarm },
+    { path: "/v1/evict", methods: ["POST"], auth: "local", envelope: "openai", handler: routeEvict },
     { path: ["/v1/models", "/v1/models/*"], auth: "either", envelope: "openai", scoped: true,
       handler: routeModels },
     { path: "/v1/chat/completions", methods: ["POST"], auth: "either", envelope: "openai",
@@ -1469,6 +1478,82 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       backends: pool.all().map((b) => ({ name: b.name, ...pool.loadedCapacity(b) })),
     });
     return;
+  }
+
+  /** The keys page's rows: every key by its label and scope, with the last time it spoke to this node. */
+  const keysView = (): KeyInfo[] =>
+    cfg.apiKeys.map((k, i) => {
+      const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
+      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null };
+    });
+
+  // Drop a model off the card that serves it. Per-model where the backend can, because that
+  // leaves the card's other residents working; a whole-card clear only as its one and only verb,
+  // and then only when nothing else is resident to lose.
+  async function routeEvict(c: Call): Promise<void> {
+    try {
+      const body = await readJson(c.req);
+      const model = typeof body.model === "string" ? body.model.trim() : "";
+      if (model === "") throw new Refusal(400, "model is required");
+      const slot = pool.for(model);
+      const wire = pool.outboundId(model);
+      if (!slot.state.isWarm(wire)) throw new Refusal(409, `${model} is not resident on ${slot.name} — nothing to evict`);
+      // A request that is running would lose its model mid-answer.
+      const running = slot.scheduler.view().filter((j) => j.state === "running" && !j.offbox);
+      const mine = running.filter((j) => pool.outboundId(j.model) === wire).length;
+      if (mine > 0) throw new Refusal(409, `${model} is answering ${mine} request${mine > 1 ? "s" : ""} — evict it once ${mine > 1 ? "they finish" : "it finishes"}`);
+      let via: "model" | "card";
+      if (await slot.state.dropOne(wire)) {
+        via = "model";
+      } else if (slot.state.canUnload() && slot.state.loaded().length === 1 && running.length === 0) {
+        await slot.state.unload();
+        via = "card";
+      } else {
+        const others = slot.state.loaded().filter((m) => m !== wire);
+        throw new Refusal(409, others.length > 0
+          ? `${slot.name} keeps ${others.length} other resident model${others.length > 1 ? "s" : ""} and this kind can only clear the whole card`
+          : `${slot.name} cannot drop a single model`);
+      }
+      log.info("pool.evicted", { model, backend: slot.name, via, caller: c.caller });
+      json(c.res, 200, { model, backend: slot.name, evicted: true, via });
+    } catch (e) {
+      fail(c.res, e);
+    }
+  }
+
+  // The keys page's two writes: mint appends one entry, revoke removes one. Both land in the
+  // config file through the same patch path every other config change uses, and take effect at
+  // once. The plaintext comes back once, in the mint's answer.
+  async function routeKeys(c: Call): Promise<void> {
+    try {
+      const body = await readJson(c.req);
+      const label = typeof body.label === "string" ? body.label.trim() : "";
+      if (label === "" || label.length > 40) throw new Refusal(400, "label must be 1-40 characters");
+      if (c.path === "/keys/mint") {
+        if (cfg.apiKeyLabels.includes(label)) throw new Refusal(409, `label ${label} is already used`);
+        const models = Array.isArray(body.models)
+          ? [...new Set((body.models as unknown[]).map((m) => {
+              if (typeof m !== "string" || cfg.models[m] === undefined) throw new Refusal(400, `model ${JSON.stringify(m)} is not configured here`);
+              return m;
+            }))] as string[]
+          : null;
+        const key = "hkey_" + randomBytes(20).toString("hex");
+        const entry: Record<string, unknown> = { key, label };
+        if (models !== null && models.length > 0) entry.models = models;
+        const commit = config.patch({ ops: [{ path: ["apiKeys", cfg.apiKeys.length], value: entry }] });
+        log.info("keys.minted", { label, id: keyId(key), caller: c.caller });
+        json(c.res, 200, { key, label, models, restartPending: commit.restartPending });
+        return;
+      }
+      const i = cfg.apiKeyLabels.indexOf(label);
+      if (i < 0) throw new Refusal(404, `no key labeled ${label}`);
+      const commit = config.patch({ ops: [{ path: ["apiKeys", i], delete: true }] });
+      keySeen.delete("key:" + label);
+      log.info("keys.revoked", { label, caller: c.caller });
+      json(c.res, 200, { label, revoked: true, restartPending: commit.restartPending });
+    } catch (e) {
+      failConfig(c.res, e);
+    }
   }
 
   // Ask a model to be resident without generating. Queued like any job, since loading one evicts
@@ -2328,6 +2413,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // Drawn whether or not it is on, so "not configured" and "configured and
     // quiet" are not the same blank tile.
     canary: () => canary?.page() ?? { enabled: false, passive: false, recovery: false, models: {} },
+    keys: keysView,
   });
 
   /** Expired sessions, swept like any other in-memory state; unref'd so it never holds the process. */

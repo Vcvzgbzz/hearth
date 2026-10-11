@@ -294,4 +294,6 @@ export interface UiData {
   layout?: Record<string, { x: number; y: number }>;
   /** The canary's verdict per model. Absent only on an older server's payload. */
   canary?: Canary;
+  /** Every api key: its label (or hash where unlabeled), its model scope, and the last time it spoke here. */
+  keys?: { label: string; id: string; models: string[] | null; lastSeen: number | null }[];
 }

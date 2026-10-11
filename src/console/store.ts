@@ -18,7 +18,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export type Page = "topology" | "routing" | "models" | "queue" | "logs" | "config";
+export type Page = "topology" | "routing" | "models" | "keys" | "queue" | "logs" | "config";
 export type Sel = { kind: "self" | "peer" | "backend" | "resource" | "machine"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 
@@ -162,6 +162,48 @@ export async function logout(): Promise<void> {
     await fetch("/logout", { method: "POST" });
   } catch { /* the reload is the point anyway */ }
   location.reload();
+}
+
+/** Ask a model to be resident: the same request chat makes, minus the generation. */
+export async function warm(model: string): Promise<void> {
+  try {
+    const d = await request<{ note?: string }>("POST", "/v1/warm", { model });
+    toast("ok", d.note ?? `${model} is warm`);
+  } catch (e) {
+    toast("bad", (e as Error).message);
+  }
+}
+
+/** Drop a model off the card that serves it; the server declines what it must not. */
+export async function evict(model: string): Promise<void> {
+  try {
+    const d = await request<{ backend: string; via: "model" | "card" }>("POST", "/v1/evict", { model });
+    toast("ok", `${model} is off ${d.backend}${d.via === "card" ? " (whole card)" : ""}`);
+  } catch (e) {
+    toast("bad", (e as Error).message);
+  }
+}
+
+/** Mint a key into hearth.yaml. The plaintext comes back once, in this result. */
+export async function mintKey(label: string, models: string[] | null): Promise<string | null> {
+  try {
+    const d = await request<{ key: string }>("POST", "/keys/mint", { label, ...(models !== null && models.length > 0 ? { models } : {}) });
+    toast("ok", `key for ${label} minted — it is shown once, below`);
+    return d.key;
+  } catch (e) {
+    toast("bad", (e as Error).message);
+    return null;
+  }
+}
+
+/** Revoke a key by label; it stops authenticating at once. */
+export async function revokeKey(label: string): Promise<void> {
+  try {
+    await request("POST", "/keys/revoke", { label });
+    toast("ok", `${label} revoked`);
+  } catch (e) {
+    toast("bad", (e as Error).message);
+  }
 }
 
 function askForKey(): Promise<string | null> {

@@ -81,6 +81,7 @@ export function Logs() {
   const [persisted, setPersisted] = useState(true);
   const [level, setLevel] = useState<"all" | "warn" | "error">("all");
   const [requests, setRequests] = useState(true);
+  const [model, setModel] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<number | null>(null);
   useEffect(() => {
@@ -98,10 +99,13 @@ export function Logs() {
     return () => { live = false; clearInterval(id); };
   }, []);
 
+  // The models a filter could name: every one that has a line, newest line wins nothing — the set is the set.
+  const models = [...new Set((entries ?? []).map((e) => e.fields.model).filter((m): m is string => typeof m === "string" && m !== ""))].sort();
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = (entries ?? []).map((e, i) => ({ e, i, text: say(e) })).reverse().filter(({ e, text }) =>
     (level === "all" || (level === "warn" ? e.level !== "info" && e.level !== "debug" : e.level === "error"))
     && (requests || e.msg !== "request")
+    && (model === "" || e.fields.model === model)
     && words.every((w) => `${text} ${e.msg}`.toLowerCase().includes(w)));
 
   return (
@@ -120,6 +124,11 @@ export function Logs() {
           <option value="all">all levels</option>
           <option value="warn">warnings and errors</option>
           <option value="error">errors</option>
+        </select>
+        <select value={model} onChange={(e) => setModel(e.target.value)} aria-label="model"
+                className="h-8 max-w-44 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none">
+          <option value="">all models</option>
+          {models.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
         <label className="flex items-center gap-1.5 text-[12px] text-dim">
           <input type="checkbox" checked={requests} onChange={(e) => setRequests(e.target.checked)} />requests

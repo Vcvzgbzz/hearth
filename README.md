@@ -241,6 +241,8 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
 | `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
+| `/keys/mint`, `/keys/revoke` | local | `POST { label, models? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
+| `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
 | `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, headers?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
 | `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |
@@ -647,18 +649,23 @@ Five pages, and ⌘K jumps to anything on them:
   anything for its details and controls. A **Router** under the node stands
   between it and everything that can run a request, peers on one side and
   hardware on the other; it is the node the Routing page starts from, and a
-  click opens that page. Untick **show the router** to draw the lines straight
-  from the node.
+  click opens that page. With callers wired to routers of their own, the node
+  is a frame holding its callers, boxed by the router each goes by, and every
+  router's line meets at one point that the peers and hardware hang off.
 - **Routing**: every model name, the rules some pass through, and where each
   ends up, as a map you edit. See [Editing on the graph](#editing-on-the-graph).
 - **Models**: every model on one row: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
-  view; this is all of them at once.
+  view; this is all of them at once. A model served here can be warmed or
+  evicted from its row.
+- **Keys**: every api key by label, what it may run and when it last spoke to
+  this node. Mint one (shown once) or revoke one by its label.
 - **Queue**: jobs in flight, and finished requests per model with how long they
-  waited and ran, over the last ten minutes or the last day. The day view adds
+  waited and ran, over the last ten minutes or the last day; a row opens to
+  its individual calls. The day view adds
   a chart of requests per 15 minutes, failures in red, with queue depth behind.
 - **Logs**: hearth's recent log lines as sentences, newest first, with a level
-  filter, a search, and the raw fields a click away.
+  filter, a model filter, a search, and the raw fields a click away.
 - **Config**: `hearth.yaml` by section, or as text. See below.
 
 The live view is 120 samples taken every 5s. The day view and the Logs page are

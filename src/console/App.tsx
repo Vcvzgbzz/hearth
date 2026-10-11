@@ -1,10 +1,10 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
-import { CanaryAlert, History, Inspector, Models, Queue } from "./pages.js";
+import { CanaryAlert, History, Inspector, Keys, Models, Queue } from "./pages.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
 import { go, login, logout, restartNode, select, useStore, type Page } from "./store.js";
@@ -18,6 +18,7 @@ const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "routing", label: "Routing", icon: Split },
   { id: "models", label: "Models", icon: Boxes },
+  { id: "keys", label: "Keys", icon: KeyRound },
   { id: "queue", label: "Queue", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
   { id: "config", label: "Config", icon: FileCog },
@@ -362,6 +363,7 @@ export default function App() {
         ) : (
           <div className="min-h-0 flex-1 overflow-auto p-5">
             {page === "models" && <Models />}
+            {page === "keys" && <Keys />}
             {page === "queue" && <><Queue /><History /></>}
             {/* What has been published, and the way back to it, wherever the file is edited. */}
             {page === "config" && <><div className="mb-2 flex justify-end"><VersionsHere /></div><Config /></>}

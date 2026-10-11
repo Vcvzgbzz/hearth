@@ -38,6 +38,14 @@ export interface CanaryView {
   models: Record<string, CanaryModelView>;
 }
 
+/** One api key, as the keys page draws it: who it is, what it may run, when it last spoke to this node. */
+export interface KeyInfo {
+  label: string;
+  id: string;
+  models: string[] | null;
+  lastSeen: number | null;
+}
+
 export interface ViewDeps {
   cfg: HearthConfig;
   pool: BackendPool;
@@ -55,9 +63,11 @@ export interface ViewDeps {
   flowHits: () => Record<string, number[]>;
   /** The canary's state, and whether one is configured at all. */
   canary: () => CanaryView;
+  /** The keys page's rows, with last-seen — the one per-key fact only this process can know. */
+  keys: () => KeyInfo[];
 }
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -112,6 +122,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       // Every flow in force.
       flows: flowsOf(cfg),
       flowHits: flowHits(),
+      // Every api key, by label and scope, with when it last authenticated here.
+      keys: keys(),
       // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
       actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
       // Where the operator placed topology nodes; the page lays out the rest.

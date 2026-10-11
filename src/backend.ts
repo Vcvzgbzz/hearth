@@ -169,6 +169,18 @@ export class BackendState {
     this.lastUpdateAt = Date.now();
   }
 
+  /**
+   * Drop one resident model and leave the rest; true once it is gone. False where this kind
+   * cannot name a model to drop — the caller then decides whether clearing the whole card is safe.
+   */
+  async dropOne(model: string): Promise<boolean> {
+    const fn = this.k.unloadModel;
+    if (fn === undefined) return false;
+    const dropped = await fn(this.url, model, this.log);
+    if (dropped) await this.refresh().catch(() => {});
+    return dropped;
+  }
+
   /** Can this backend tell us what is loaded at all? */
   knowsWarm(): boolean {
     return this.warmIsKnown;
