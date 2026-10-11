@@ -88,6 +88,12 @@ export async function loadDraft(): Promise<void> {
   else {
     const moved = rebase(mine.base, mine.draft, file.doc);
     if ("doc" in moved) set({ file, draft: moved.doc, err: null, plan: null });
+    // Changes kept from before a reload that no longer fit the file are let go, and said so: there is nothing on screen to keep editing.
+    else if (!now.draft) {
+      try { sessionStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
+      set({ file, draft: file.doc, err: null, plan: null, past: [] });
+      toast("bad", `Unsaved changes from before could not be carried over: ${moved.clash} has changed in the file since.`);
+    }
     else set({ err: { message: `Someone else changed ${moved.clash} while you were editing it. Discard your changes to see theirs, or keep editing and save over it from the Config page.`, path: null } });
   }
   stepping = false;
@@ -200,6 +206,8 @@ export async function review(): Promise<void> {
             const out = await request<{ restartPending: string[] }>("PATCH", "/config", body);
             toast("ok", out.restartPending.length ? `saved — restart to apply ${out.restartPending.join(", ")}` : "saved and applied");
             stepping = true;
+            // Saved: nothing is left to carry over a reload.
+            try { sessionStorage.removeItem(KEPT); } catch { /* nothing kept, then */ }
             set({ file: null, draft: null, pending: [] });
             stepping = false;
             await loadDraft();

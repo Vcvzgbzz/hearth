@@ -164,6 +164,11 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   // Both changed the same rule: neither is thrown away without a person saying which.
   const clash = rebase(doc(), pointStep(doc(), "pick", 1, { kind: "model", model: "other" })!, pointStep(doc(), "pick", 1, { kind: "model", model: "image" })!);
   assert.deepEqual(clash, { clash: "flows.pick" });
+  // A draft read back after its own save: the file already says what it wanted, so nothing clashes.
+  const saved = rebase(doc(), mine, mine);
+  assert.deepEqual(saved, { doc: mine });
+  const { servers: _gone, ...dropped } = doc();
+  assert.deepEqual(rebase(doc(), dropped, dropped), { doc: dropped }, "a removal that already happened included");
 }
 
 // --- what a person can fix is said before the file refuses it -----------------------------------------------------

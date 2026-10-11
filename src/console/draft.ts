@@ -321,7 +321,9 @@ export function applyOps(doc: Doc, ops: Op[]): Doc {
  */
 export function rebase(base: Doc, draft: Doc, fresh: Doc): { doc: Doc } | { clash: string } {
   const ops = opsOf(base, draft);
-  const hit = ops.find((op) => JSON.stringify(at(base, op.path)) !== JSON.stringify(at(fresh, op.path)));
+  // A setting the file already has as the draft wants it is no clash: that is the draft's own save, read back.
+  const wants = (op: Op) => JSON.stringify(op.delete ? undefined : op.value);
+  const hit = ops.find((op) => JSON.stringify(at(base, op.path)) !== JSON.stringify(at(fresh, op.path)) && JSON.stringify(at(fresh, op.path)) !== wants(op));
   return hit ? { clash: hit.path.slice(0, 2).join(".") } : { doc: applyOps(fresh, ops) };
 }
 
