@@ -1470,6 +1470,15 @@ follows `default`; one you have sent somewhere stays there when `default` moves.
 The change joins the routing draft and is published from the Routing page.
 Clicking a router opens its rules there.
 
+The rest of the Topology page is edited where it stands too, into the same
+draft: **+ backend**, **+ hardware** and **+ machine** add one; clicking a
+backend, a card or a machine opens its settings beside the picture; and a
+backend's card is dragged onto other hardware or another machine to say where
+it runs. Hardware and machines with nothing on them yet are drawn empty, to be
+dragged onto. Backends drawn as chips (more than three on one card) are moved
+from their settings. **review & publish** there shows the diff and says what
+needs a restart before anything is written.
+
 On the Routing page the first button says which rulebook is on the map. Its
 menu switches between them and starts a new one, from the rules shown or from
 one that refuses everything. With a router shown, the buttons beside it say

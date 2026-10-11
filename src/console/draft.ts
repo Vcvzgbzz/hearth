@@ -98,8 +98,10 @@ export function draftView(doc: Doc, live: UiData): UiData {
   const peers: NetNode[] = Object.entries(obj(doc.peers)).map(([name, p]) =>
     live.net.nodes.find((n) => !n.self && n.name === name)
       ?? { name, up: false, map: obj(obj(p).models) as Record<string, string>, free: null, slots: null, queued: null });
+  // What holds a card right now is the running node's to say; what the card is, the draft's.
   const resources: Resource[] = Object.entries(obj(doc.resources)).map(([name, r]) => ({
-    name, kind: (text(obj(r).kind) || "gpu") as Resource["kind"], shared: obj(r).shared === true, holder: null, backends: [],
+    holder: null, backends: [], ...(live.net.resources ?? []).find((x) => x.name === name),
+    name, kind: (text(obj(r).kind) || "gpu") as Resource["kind"], shared: obj(r).shared === true,
   }));
   const routing: Record<string, Routing> = {};
   for (const [id, m] of Object.entries(obj(doc.models))) {

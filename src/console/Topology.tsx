@@ -8,14 +8,15 @@ import {
   applyNodeChanges, Background, BaseEdge, Controls, getBezierPath, Handle, Position, ReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
-import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Server, Split, Users } from "lucide-react";
+import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Plus, RotateCcw, Save, Server, Split, Undo2, Users } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
-import { callersIn, EVERYONE, obj, routerFor, usersOf, withCaller } from "./draft.js";
-import { change, loadDraft, showRouter, useEdit } from "./editStore.js";
+import { NEW, NewDialog, Refs, refsOf, Review } from "./config.js";
+import { callersIn, draftView, EVERYONE, list, obj, put, routerFor, usersOf, withCaller } from "./draft.js";
+import { change, changed, dirty, loadDraft, revert, review, showRouter, undo, useEdit } from "./editStore.js";
 import { control, go, select, toast, useStore } from "./store.js";
-import { cx, Dot, type Tone } from "./ui.js";
+import { Button, cx, Dot, type Tone } from "./ui.js";
 
 /** `tags`: hardware a backend uses besides the group it sits in. `tip`: what the status dot is saying. */
 type Card = { title: string; sub: string; tone: Tone; icon: ReactNode; meter?: [number, number]; busy?: boolean; selected?: boolean; tags?: string[]; tip?: string };
@@ -72,7 +73,7 @@ const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
 
 /** A card or CPU: the frame its backends sit in, so "runs on" needs no line. */
 type Chip = { name: string; tone: Tone; busy: boolean; sub: string };
-type Group = { title: string; sub: string; icon: ReactNode; hot: boolean; selected?: boolean; tip?: string; chips?: Chip[]; picked?: string };
+type Group = { /** What a backend let go here is given: this hardware, on this machine. */ drop?: { resource: string; server: string }; title: string; sub: string; icon: ReactNode; hot: boolean; selected?: boolean; tip?: string; chips?: Chip[]; picked?: string };
 
 const GroupNode = memo(function GroupNode({ data }: NodeProps<Node<Group>>) {
   return (
@@ -105,7 +106,7 @@ const GroupNode = memo(function GroupNode({ data }: NodeProps<Node<Group>>) {
 });
 
 /** One machine: the frame around the backends on it. Drawn only once a config names another machine. */
-type Machine = { title: string; sub: string };
+type Machine = { title: string; sub: string; /** The machine a backend let go here is put on. */ drop?: { server: string } };
 
 const MachineNode = memo(function MachineNode({ data }: NodeProps<Node<Machine>>) {
   return (
@@ -286,7 +287,7 @@ function backendSub(b: Backend, run: number): string {
  * Deterministic, so nothing moves per tick.
  */
 /** Who calls and which router each goes by, as the draft has it; null where there is no draft to read them from. */
-type Who = { callers: { name: string; router: string | null; follows: boolean }[]; routers: Record<string, { users: string[]; strict: boolean }> } | null;
+type Who = { /** Machines the draft names, with or without anything on them yet. */ servers: string[]; callers: { name: string; router: string | null; follows: boolean }[]; routers: Record<string, { users: string[]; strict: boolean }> } | null;
 
 function layout(d: UiData, sel: { kind: string; id: string } | null, router: boolean, who: Who = null) {
   const self = d.net.nodes.find((n) => n.self)!;
@@ -315,21 +316,24 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
 
   // Backends sit in the hardware they use, and hardware in the machine it is on, this one first.
   const resources = d.net.resources ?? [];
-  const framed = (self.backends ?? []).some((b) => b.server);
-  const machines = [...new Set(["", ...(self.backends ?? []).map((b) => b.server ?? "")])];
+  const framed = (self.backends ?? []).some((b) => b.server) || (who?.servers.length ?? 0) > 0;
+  const machines = [...new Set(["", ...(self.backends ?? []).map((b) => b.server ?? ""), ...(who?.servers ?? [])])];
   // The first exclusive card a backend names, else its first resource; one that names none sits in the machine itself.
   const homeOf = (b: Backend) => (b.resources ?? []).find((r) => resources.some((x) => x.name === r && !x.shared)) ?? (b.resources ?? [])[0] ?? "";
   const order = [...resources.filter((r) => !r.shared), ...resources.filter((r) => r.shared)].map((r) => r.name);
   let y = 0;
+  // Hardware nothing uses yet is drawn on this machine while there is a draft, so a backend can be dragged onto it.
+  const loose = who ? order.filter((r) => !(self.backends ?? []).some((b) => homeOf(b) === r)) : [];
   for (const machine of machines) {
     const members = (self.backends ?? []).filter((b) => (b.server ?? "") === machine);
-    if (members.length === 0 && (machine === "" || !framed)) continue;
+    const spare = machine === "" ? loose : [];
+    if (members.length === 0 && spare.length === 0 && (machine === "" || !framed)) continue;
     const frame = framed ? `machine:${machine}` : undefined;
     const left = frame ? FRAME.pad : X.group;
     let top = frame ? FRAME.head : y;
     const inside: Node[] = [];
     let wide = W + PAD * 2;
-    const keys = [...new Set(members.map(homeOf))].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99)));
+    const keys = [...new Set([...members.map(homeOf), ...spare])].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99)));
     for (const key of keys) {
       const group = key === "" ? undefined : `resource:${frame ? `${machine}/` : ""}${key}`;
       const r: Resource | undefined = resources.find((x) => x.name === key);
@@ -338,12 +342,13 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
       // Many small backends read as chips behind one line; a few big ones keep a card and a line each.
       const chips = group !== undefined && mine.length > 3;
       const width = chips ? 2 * 150 + 6 + 24 : W + PAD * 2;
-      const height = chips ? HEAD + 4 + Math.ceil(mine.length / 2) * 38 + 6 : (group ? HEAD + PAD : 0) + mine.length * H + (mine.length - 1) * GAP;
+      const height = chips ? HEAD + 4 + Math.ceil(mine.length / 2) * 38 + 6 : mine.length === 0 ? HEAD + 34 : (group ? HEAD + PAD : 0) + mine.length * H + (mine.length - 1) * GAP;
       wide = Math.max(wide, width);
       if (!chips) mine.forEach((b, n) => {
         const run = runningIds.get(b.name) ?? [];
         cards.push({
-          id: `backend:${b.name}`, type: "card", ...(group ?? frame ? { parentId: group ?? frame, extent: "parent" as const } : {}),
+          // With a draft it can be dragged out of its frame, onto other hardware or another machine.
+          id: `backend:${b.name}`, type: "card", ...(group ?? frame ? { parentId: group ?? frame, ...(who ? {} : { extent: "parent" as const }) } : {}), ...(who ? { draggable: true, zIndex: 5 } : {}),
           position: group ? { x: PAD, y: HEAD + n * (H + GAP) } : { x: left + PAD, y: top + n * (H + GAP) },
           data: {
             title: b.name, icon: <Server size={14} />, tone: run.length > 0 ? "accent" : backendTone(b), tip: backendTip(b, run.length),
@@ -360,9 +365,10 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
         inside.push({
           id: group, type: "hardware", ...(frame ? { parentId: frame, extent: "parent" as const } : {}), position: { x: left, y: top }, style: { width, height },
           data: {
+            drop: { resource: key, server: machine },
             title: key, hot: all.length > 0, selected: is("resource", key),
             icon: r?.kind === "cpu" ? <Cpu size={13} /> : <CircuitBoard size={13} />,
-            sub: r?.shared ? "shared" : r?.holder ? `· in use by ${r.holder}` : r ? "· not in use" : "",
+            sub: mine.length === 0 ? "· nothing on it yet: drag a backend here" : r?.shared ? "shared" : r?.holder ? `· in use by ${r.holder}` : r ? "· not in use" : "",
             tip: r?.shared ? "Several backends use this at once; hearth does not make them take turns." : "One backend uses this at a time; the others on it wait their turn.",
             ...(chips ? {
               picked: sel?.kind === "backend" ? sel.id : undefined,
@@ -381,7 +387,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
     if (frame) {
       nodes.push({
         id: frame, type: "machine", position: { x: X.group - FRAME.pad, y }, style: { width: wide + FRAME.pad * 2, height },
-        data: { title: machine || self.name, sub: machine ? (members.length ? "" : "nothing on it yet") : "this machine" } satisfies Machine,
+        data: { drop: { server: machine }, title: machine || self.name, sub: machine ? (members.length ? "" : "nothing on it yet: drag a backend here") : "this machine" } satisfies Machine,
       });
     }
     nodes.push(...inside);
@@ -522,8 +528,19 @@ export function arrive(rf: ReactFlowInstance, top = 84): void {
 
 const ROUTER = "hearth.router";
 
+/** A backend given the hardware or the machine it was let go on. Hardware replaces what it sat in; anything else it uses stays. */
+function moved(doc: Record<string, unknown>, backend: string, to: { resource?: string; server: string }): Record<string, unknown> {
+  const { server: _, ...b } = obj(obj(doc.backends)[backend]);
+  const shared = (r: string) => obj(obj(doc.resources)[r]).shared === true;
+  const had = list(b.resources);
+  // The card it sat in is the first exclusive one it names, else the first; that is the one a move replaces.
+  const home = had.find((r) => !shared(r)) ?? had[0];
+  const resources = to.resource === undefined ? had : [to.resource, ...had.filter((r) => r !== home && r !== to.resource)];
+  return put(doc, "backends", backend, { ...b, ...(resources.length ? { resources } : {}), ...(to.server ? { server: to.server } : {}) });
+}
+
 export function Topology() {
-  const data = useStore((s) => s.data)!;
+  const live = useStore((s) => s.data)!;
   const sel = useStore((s) => s.sel);
   const dark = document.documentElement.classList.contains("dark");
   // The router is drawn unless this browser was told not to.
@@ -531,12 +548,20 @@ export function Topology() {
   const flip = () => setRouter((on) => { try { localStorage.setItem(ROUTER, on ? "off" : "on"); } catch { /* per-browser nicety only */ } return !on; });
   // Who calls, and by which router, is read from the routing draft: wiring a caller here is a change to that draft.
   const draft = useEdit((s) => s.draft);
-  const hash = data.config.hash;
+  const plan = useEdit((s) => s.plan);
+  const past = useEdit((s) => s.past);
+  const isDirty = useEdit(dirty);
+  const changes = useEdit(changed);
+  const [adding, setAdding] = useState<string | null>(null);
+  // What is drawn is the draft where there is one: something added or moved shows before it is published.
+  const data = useMemo(() => (draft ? draftView(draft, live) : live), [draft, live]);
+  const hash = live.config.hash;
   useEffect(() => { if (!useEdit.getState().file) void loadDraft(); }, [hash]);
   const who = useMemo<Who>(() => (draft ? {
+    servers: Object.keys(obj(draft.servers)),
     callers: callersIn(draft).map((name) => { const at = routerFor(draft, name); return { name, router: at.router, follows: !at.own }; }),
     routers: Object.fromEntries(Object.entries(obj(draft.routers)).map(([name, r]) => [name, { users: usersOf(draft, name), strict: obj(r).strict === true }])),
-  } : null), [draft?.routers, draft?.callers, draft?.apiKeys]);
+  } : null), [draft?.routers, draft?.callers, draft?.apiKeys, draft?.servers]);
   const laid = useMemo(() => layout(data, sel, router, who), [data.net, data.q.jobs, data.flows, sel, router, who]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
@@ -562,13 +587,22 @@ export function Topology() {
       colorMode={dark ? "dark" : "light"} proOptions={{ hideAttribution: true }}
       onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes, ns))}
       onNodeDragStart={(_, n) => { dragging.current = n.id; }}
-      onNodeDragStop={() => { dragging.current = null; }}
+      // A backend let go over hardware or a machine is put there in the draft; let go anywhere else, it goes back.
+      onNodeDragStop={(e, n) => {
+        dragging.current = null;
+        const at = "changedTouches" in e ? (e as unknown as TouchEvent).changedTouches[0]! : e;
+        const under = document.elementsFromPoint(at.clientX, at.clientY).map((el) => el.closest(".react-flow__node")?.getAttribute("data-id") ?? "").filter((id) => id.startsWith("resource:") || id.startsWith("machine:"));
+        const drop = (laid.nodes.find((x) => x.id === under[0])?.data as { drop?: { resource?: string; server: string } } | undefined)?.drop;
+        if (draft && drop && n.id.startsWith("backend:")) change((d) => moved(d, n.id.slice(8), drop));
+        setNodes(laid.nodes);
+      }}
       onNodeClick={(_, n) => {
         const [kind, ...rest] = n.id.split(":");
         const id = kind === "self" ? data.net.nodes.find((x) => x.self)!.name : rest.join(":");
         if (kind === "router") { if (useEdit.getState().draft) showRouter(rest.length ? rest.join(":") : null); go("routing"); }
         else if (kind === "self" || kind === "peer" || kind === "backend") select({ kind, id });
         else if (kind === "resource") select({ kind, id: id.split("/").pop()! });
+        else if (kind === "machine" && id) select({ kind, id });
       }}
       onPaneClick={() => select(null)}
     >
@@ -577,6 +611,36 @@ export function Topology() {
       <label className="absolute right-3 top-3 z-10 flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-panel/95 px-2 py-1 text-[11px] text-dim">
         <input type="checkbox" checked={router} onChange={flip} />show the router
       </label>
+      {/* With a draft the picture is edited where it stands: add to it, drag a backend to other hardware, click anything for its settings. */}
+      {draft && (
+        <div className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel/95 px-2 py-1.5 shadow-sm">
+          {(["backends", "resources", "servers"] as const).map((k) => (
+            <button key={k} type="button" className="flex h-7 items-center gap-1 rounded-lg border border-line bg-panel px-2 text-[12px] hover:bg-muted" onClick={() => setAdding(k)}>
+              <Plus size={12} />{k === "servers" ? "machine" : NEW[k]!.noun}
+            </button>
+          ))}
+          {isDirty && (
+            <>
+              <span className="ml-1 flex items-center gap-1.5 text-[12px] text-accent"><span className="size-1.5 rounded-full bg-accent" />draft · {changes} {changes === 1 ? "change" : "changes"}</span>
+              <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
+              <Button onClick={revert}><RotateCcw size={13} />discard draft</Button>
+              <Button tone="primary" onClick={() => void review()}><Save size={13} />review &amp; publish</Button>
+            </>
+          )}
+        </div>
+      )}
+      {draft && adding && (
+        <Refs.Provider value={refsOf(draft, live.catalog ?? [])}>
+          <NewDialog spec={NEW[adding]!} taken={Object.keys(obj(draft[adding]))} onClose={() => setAdding(null)}
+                     note={adding === "backends" ? "It joins the draft. Drag it onto the hardware it uses, or click it for the rest of its settings." : "It joins the draft and is drawn at once, empty: drag a backend onto it."}
+                     onCreate={(id, vals) => {
+                       change((d) => put(d, adding, id, vals));
+                       select({ kind: adding === "backends" ? "backend" : adding === "resources" ? "resource" : "machine", id });
+                       setAdding(null);
+                     }} />
+        </Refs.Provider>
+      )}
+      {plan && <Review plan={plan} onClose={() => useEdit.setState({ plan: null })} />}
     </ReactFlow>
   );
 }

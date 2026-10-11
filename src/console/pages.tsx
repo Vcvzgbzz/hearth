@@ -1,9 +1,11 @@
 /** The pages beside the topology, and the inspector sheet that opens over it. */
-import { X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { UiData } from "./types.js";
-import { useEdit } from "./editStore.js";
+import { Refs, refsOf, Value } from "./config.js";
+import { draftView, isObj, obj, put } from "./draft.js";
+import { change, useEdit } from "./editStore.js";
 import { control, go, select, useStore } from "./store.js";
 import { ago, Card, cx, Empty, mono, Pill, Switch, type Tone } from "./ui.js";
 
@@ -59,12 +61,20 @@ export function CanaryAlert() {
   );
 }
 
+/** Where each kind of thing on the topology is kept in the file. */
+const KEPT: Record<string, string> = { backend: "backends", resource: "resources", machine: "servers" };
+
 export function Inspector() {
-  const d = useStore((s) => s.data)!;
+  const live = useStore((s) => s.data)!;
   const sel = useStore((s) => s.sel);
   const draft = useEdit((s) => s.draft);
+  const err = useEdit((s) => s.err);
   const editable = draft !== null;
   if (!sel) return null;
+  // What is drawn is the draft where there is one, so something added or moved can be opened before it is published.
+  const d = draft ? draftView(draft, live) : live;
+  const section = KEPT[sel.kind];
+  const entry = draft && section ? obj(draft[section])[sel.id] : undefined;
   const self = selfOf(d);
   let title = sel.id;
   let body: React.ReactNode = null;
@@ -85,7 +95,7 @@ export function Inspector() {
     const drafted = entry ? { server: entry.server ?? "", resources: entry.resources ?? [] } : null;
     if (b) body = (
       <>
-        <Row k="kind">{b.kind}{b.evicts ? " · swaps models" : ""}</Row>
+        <Row k="kind">{b.kind ?? "not said yet"}{b.evicts ? " · swaps models" : ""}</Row>
         <Row k="address"><span className={mono}>{b.url}</span></Row>
         <Row k="runs on">{drafted ? `${drafted.server || "this machine"}${(drafted.server || "") !== (b.server ?? "") ? " (unsaved)" : ""}` : b.server ?? "this machine"}</Row>
         <Row k="slots"><span className="tabular">{(b.slots ?? 0) - (b.free ?? 0)} of {b.slots ?? 0} busy · {b.queued ?? 0} queued</span></Row>
@@ -126,6 +136,9 @@ export function Inspector() {
         )}
       </>
     );
+  } else if (sel.kind === "machine") {
+    const on = (self.backends ?? []).filter((b) => (b.server ?? "") === sel.id).map((b) => b.name);
+    body = <Row k="backends">{on.join(", ") || "nothing on it yet"}</Row>;
   } else {
     const r = (d.net.resources ?? []).find((x) => x.name === sel.id);
     if (r) body = (
@@ -139,19 +152,30 @@ export function Inspector() {
   }
 
   return (
-    <aside className="w-[340px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-10">
+    <aside className={cx("shrink-0 overflow-auto border-l border-line bg-panel p-4 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-10", isObj(entry) ? "w-[440px]" : "w-[340px]")}>
       <div className="mb-2 flex items-center">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind}</div>
           <div className="text-base font-semibold">{title}</div>
         </div>
         {/* What it is doing is here; what it is set to is the same node's settings. */}
-        {editable && (sel.kind === "backend" || sel.kind === "peer") && (
+        {editable && sel.kind === "peer" && (
           <button className="ml-auto rounded-md border border-line px-2 py-1 text-[11px] hover:bg-muted" onClick={() => go("config")}>settings</button>
         )}
-        <button className={cx("text-dim hover:text-fg", !(editable && (sel.kind === "backend" || sel.kind === "peer")) && "ml-auto")} aria-label="close" onClick={() => select(null)}><X size={16} /></button>
+        {isObj(entry) && <button className="ml-auto text-dim hover:text-bad" aria-label={`delete ${sel.id}`} title="take this out of the draft" onClick={() => { change((x) => put(x, section!, sel.id, undefined)); select(null); }}><Trash2 size={15} /></button>}
+        <button className={cx("text-dim hover:text-fg", !(isObj(entry) || (editable && sel.kind === "peer")) && "ml-auto")} aria-label="close" onClick={() => select(null)}><X size={16} /></button>
       </div>
       {body ?? <Empty>gone</Empty>}
+      {/* Its settings, as the Config page has them, changing the same draft. */}
+      {isObj(entry) && draft && (
+        <div className="mt-4 border-t border-line pt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-wide text-dim">settings</div>
+          <div className="mb-2 text-[11px] text-dim">Changes join the draft. Most of these apply only after a restart, which the review says before anything is written.</div>
+          <Refs.Provider value={refsOf(draft, d.catalog ?? [])}>
+            <Value name={sel.id} v={entry} path={[section!, sel.id]} err={err} compact onChange={(n) => change((x) => put(x, section!, sel.id, n))} />
+          </Refs.Provider>
+        </div>
+      )}
     </aside>
   );
 }

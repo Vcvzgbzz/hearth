@@ -19,7 +19,7 @@ const forgetKey = (): void => {
 };
 
 export type Page = "topology" | "routing" | "models" | "queue" | "logs" | "config";
-export type Sel = { kind: "self" | "peer" | "backend" | "resource"; id: string } | null;
+export type Sel = { kind: "self" | "peer" | "backend" | "resource" | "machine"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 
 interface State {
