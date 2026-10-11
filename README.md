@@ -176,7 +176,8 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
-| `routers.<name>` | none | A rulebook of its own for some callers: `callers` (api key labels, or `local`), `flows` in the shape of `flows:`, and `strict: true` to switch off backend route fallbacks for them. See [Routers](#routers). |
+| `routers.<name>` | none | A rulebook besides `flows:`: `flows` in the same shape, and `strict: true` to switch off backend route fallbacks for its callers. See [Routers](#routers). |
+| `callers.<who>` | none | Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default`. |
 | `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](#editing-on-the-graph); nodes without one are laid out |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](#flows) |
 | `historyFile` | unset | a file that keeps the console's day of history and its recent log lines across restarts, written every minute and at shutdown. Unset keeps them in memory |
@@ -1432,37 +1433,42 @@ model swapper's own endpoints) are not affected.
 
 #### Routers
 
-`flows:` is the rulebook everyone goes by. A router is another one, for the
-callers it names: an api key by its label, or `local` for this machine with no
-key. A caller goes by one router at most; anyone no router names keeps `flows:`.
+`flows:` is the default rulebook. A router is another one, and `callers:` says
+who goes by which: an api key by its label, `local` for this machine with no
+key, and `*` for everyone not named. A value is a name under `routers:`, or
+`default` for `flows:`. With no `callers:`, everyone goes by `flows:`.
 
 ```yaml
 routers:
   direct:
-    callers: [local]
     strict: true
     flows:
       chat: { inputs: [chat], steps: [{ to: my-model }] }
       anything-else: { inputs: ["*"], steps: [{ to: { refuse: "not offered here" } }] }
+callers:
+  local: direct        # requests from this machine go by routers.direct
+  # "*": direct        # ...or everyone does, with `app: default` to send one key back to flows:
 ```
 
 Here a request from this machine for `chat` runs on `my-model` whatever the
 rules in `flows:` would have done with it, and nothing else is offered to it.
-A router's callers are listed its own names on `/v1/models`. Each router needs
-its own flow for `*`, as `flows:` does.
+A caller is listed its own router's names on `/v1/models`. Each router needs its
+own flow for `*`, as `flows:` does, and none may be called `default`.
 
-`strict: true` also switches off a backend route's `fallback` for those
+`strict: true` also switches off a backend route's `fallback` for a router's
 callers, so a request runs on the model its rule names or fails. That is the
 setting for testing a model without wondering whether something else answered.
 
 A step's `max`, a flow's `sticky` and the line counts are kept by flow name, so
 two routers with a flow of the same name share them; only `flows:` is counted.
 
-The Topology page draws this node as a frame with its callers inside (every
-labelled api key, and `local`), each with a line to the router its requests go
-by, and each router under the default one. Drag a caller's dot onto a router to give it that rulebook, or onto the
-default router to take it back; the change joins the routing draft and is
-published from the Routing page. Clicking a router opens its rules there.
+The Topology page draws this node as a frame with its callers inside: `default`
+(everyone else), `local`, and every labelled api key, each with a line to the
+router its requests go by, and each router under the default one. Drag a
+caller's dot onto a router to send it there. A caller with a dashed line only
+follows `default`; one you have sent somewhere stays there when `default` moves.
+The change joins the routing draft and is published from the Routing page.
+Clicking a router opens its rules there.
 
 On the Routing page the first button says which rulebook is on the map. Its
 menu switches between them and starts a new one, from the rules shown or from

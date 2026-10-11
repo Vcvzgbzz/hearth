@@ -535,8 +535,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /** What a flow reads about this node, for a request with these needs. */
-  /** The router a caller goes by, if one names it: by its api key's label, or `local`. */
-  const routerOf = (caller: string) => Object.values(cfg.routers).find((r) => r.callers.some((n) => n === caller || `key:${n}` === caller));
+  /** The router a caller goes by, if not `flows:`: the one `callers:` gives it by its key's label or `local`, else the one it gives everyone. */
+  const routerOf = (caller: string) => cfg.routers[cfg.callers[caller.startsWith("key:") ? caller.slice(4) : caller] ?? cfg.callers["*"] ?? ""];
   /** The config as a caller's requests see it: its router's rulebook in place of `flows:`. */
   const rulesFor = (caller: string): HearthConfig => { const r = routerOf(caller); return r ? { ...cfg, flows: r.flows } : cfg; };
 

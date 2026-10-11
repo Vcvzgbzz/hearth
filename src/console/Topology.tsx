@@ -8,11 +8,11 @@ import {
   applyNodeChanges, Background, BaseEdge, Controls, getBezierPath, Handle, Position, ReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
-import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Server, Split } from "lucide-react";
+import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Server, Split, Users } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
-import { callersIn, list, obj, withCaller } from "./draft.js";
+import { callersIn, EVERYONE, obj, routerFor, usersOf, withCaller } from "./draft.js";
 import { change, loadDraft, showRouter, useEdit } from "./editStore.js";
 import { control, go, select, toast, useStore } from "./store.js";
 import { cx, Dot, type Tone } from "./ui.js";
@@ -52,20 +52,20 @@ const CardNode = memo(function CardNode({ data }: NodeProps<Node<Card>>) {
 });
 
 /** Someone whose requests arrive here: an api key by its label, or this machine with no key. */
-type Caller = { name: string; router: string | null; busy: boolean; editable: boolean };
+type Caller = { name: string; router: string | null; /** It only goes where everyone else does. */ follows: boolean; busy: boolean; editable: boolean };
 
 /** A caller, with a dot to draw to the router its requests go by. */
 const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
   return (
     <div className="w-[200px] rounded-xl border border-line bg-panel px-3 py-2 shadow-sm" title={data.editable ? "drag the dot onto a router to say which rules this caller's requests go by" : undefined}>
       <div className="flex items-center gap-2">
-        <span className="text-dim">{data.name === "local" ? <Monitor size={14} /> : <KeyRound size={14} />}</span>
-        <span className="truncate font-mono font-medium">{data.name}</span>
+        <span className="text-dim">{data.name === EVERYONE ? <Users size={14} /> : data.name === "local" ? <Monitor size={14} /> : <KeyRound size={14} />}</span>
+        <span className={cx("truncate font-medium", data.name !== EVERYONE && "font-mono")}>{data.name === EVERYONE ? "default" : data.name}</span>
         <span className="ml-auto"><Dot tone={data.busy ? "accent" : "info"} pulse={data.busy} /></span>
       </div>
-      <div className="mt-0.5 truncate text-[11px] text-dim">{data.name === "local" ? "this machine" : "api key"} · {data.router === null ? "default rules" : `router ${data.router}`}</div>
+      <div className="mt-0.5 truncate text-[11px] text-dim">{data.name === EVERYONE ? "everyone else" : data.name === "local" ? "this machine" : "api key"} · {data.follows ? "follows default" : data.router === null ? "default router" : `router ${data.router}`}</div>
       <Handle type="source" position={Position.Left} isConnectable={data.editable} style={{ left: -6 }}
-              className={cx("!h-3.5 !w-3.5 !border-2 !border-panel", data.router === null ? "!bg-info" : "!bg-accent", !data.editable && "!pointer-events-none")} />
+              className={cx("!h-3.5 !w-3.5 !border-2 !border-panel", data.follows ? "!bg-dim" : data.router === null ? "!bg-info" : "!bg-accent", !data.editable && "!pointer-events-none")} />
     </div>
   );
 });
@@ -286,7 +286,7 @@ function backendSub(b: Backend, run: number): string {
  * Deterministic, so nothing moves per tick.
  */
 /** Who calls and which router each goes by, as the draft has it; null where there is no draft to read them from. */
-type Who = { callers: string[]; routers: Record<string, { callers: string[]; strict: boolean }> } | null;
+type Who = { callers: { name: string; router: string | null; follows: boolean }[]; routers: Record<string, { users: string[]; strict: boolean }> } | null;
 
 function layout(d: UiData, sel: { kind: string; id: string } | null, router: boolean, who: Who = null) {
   const self = d.net.nodes.find((n) => n.self)!;
@@ -400,7 +400,8 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
         tip: "Decides where each request runs. Click to open the Routing page.",
       } satisfies Card,
     });
-    edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local) } });
+    // With the callers drawn, each one's own line says which router it reaches: this node needs none of its own.
+    if (!who) edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local) } });
   }
   const load = `${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`;
   // With its callers known, this node is the frame they stand in, over the router their requests go on to.
@@ -434,20 +435,23 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, router: boo
       nodes.push({
         id: `router:${name}`, type: "card", position: { x: X.self, y: mid - H / 2 + (i + 1) * (H + GAP) },
         data: {
-          title: name, icon: <Split size={14} />, tone: r.callers.length ? "accent" : "warn",
-          sub: `${r.callers.length ? `for ${r.callers.join(", ")}` : "nobody uses it yet"}${r.strict ? " · never falls back" : ""}`,
+          title: name, icon: <Split size={14} />, tone: r.users.length ? "accent" : "warn",
+          sub: `${r.users.length ? `for ${r.users.map((u) => (u === EVERYONE ? "default" : u)).join(", ")}` : "nobody uses it yet"}${r.strict ? " · never falls back" : ""}`,
           tip: "A rulebook of its own for the callers wired to it. Click to open it on the Routing page.",
         } satisfies Card,
       });
     });
     // Each caller stands inside this node's frame, with a line to the router its requests go by.
+    // A request from someone not drawn (a key with no label) is one of everyone else's.
+    const named = who.callers.map((c) => c.name);
+    const mine = (c: string) => d.q.jobs.filter((j) => j.state === "running" && !j.offbox
+      && (c === EVERYONE ? !named.includes(j.caller) && !named.includes(j.caller.replace(/^key:/, "")) : j.caller === c || j.caller === `key:${c}`)).map((j) => j.id);
     who.callers.forEach((c, i) => {
-      const own = names.find((n) => who.routers[n]!.callers.includes(c)) ?? null;
-      const jobs = d.q.jobs.filter((j) => j.state === "running" && (j.caller === c || j.caller === `key:${c}`)).map((j) => j.id);
-      nodes.push({ id: `caller:${c}`, type: "caller", parentId: "self", extent: "parent" as const, position: { x: PAD, y: HOME + i * (CALLER + GAP) }, data: { name: c, router: own, busy: jobs.length > 0, editable: true } satisfies Caller });
+      const jobs = mine(c.name);
+      nodes.push({ id: `caller:${c.name}`, type: "caller", parentId: "self", extent: "parent" as const, position: { x: PAD, y: HOME + i * (CALLER + GAP) }, data: { ...c, busy: jobs.length > 0, editable: true } satisfies Caller });
       edges.push({
-        id: `e:caller:${c}`, source: `caller:${c}`, target: own === null ? "router" : `router:${own}`, type: "flow",
-        data: { jobs, pulses: pulsesFor(`e:caller:${c}`, jobs), color: own === null ? "var(--info)" : "var(--accent)" },
+        id: `e:caller:${c.name}`, source: `caller:${c.name}`, target: c.router === null ? "router" : `router:${c.router}`, type: "flow",
+        data: { jobs, pulses: pulsesFor(`e:caller:${c.name}`, jobs), color: c.follows ? "var(--dim)" : c.router === null ? "var(--info)" : "var(--accent)", dashed: c.follows },
       });
     });
   }
@@ -530,9 +534,9 @@ export function Topology() {
   const hash = data.config.hash;
   useEffect(() => { if (!useEdit.getState().file) void loadDraft(); }, [hash]);
   const who = useMemo<Who>(() => (draft ? {
-    callers: callersIn(draft),
-    routers: Object.fromEntries(Object.entries(obj(draft.routers)).map(([name, r]) => [name, { callers: list(obj(r).callers), strict: obj(r).strict === true }])),
-  } : null), [draft?.routers, draft?.apiKeys]);
+    callers: callersIn(draft).map((name) => { const at = routerFor(draft, name); return { name, router: at.router, follows: !at.own }; }),
+    routers: Object.fromEntries(Object.entries(obj(draft.routers)).map(([name, r]) => [name, { users: usersOf(draft, name), strict: obj(r).strict === true }])),
+  } : null), [draft?.routers, draft?.callers, draft?.apiKeys]);
   const laid = useMemo(() => layout(data, sel, router, who), [data.net, data.q.jobs, data.flows, sel, router, who]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
@@ -552,8 +556,8 @@ export function Topology() {
         const to = document.elementFromPoint(at.clientX, at.clientY)?.closest(".react-flow__node")?.getAttribute("data-id") ?? "";
         if (to !== "router" && !to.startsWith("router:")) return;
         const [caller, name] = [from.slice(7), to === "router" ? null : to.slice(7)];
-        change((d) => withCaller(d, name ?? "", caller, name !== null));
-        toast("ok", `${caller} goes by ${name === null ? "the default rules" : `router ${name}`} in the draft — publish it on the Routing page`);
+        change((d) => withCaller(d, caller, name));
+        toast("ok", `${caller === EVERYONE ? "everyone else" : caller} goes by ${name === null ? "the default router" : `router ${name}`} in the draft — publish it on the Routing page`);
       }}
       colorMode={dark ? "dark" : "light"} proOptions={{ hideAttribution: true }}
       onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes, ns))}

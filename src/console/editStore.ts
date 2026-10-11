@@ -378,20 +378,22 @@ export function addRouter(name: string, copy: boolean): void {
   if (!full || !s.draft) return;
   const flows = copy ? s.draft.flows : { "anything-else": { inputs: ["*"], steps: [{ to: { refuse: "that is not something this router offers" } }] } };
   stepping = true;
-  set({ ...show(put(full, "routers", name, { callers: [], flows }), name), past: [], sel: null, pending: [] });
+  set({ ...show(put(full, "routers", name, { flows }), name), past: [], sel: null, pending: [] });
   stepping = false;
   toast("ok", `router ${name} added — choose who uses it`);
 }
 
-/** Take a router away, with the places kept for its map; its callers go by the rules everyone else does. */
+/** Take a router away, with the places kept for its map. */
 export function removeRouter(name: string): void {
   const full = whole(useEdit.getState());
   if (!full) return;
   const { [name]: _, ...others } = obj(full.routers);
   const layout = Object.fromEntries(Object.entries(obj(full.layout)).filter(([id]) => !id.startsWith(`routing@${name}/`)));
-  const { routers: _r, layout: _l, ...rest } = full;
+  // Whoever went by it goes where everyone else does.
+  const callers = Object.fromEntries(Object.entries(obj(full.callers)).filter(([, r]) => r !== name));
+  const { routers: _r, layout: _l, callers: _c, ...rest } = full;
   stepping = true;
-  set({ ...show({ ...rest, ...(Object.keys(others).length ? { routers: others } : {}), ...(Object.keys(layout).length ? { layout } : {}) }, null), past: [], sel: null, pending: [] });
+  set({ ...show({ ...rest, ...(Object.keys(callers).length ? { callers } : {}), ...(Object.keys(others).length ? { routers: others } : {}), ...(Object.keys(layout).length ? { layout } : {}) }, null), past: [], sel: null, pending: [] });
   stepping = false;
   toast("ok", `router ${name} deleted — discard draft brings it back`);
 }

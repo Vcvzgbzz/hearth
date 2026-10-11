@@ -461,16 +461,34 @@ export function unscoped(view: Doc, whole: Doc, router: string | null): Doc {
   };
 }
 
-/** Who can be given a router: each api key by its label, and whoever calls from this machine without one. */
-export const callersIn = (doc: Doc): string[] =>
-  ["local", ...(Array.isArray(doc.apiKeys) ? doc.apiKeys : []).map((k) => text(obj(k).label)).filter(Boolean)];
+/** The caller that stands for everyone `callers:` does not name. */
+export const EVERYONE = "*";
 
-/** Give a caller to a router, or take it away; a caller goes by one router, so it leaves any other. */
-export function withCaller(doc: Doc, router: string, caller: string, on: boolean): Doc {
-  return { ...doc, routers: Object.fromEntries(Object.entries(obj(doc.routers)).map(([name, r]) => {
-    const others = list(obj(r).callers).filter((c) => c !== caller);
-    return [name, { ...obj(r), callers: name === router && on ? [...others, caller] : others }];
-  })) };
+/** Who can be given a router: everyone else as one, whoever calls from this machine without a key, and each api key by its label. */
+export const callersIn = (doc: Doc): string[] =>
+  [EVERYONE, "local", ...(Array.isArray(doc.apiKeys) ? doc.apiKeys : []).map((k) => text(obj(k).label)).filter(Boolean)];
+
+/** The router a caller goes by, null for the default one. `own` is false where it only goes where everyone else does. */
+export function routerFor(doc: Doc, caller: string): { router: string | null; own: boolean } {
+  const given = text(obj(doc.callers)[caller]);
+  const name = given || text(obj(doc.callers)[EVERYONE]);
+  return { router: name && name !== "default" ? name : null, own: caller === EVERYONE || given !== "" };
+}
+
+/** The callers that go by a router (null: the default one), those that only follow everyone else included. */
+export const usersOf = (doc: Doc, router: string | null): string[] => callersIn(doc).filter((c) => routerFor(doc, c).router === router);
+
+/**
+ * Send a caller's requests by a router, or with null by the default one. A caller sent where
+ * everyone else goes follows them from then on; one sent elsewhere stays there when they move.
+ */
+export function withCaller(doc: Doc, caller: string, router: string | null): Doc {
+  const { [caller]: _, ...kept } = obj(doc.callers);
+  const to = router ?? "default";
+  const rest = text(kept[EVERYONE]) || "default";
+  if (caller === EVERYONE ? to !== "default" : to !== rest) kept[caller] = to;
+  const { callers: _c, ...others } = doc;
+  return Object.keys(kept).length ? { ...others, callers: kept } : others;
 }
 
 /** Remember where a node was put, to the pixel: a layout is a picture, not a measurement. */

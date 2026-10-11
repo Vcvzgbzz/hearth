@@ -7,7 +7,7 @@ import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Split, Rota
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, arranged, callersIn, directTo, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { ACTIONS, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
 import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, dirty, duplicate, editSelect, facts, focusOn, goBack, loadDraft, paste, pick, remove, removeRouter, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
@@ -113,6 +113,9 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
   });
 }
 
+/** A caller as the console names it: everyone not sent somewhere else is "default". */
+const said = (caller: string) => (caller === EVERYONE ? "default" : caller);
+
 /** A first place for a choice between several to start from: something a backend already serves. */
 const anyModel = (draft: Doc | null): string =>
   list(Object.values(obj(draft?.backends)).flatMap((b) => list(obj(b).serves)))[0] ?? Object.keys(obj(draft?.models))[0] ?? "";
@@ -166,8 +169,8 @@ export function EditBar() {
                 className={cx("flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[13px] hover:bg-muted", router === null ? "border-line bg-panel" : "border-accent bg-accent/10")}
                 onClick={(e) => choose(e, [
                   { label: "edit the rules of", head: true },
-                  { label: "The default router", value: "show:", hint: "everyone no other router names", on: router === null },
-                  ...Object.entries(obj(draft.routers)).map(([name, r]) => ({ label: name, value: `show:${name}`, mono: true, on: router === name, hint: list(obj(r).callers).length ? `used by ${list(obj(r).callers).join(", ")}` : "nobody uses it yet" })),
+                  { label: "The default router", value: "show:", hint: usersOf(draft, null).length ? `used by ${usersOf(draft, null).map(said).join(", ")}` : "nobody uses it now", on: router === null },
+                  ...Object.keys(obj(draft.routers)).map((name) => ({ label: name, value: `show:${name}`, mono: true, on: router === name, hint: usersOf(draft, name).length ? `used by ${usersOf(draft, name).map(said).join(", ")}` : "nobody uses it yet" })),
                   { label: "a router of their own for some callers", head: true },
                   { label: "New, starting from these rules…", value: "new:copy", hint: "then change what should differ" },
                   { label: "New, refusing everything…", value: "new:empty", hint: "then add only what its callers may ask for" },
@@ -176,13 +179,13 @@ export function EditBar() {
         </button>
         {router !== null && (() => {
           const mine = obj(obj(draft.routers)[router]);
-          const uses = list(mine.callers);
+          const uses = usersOf(draft, router);
           return (
             <>
               <button type="button" title="whose requests go by this router; everyone else goes by the default one" className={cx("flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12px] hover:bg-muted", uses.length ? "border-line" : "border-warn text-warn")}
-                      onClick={(e) => choose(e, [{ label: "requests from", head: true }, ...callersIn(draft).map((c) => ({ label: c, mono: true, on: uses.includes(c), hint: c === "local" ? "this machine, with no api key" : "the api key with this label" }))],
-                        (c) => change((d) => withCaller(d, router, c, !uses.includes(c))))}>
-                {uses.length ? `used by ${uses.join(", ")}` : "used by nobody yet"}<ChevronDown size={12} className="text-dim" />
+                      onClick={(e) => choose(e, [{ label: "requests from", head: true }, ...callersIn(draft).map((c) => ({ label: said(c), value: c, mono: c !== EVERYONE, on: uses.includes(c), hint: c === EVERYONE ? "every caller not sent somewhere else" : c === "local" ? "this machine, with no api key" : "the api key with this label" }))],
+                        (c) => change((d) => withCaller(d, c, uses.includes(c) ? null : router)))}>
+                {uses.length ? `used by ${uses.map(said).join(", ")}` : "used by nobody yet"}<ChevronDown size={12} className="text-dim" />
               </button>
               <button type="button" aria-pressed={mine.strict === true} title="A request runs on the model its rule names or fails: a backend's own fallback to another model is switched off for these callers."
                       className={cx("h-8 rounded-lg border px-3 text-[12px] transition-colors", mine.strict === true ? "border-accent bg-accent/15" : "border-line hover:bg-muted")}

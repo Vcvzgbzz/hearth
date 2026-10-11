@@ -23,7 +23,7 @@ const LIVE_KEYS = [
   "models", "share", "notes", "apiKeys", "apiKeyLabels", "apiKeyModels", "peerTokens",
   "peerRateLimit", "peerLane", "peerMaxConcurrent", "maxBodyBytes", "peerFreshMs", "peerDownMs",
   "peerStaleMs", "peerFirstByteMs", "backendFirstByteMs", "backendIdleMs", "coldPenalty", "shutdownGraceMs",
-  "operator", "layout", "flows", "routers", "actions", "modelHeader",
+  "operator", "layout", "flows", "routers", "callers", "actions", "modelHeader",
 ] as const satisfies readonly (keyof HearthConfig)[];
 
 /** Restart-only internal keys whose hearth.yaml name differs, for "restart to apply …". */

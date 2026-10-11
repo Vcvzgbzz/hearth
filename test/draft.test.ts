@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, withCaller, callersIn, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, withCaller, callersIn, routerFor, usersOf, spread, beside, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -311,7 +311,7 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
 // --- a router's rulebook as the one on the map --------------------------------------------------------
 {
   const own = { only: { inputs: ["auto"], steps: [{ to: "chat" }] }, rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] } };
-  const full: Doc = { ...withRest(doc(), "asked"), apiKeys: [{ key: "k", label: "app" }, "bare"], routers: { direct: { callers: ["local"], strict: true, flows: own }, other: { callers: [], flows: own } },
+  const full: Doc = { ...withRest(doc(), "asked"), apiKeys: [{ key: "k", label: "app" }, "bare"], routers: { direct: { strict: true, flows: own }, other: { flows: own } }, callers: { local: "direct" },
     layout: { self: { x: 1, y: 1 }, "routing/flow:pick": { x: 2, y: 2 }, "routing@direct/flow:only": { x: 3, y: 3 } } };
   // The view has the router's flows as `flows` and its own places; the default rulebook's places are left out of it.
   const view = scoped(full, "direct");
@@ -323,10 +323,18 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual([(edited.routers as Record<string, Doc>).direct!.flows, edited.flows, (edited.routers as Record<string, Doc>).other, edited.layout],
     [{ ...own, only: { inputs: ["auto"], steps: [{ to: "other" }] } }, full.flows, (full.routers as Doc).other, { ...(full.layout as object), "routing@direct/flow:only": { x: 9, y: 9 } }]);
   assert.doesNotThrow(() => parseConfig(edited));
-  // A caller goes by one router: given to another, it leaves the first.
-  assert.deepEqual(callersIn(full), ["local", "app"]);
-  const given = withCaller(full, "other", "local", true).routers as Record<string, Doc>;
-  assert.deepEqual([given.direct!.callers, given.other!.callers], [[], ["local"]]);
+  // Everyone not named is a caller of its own; the rest go where it does unless they are sent somewhere else.
+  assert.deepEqual(callersIn(full), ["*", "local", "app"]);
+  assert.deepEqual([routerFor(full, "local"), routerFor(full, "app"), usersOf(full, "direct"), usersOf(full, null)], [{ router: "direct", own: true }, { router: null, own: false }, ["local"], ["*", "app"]]);
+  // Moving everyone else takes those who follow along; one sent back to the default router is kept as that.
+  const moved = withCaller(full, "*", "other");
+  assert.deepEqual([moved.callers, usersOf(moved, "other")], [{ local: "direct", "*": "other" }, ["*", "app"]]);
+  assert.deepEqual(withCaller(moved, "app", null).callers, { local: "direct", "*": "other", app: "default" });
+  // A caller sent where everyone else goes follows them again; one sent elsewhere stays put when they move back.
+  assert.deepEqual(withCaller(moved, "local", "other").callers, { "*": "other" });
+  assert.deepEqual(withCaller(withCaller(full, "*", "direct"), "*", null).callers, { local: "direct" });
+  assert.equal(withCaller(full, "local", null).callers, undefined);
+  assert.doesNotThrow(() => parseConfig(withCaller(moved, "app", null)));
 }
 
 // --- what is written is the change and nothing else -------------------------------------------------

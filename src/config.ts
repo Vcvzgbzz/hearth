@@ -366,8 +366,10 @@ export interface HearthConfig {
   historyFile: string | null;
   /** How requests are routed, by flow name. Ids no flow takes as an input run where they are served. */
   flows: Record<string, Flow>;
-  /** Rulebooks of their own for the callers each names; everyone else goes by `flows`. */
+  /** Rulebooks besides `flows`, by name. */
   routers: Record<string, Router>;
+  /** Which rulebook a caller goes by: a router's name, or `default` for `flows`. `*` is everyone not named. */
+  callers: Record<string, string>;
   /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
   modelHeader: boolean;
   /** `actions:`: what a flow step can set off beside routing, by name. */
@@ -652,34 +654,41 @@ export function endsOf(to: FlowTo, asked?: string): FlowEnd[] {
 /** Can this target be passed over when it cannot take the request? Only a peer can be down. */
 const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
 
+/** The name that stands for `flows:` where a caller is given a rulebook. */
+export const DEFAULT_ROUTER = "default";
+
 /**
- * `routers.<name>`: a rulebook used in place of `flows:` for the callers it names (an api key's
- * label, or `local`). `strict` also switches off a backend route's own fallback for them, so a
- * request runs where its rule says or fails.
+ * `routers.<name>`: a rulebook used in place of `flows:` for the callers `callers:` gives it.
+ * `strict` also switches off a backend route's own fallback for them, so a request runs where
+ * its rule says or fails.
  */
 export interface Router {
-  callers: string[];
   strict: boolean;
   note?: string;
   flows: Record<string, Flow>;
 }
 
-/** `routers:`, each checked as `flows:` is; a caller goes by one router at most. */
+/** `routers:`, each checked as `flows:` is. */
 function routerDecls(raw: unknown, flows: (raw: unknown) => Record<string, Flow>): Record<string, Router> {
   const out: Record<string, Router> = {};
-  const taken = new Map<string, string>();
   for (const [name, v] of Object.entries(asRecord(raw ?? {}, "routers"))) {
     const at = `routers.${name}`;
+    if (name === DEFAULT_ROUTER) throw bad(at, `is the name flows: goes by; give this router another`);
     const r = asRecord(v, at);
-    only(r, ["callers", "strict", "note", "flows"], at);
-    const callers = strList(r.callers, `${at}.callers`);
-    for (const c of callers) {
-      if (taken.has(c)) throw bad(`${at}.callers`, `names "${c}", which already goes by routers.${taken.get(c)}`);
-      taken.set(c, name);
-    }
+    only(r, ["strict", "note", "flows"], at);
     const own = flows(r.flows);
     if (!Object.values(own).some((f) => f.inputs.includes(ANY))) throw bad(`${at}.flows`, `needs a flow with inputs: ["${ANY}"], as flows: does, to say what happens to a name no other flow takes`);
-    out[name] = { callers, strict: bool(r.strict, `${at}.strict`, false), ...(typeof r.note === "string" && r.note ? { note: r.note } : {}), flows: own };
+    out[name] = { strict: bool(r.strict, `${at}.strict`, false), ...(typeof r.note === "string" && r.note ? { note: r.note } : {}), flows: own };
+  }
+  return out;
+}
+
+/** `callers:`: an api key's label, `local`, or `*` for everyone else, each to a router's name or `default`. */
+function callerDecls(raw: unknown, routers: Record<string, Router>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [who, v] of Object.entries(asRecord(raw ?? {}, "callers"))) {
+    if (typeof v !== "string" || (v !== DEFAULT_ROUTER && routers[v] === undefined)) throw bad(`callers.${who}`, `must be "${DEFAULT_ROUTER}" or a name under routers:`);
+    out[who] = v;
   }
   return out;
 }
@@ -1523,6 +1532,7 @@ export function parseConfig(raw: unknown): HearthConfig {
 
   const actions = actionDecls(root.actions);
   // A removed key is refused, not ignored: ignoring it would close the page's port with no word why.
+  const routers = routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))));
   return {
     name: str(root.name, "name", "hearth"),
     // Set by loadConfig, which is the only caller that knows one.
@@ -1532,7 +1542,8 @@ export function parseConfig(raw: unknown): HearthConfig {
     layout: layoutDecl(root.layout),
     modelHeader: bool(root.modelHeader, "modelHeader", true),
     flows: flowDecls(root.flows, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))),
-    routers: routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path)))),
+    routers,
+    callers: callerDecls(root.callers, routers),
     actions,
     listen: mainListen,
     resources: resourceDecls,

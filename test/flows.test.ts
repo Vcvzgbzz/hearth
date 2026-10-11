@@ -669,7 +669,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
 }
 
 // --- a rulebook of its own for some callers -----------------------------------------------------------
-// `routers.<name>` is used in place of `flows:` for the callers it names. `strict` also switches off
+// `routers.<name>` is used in place of `flows:` for the callers `callers:` gives it. `strict` also switches off
 // a backend route's own fallback for them, so a request runs where its rule says or fails.
 {
   const got: unknown[] = [];
@@ -685,7 +685,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
   const rest = { inputs: ["*"], steps: [{ to: { refuse: "not offered" } }] };
-  const shape = (routers: unknown) => ({
+  const shape = (routers: unknown, callers: unknown = { tester: "direct" }) => ({
     apiKeys: [{ key: "k-app", label: "app" }, { key: "k-test", label: "tester" }],
     backends: {
       embed: { url, kind: "none", serves: ["emb", "emb-b"], routes: [{ path: "/v1/embeddings", model: "emb", lane: "chat" }] },
@@ -694,11 +694,12 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
     },
     scheduler: { lanes: { chat: { priority: 0 } } },
     flows: { Embeddings: { takes: "/v1/embeddings", inputs: ["Embeddings"], steps: [{ to: "emb" }] }, Rank: { takes: "/v1/rerank", inputs: ["Rank"], steps: [{ to: "far" }] }, rest },
-    routers,
+    routers, callers,
   });
-  const direct = { callers: ["tester"], strict: true, flows: { Embeddings: { takes: "/v1/embeddings", inputs: ["Embeddings"], steps: [{ to: "emb-b" }] }, Rank: { takes: "/v1/rerank", inputs: ["Rank"], steps: [{ to: "far" }] }, Mine: { takes: "/v1/embeddings", inputs: ["Mine"], steps: [{ to: "emb" }] }, rest } };
-  assert.throws(() => parseConfig(shape({ a: direct, b: direct })), /routers\.b\.callers names "tester", which already goes by routers\.a/);
-  assert.throws(() => parseConfig(shape({ a: { callers: ["tester"], flows: {} } })), /routers\.a\.flows needs a flow with inputs: \["\*"\]/);
+  const direct = { strict: true, flows: { Embeddings: { takes: "/v1/embeddings", inputs: ["Embeddings"], steps: [{ to: "emb-b" }] }, Rank: { takes: "/v1/rerank", inputs: ["Rank"], steps: [{ to: "far" }] }, Mine: { takes: "/v1/embeddings", inputs: ["Mine"], steps: [{ to: "emb" }] }, rest } };
+  assert.throws(() => parseConfig(shape({ direct }, { tester: "gone" })), /callers\.tester must be "default" or a name under routers:/);
+  assert.throws(() => parseConfig(shape({ default: direct }, {})), /routers\.default is the name flows: goes by/);
+  assert.throws(() => parseConfig(shape({ a: { flows: {} } }, {})), /routers\.a\.flows needs a flow with inputs: \["\*"\]/);
 
   const node = createNode(parseConfig(shape({ direct })), silentLogger);
   const at = await new Promise<string>((ready) =>
@@ -717,6 +718,14 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   assert.equal(await post("k-app", "/v1/rerank", "Rank"), 200);
   assert.ok((await post("k-test", "/v1/rerank", "Rank")) >= 500, "strict: the failure is the answer");
   await node.close();
+
+  // `*` is everyone not named: here the router is what callers go by unless they are sent back to `flows:`.
+  const turned = createNode(parseConfig(shape({ direct }, { "*": "direct", app: "default" })), silentLogger);
+  const at2 = await new Promise<string>((ready) =>
+    turned.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(turned.server.address() as AddressInfo).port}`)));
+  const ask = async (key: string) => { await fetch(`${at2}/v1/embeddings`, { method: "POST", headers: as(key), body: JSON.stringify({ model: "Embeddings", input: "x" }) }); return got.at(-1); };
+  assert.deepEqual([await ask("k-test"), await ask("k-app")], ["emb-b", "emb"]);
+  await turned.close();
   backend.closeAllConnections();
   backend.close();
 }
