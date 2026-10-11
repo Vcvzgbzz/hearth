@@ -360,6 +360,9 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
     "hardware gpu0: shared changed", "backend extra: added", "rule pick: its lines or what enters it changed", "caller local: now goes by the default router", "where things are placed on the maps",
   ]);
   assert.deepEqual(summary(pinned, pinned), []);
+  // A rule or a type under a new name is said as that, not as one gone and one come.
+  assert.deepEqual(summary(doc(), renamed(doc(), "flows", "heavy", "big")!), ["rule heavy: renamed to big"]);
+  assert.deepEqual(summary(routeId(doc(), "x", { kind: "model", model: "chat" }), retyped(routeId(doc(), "x", { kind: "model", model: "chat" }), "x", "y")!), ["rule x: renamed to y"]);
 }
 
 // --- what is written is the change and nothing else -------------------------------------------------

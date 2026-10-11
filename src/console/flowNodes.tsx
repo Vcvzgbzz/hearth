@@ -197,7 +197,7 @@ function Renamed({ name, label, onRename, className, start, wide, onEnd }: { nam
            // The press starts it, not the click that follows: the map swallows a click that comes straight after a drag.
            onPointerDown={(e) => { e.stopPropagation(); if (!typing) { fresh.current = true; setTyped(name); } }}
            // The click that completes that press would put the caret where it landed: the whole name stays selected instead.
-           onClick={(e) => { e.stopPropagation(); if (fresh.current) { fresh.current = false; e.currentTarget.select(); } }} onChange={(e) => setTyped(e.target.value)}
+           onClick={(e) => { e.stopPropagation(); if (fresh.current) { fresh.current = false; const el = e.currentTarget; setTimeout(() => el.select(), 0); } }} onChange={(e) => setTyped(e.target.value)}
            onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") end(true); if (e.key === "Escape") end(false); }} />
   );
 }
@@ -355,9 +355,6 @@ export type Hub = {
   rest?: "asked" | "refuse" | "rule" | "none";
 };
 
-// The type whose row is being dragged up or down the list, between the press and the drop.
-let moving: string | null = null;
-
 /** This node's router: the model names it sends somewhere, each with a line to where requests for it go. */
 export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   const [typing, setTyping] = useState<string | null>(null);
@@ -376,11 +373,23 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
         <div key={r.id} className={cx("nodrag nopan group relative flex h-[22px] items-center px-3 text-[11px] hover:bg-muted", r.on && "bg-accent/15", r.fixed && "text-dim", over === r.id && "border-t-2 border-accent")}
              title={r.fixed ?? `drag the dot to say where requests for ${r.id} go; drag the name to move it up or down the list`}
              // A row is dragged by its name to another row's place; the dot at its end draws its line instead.
-             draggable={data.editable && r.id !== ANY && renaming !== r.id}
-             onDragStart={(e) => { if ((e.target as Element).closest?.(".react-flow__handle, button, input")) { e.preventDefault(); return; } moving = r.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", r.id); }}
-             onDragOver={(e) => { if (moving && moving !== r.id) { e.preventDefault(); setOver(r.id); } }} onDragLeave={() => setOver((o) => (o === r.id ? null : o))}
-             onDragEnd={() => { moving = null; setOver(null); }}
-             onDrop={(e) => { e.preventDefault(); const from = moving; moving = null; setOver(null); if (from && from !== r.id) change((d) => movedName(d, order, from, order.indexOf(r.id) - order.indexOf(from))); }}
+             data-type={r.id}
+             onPointerDown={(e) => {
+               if (!data.editable || r.id === ANY || renaming === r.id || (e.target as Element).closest?.(".react-flow__handle, button, input")) return;
+               const from = r.id;
+               let to: string | null = null;
+               const track = (ev: PointerEvent) => {
+                 to = document.elementFromPoint(ev.clientX, ev.clientY)?.closest("[data-type]")?.getAttribute("data-type") ?? null;
+                 setOver(to !== null && to !== from && to !== ANY ? to : null);
+               };
+               const drop = () => {
+                 document.removeEventListener("pointermove", track);
+                 setOver(null);
+                 if (to !== null && to !== from && to !== ANY) { const at = to; change((d) => movedName(d, order, from, order.indexOf(at) - order.indexOf(from))); }
+               };
+               document.addEventListener("pointermove", track);
+               document.addEventListener("pointerup", drop, { once: true });
+             }}
              onMouseEnter={() => hover(`e:ask:${r.id}`)} onMouseLeave={() => hover(null)}>
           {/* A name sent to a peer leaves on the peers' side. */}
           <Handle type="source" id={`ask-${r.id}-back`} position={Position.Left} className="!opacity-0 !pointer-events-none" style={{ left: -6 }} />

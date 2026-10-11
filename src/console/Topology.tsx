@@ -74,6 +74,9 @@ const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
   );
 });
 
+// The chip that was just dragged, so the click that ends the drag does not also open it.
+let dragged: string | null = null;
+
 /** Where a backend let go over each frame is put, by the frame's id; filled as the picture is laid out. */
 const drops = new Map<string, { resource?: string; server: string }>();
 
@@ -115,9 +118,16 @@ const GroupNode = memo(function GroupNode({ data }: NodeProps<Node<Group>>) {
       {data.chips && (
         <div className="grid grid-cols-2 gap-1.5 px-3 pt-2">
           {data.chips.map((c) => (
-            <button key={c.name} title={c.sub} draggable={data.drop !== undefined} onDragEnd={(e) => dropBackend(c.name, e.clientX, e.clientY)}
-                    onClick={(e) => { e.stopPropagation(); select({ kind: "backend", id: c.name }); }}
-                    className={cx("flex h-8 items-center gap-1.5 rounded-lg border bg-panel px-2 text-left text-[11px] transition-colors",
+            <button key={c.name} title={c.sub}
+                    // A chip is dragged like a card: let go over other hardware or another machine, it is put there. A press that does not move is a click.
+                    onPointerDown={(e) => {
+                      if (data.drop === undefined) return;
+                      const [x0, y0] = [e.clientX, e.clientY];
+                      const drop = (ev: PointerEvent) => { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 8) { dragged = c.name; dropBackend(c.name, ev.clientX, ev.clientY); } };
+                      document.addEventListener("pointerup", drop, { once: true });
+                    }}
+                    onClick={(e) => { e.stopPropagation(); if (dragged === c.name) { dragged = null; return; } select({ kind: "backend", id: c.name }); }}
+                    className={cx("nodrag nopan flex h-8 items-center gap-1.5 rounded-lg border bg-panel px-2 text-left text-[11px] transition-colors", data.drop !== undefined && "cursor-grab",
                       data.picked === c.name ? "border-accent" : c.busy ? "border-accent/50" : "border-line hover:border-dim/40")}>
               <Dot tone={c.tone} pulse={c.busy} />
               <span className="truncate font-medium">{c.name}</span>
@@ -615,7 +625,8 @@ export function Topology() {
         </button>
       ))}
       <VersionsButton />
-      <span className="truncate text-[11px] text-dim max-xl:hidden">Click anything for its settings. Drag a backend onto hardware, or a caller onto a router.</span>
+      {/* The hint gives way to whatever the strip has to say, so it stays one row. */}
+      {!isDirty && waiting.length === 0 && <span className="truncate text-[11px] text-dim max-xl:hidden">Click anything for its settings. Drag a backend onto hardware, or a caller onto a router.</span>}
       <div className="ml-auto flex items-center gap-2">
         {/* What is published but not running yet stays said until the restart that applies it. */}
         {waiting.length > 0 && !isDirty && (

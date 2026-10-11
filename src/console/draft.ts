@@ -531,9 +531,17 @@ export function summary(from: Doc, to: Doc): string[] {
     const noun = NOUN[key];
     if (!noun || !isObj(from[key] ?? {}) || !isObj(to[key] ?? {})) { out.push(`setting ${key}: changed`); continue; }
     const [a, b] = [obj(from[key]), obj(to[key])];
+    // One that went and one that came with the same contents is one thing under a new name.
+    const renamed = new Map<string, string>();
+    for (const was of Object.keys(a)) {
+      if (was in b) continue;
+      const now = Object.keys(b).find((id) => !(id in a) && ![...renamed.values()].includes(id) && JSON.stringify(b[id]).split(JSON.stringify(was)).join(JSON.stringify(id)) === JSON.stringify(a[was]).split(JSON.stringify(was)).join(JSON.stringify(id)));
+      if (now !== undefined) renamed.set(was, now);
+    }
     for (const id of new Set([...Object.keys(a), ...Object.keys(b)])) {
-      if (same(a[id], b[id])) continue;
-      if (!(id in a)) out.push(`${noun} ${id}: added`);
+      if (same(a[id], b[id]) || [...renamed.values()].includes(id)) continue;
+      if (renamed.has(id)) out.push(`${noun} ${id}: renamed to ${renamed.get(id)!}`);
+      else if (!(id in a)) out.push(`${noun} ${id}: added`);
       else if (!(id in b)) out.push(`${noun} ${id}: removed`);
       else {
         const keys = [...new Set([...Object.keys(obj(a[id])), ...Object.keys(obj(b[id]))])].filter((k) => !same(obj(a[id])[k], obj(b[id])[k]));

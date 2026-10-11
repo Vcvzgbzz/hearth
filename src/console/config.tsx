@@ -594,7 +594,7 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
           <button className="ml-auto text-dim hover:text-fg" onClick={onClose} aria-label="close"><X size={16} /></button>
         </div>
         {(plan.summary ?? []).length > 0 && (
-          <div className="max-h-40 overflow-auto border-b border-line px-4 py-2 text-[12px]" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-40 shrink-0 overflow-auto border-b border-line px-4 py-2 text-[12px]" onClick={(e) => e.stopPropagation()}>
             <div className="mb-0.5 font-medium">What this changes</div>
             {plan.summary!.map((n) => <div key={n} className="text-dim">• {n}</div>)}
             {plan.restartPending.length > 0 && <div className="mt-1 text-warn">Publishing writes the file. {plan.restartPending.join(", ")} only take effect after hearth is restarted, which the header then offers.</div>}
