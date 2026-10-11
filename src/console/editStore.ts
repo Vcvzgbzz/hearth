@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { factsOf, nodeOf, opsOf, placed, problems, rebase, refusal, unroutable, type Doc, type Facts, type Landing } from "./draft.js";
+import { factsOf, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, TEMPLATES, unroutable, type Doc, type Facts, type Landing } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 
 export type EditSel = { kind: "flow" | "action"; id: string } | null;
@@ -17,7 +17,7 @@ export type Picking = { x: number; y: number; from: { node: string; handle: stri
 /** One choice in a menu; `head` is a label between groups, `on` marks the current one. */
 export type Choice = { label: string; value?: string; hint?: string; head?: boolean; on?: boolean; off?: boolean; danger?: boolean; mono?: boolean };
 /** A list of choices open at a point on the page. */
-export type Choosing = { x: number; y: number; items: Choice[]; onPick: (value: string) => void } | null;
+export type Choosing = { x: number; y: number; items: Choice[]; onPick: (value: string) => void; /** Always offer the filter, however short the list. */ search?: boolean } | null;
 
 interface EditState {
   file: File | null;
@@ -37,10 +37,14 @@ interface EditState {
   past: Doc[];
   /** Why there is no draft to edit, once that is known; null while one is loaded or still loading. */
   unread: string | null;
+  /** The dialog that names a new thing: `flows`, or `actions:<kind>`. */
+  adding: string | null;
+  /** A node to bring into view, or `*` for the whole map; a new object each time so asking twice works. */
+  focus: { node: string } | null;
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], unread: null,
+  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], unread: null, adding: null, focus: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -119,7 +123,31 @@ export function choose(e: { currentTarget: Element }, items: Choice[], onPick: (
   const r = e.currentTarget.getBoundingClientRect();
   set({ choosing: { x: r.left, y: r.bottom + 4, items, onPick } });
 }
+/** Open a menu at a point on the page: where the pointer was right-clicked, say. */
+export const chooseAt = (x: number, y: number, items: Choice[], onPick: (value: string) => void, search = false) => set({ choosing: { x, y, items, onPick, search } });
 export const closeMenu = () => set({ choosing: null });
+export const setAdding = (adding: string | null) => set({ adding });
+/** Bring a node into view. */
+export const focusOn = (node: string) => set({ focus: { node } });
+
+/** Start a rule from one of the common shapes, or ask for the name of a blank one. */
+export function startRule(template: string): void {
+  const t = TEMPLATES.find((x) => x.name === template);
+  const { draft } = useEdit.getState();
+  if (!t || !draft) { set({ adding: "flows" }); return; }
+  // A name that is free: the rule opens straight away, to be pointed at the models it is for.
+  let name = t.name;
+  for (let n = 2; name in obj(draft.flows); n++) name = `${t.name}-${n}`;
+  change((d) => put(d, "flows", name, { inputs: [], steps: t.steps }));
+  set({ sel: { kind: "flow", id: name }, focus: { node: `flow:${name}` } });
+}
+
+/** Take a rule or an action out of the draft, saying what else that touched. */
+export function remove(sel: NonNullable<EditSel>): void {
+  change((d) => removed(d, sel.kind === "flow" ? "flows" : "actions", sel.id));
+  if (useEdit.getState().sel?.id === sel.id) set({ sel: null });
+  toast("ok", `${sel.id} deleted — undo brings it back`);
+}
 export const change = (fn: (d: Doc) => Doc) => set((s) => ({ draft: s.draft ? fn(s.draft) : s.draft, err: null }));
 
 /** What is known right now about names and the places a line can go, or null before the node has reported. */

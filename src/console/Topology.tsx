@@ -194,9 +194,9 @@ const FlowEdge = memo(function FlowEdge({ id, sourceX, sourceY, targetX, targetY
   return (
     <>
       <BaseEdge id={id} path={path} style={{
-        stroke: data?.lit ? "var(--accent)" : hot ? color : data?.dashed ? "var(--bad)" : data?.wire ? "var(--dim)" : "var(--border)",
+        stroke: data?.lit ? "var(--accent)" : hot ? color : data?.dashed ? "var(--bad)" : data?.wire ? (data.color ?? "var(--dim)") : "var(--border)",
         strokeWidth: data?.lit ? 2.5 : hot ? 2 : data?.wire ? 1.5 : 1, strokeDasharray: data?.dashed || data?.ghost ? "4 4" : undefined,
-        opacity: data?.lit ? 1 : hot ? 0.45 : data?.ghost ? 0.5 : data?.faint ? 0.28 : data?.wire ? 0.6 : 0.8,
+        opacity: data?.lit ? 1 : hot ? 0.45 : data?.ghost ? 0.5 : data?.faint ? 0.28 : data?.wire ? 0.75 : 0.8,
       }} />
       {(data?.pulses ?? []).map((p) => (
         // Out runs source to target unless the edge is drawn the other way round; back is the opposite.

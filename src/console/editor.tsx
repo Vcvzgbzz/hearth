@@ -3,27 +3,18 @@
  * with a node's full settings, the list of places a line can go, and the row that tries a
  * request against the draft.
  */
-import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, Plus, RotateCcw, Save, Trash2, Undo2, X, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, Plus, RotateCcw, Save, Search, Trash2, Undo2, X, Zap } from "lucide-react";
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, renamed, routeId, text, toOf, toText, withDo, type Doc, type To } from "./draft.js";
-import { change, changed, choose, closeMenu, dirty, editSelect, facts, loadDraft, pick, revert, review, tryRequest, undo, useEdit, wire, type Choice } from "./editStore.js";
+import { ACTIONS, directTo, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, renamed, routeId, TEMPLATES, text, toOf, toText, withDo, type Doc, type To } from "./draft.js";
+import { change, changed, choose, chooseAt, closeMenu, dirty, editSelect, facts, focusOn, loadDraft, pick, remove, revert, review, setAdding, startRule, tryRequest, undo, useEdit, wire, type Choice } from "./editStore.js";
+import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { toast, useStore } from "./store.js";
 import { Button, cx, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
-
-/** A rule to start from: a common shape with its conditions in place and its destinations left to choose. */
-const TEMPLATES: { label: string; hint: string; name: string; steps: Doc[] }[] = [
-  { label: "Borrow an idle model", hint: "use a bigger model while nobody else is", name: "borrow-idle", steps: [{ when: { idle: { ms: 300_000 }, ready: true }, to: "", max: 2 }, { to: "" }] },
-  { label: "Use another model at certain hours", hint: "overnight, say, when nobody is waiting on it", name: "by-hour", steps: [{ when: { time: { from: "22:00", to: "06:00" } }, to: "" }, { to: "" }] },
-  { label: "Send images somewhere else", hint: "requests with images go to a model that takes them", name: "images", steps: [{ when: { images: true }, to: "" }, { to: "" }] },
-  { label: "Send long prompts somewhere else", hint: "past a size, use a model with more room", name: "long-prompts", steps: [{ when: { tokensOver: 8000 }, to: "" }, { to: "" }] },
-  { label: "Stay off a busy model", hint: "use it while its queue is short, else another", name: "when-busy", steps: [{ when: { queuedUnder: 3 }, to: "" }, { to: "" }] },
-  { label: "One caller gets its own model", hint: "by api key label", name: "per-caller", steps: [{ when: { caller: [] }, to: "" }, { to: "" }] },
-];
 
 /** What each thing on the map means, for the "?" beside the buttons. */
 const LEGEND: [string, string][] = [
@@ -36,7 +27,89 @@ const LEGEND: [string, string][] = [
   ["≤2", "the line takes at most that many at once; the rest go on down the list"],
   ["! and ?", "the line cannot work as drawn, or its model has not said whether it can"],
   ["Lane", "a queue with a priority: chat goes ahead of batch"],
+  ["Dot and line colours", Object.values(HUE).map((h) => h.says).join(" · ") + ", in the order green, violet, blue, teal, red, amber, grey: a dot wears the colour of what it is plugged into"],
 ];
+
+/** The choices for adding a rule: the common shapes, then a blank one. */
+export const ruleChoices = (): Choice[] => [
+  { label: "start from a common rule", head: true },
+  ...TEMPLATES.map((t) => ({ label: t.label, value: `rule:${t.name}`, hint: t.hint })),
+  { label: "A blank rule…", value: "rule:" },
+];
+
+/**
+ * Everything on the map that can be gone to, for the search: the names that are routed, the rules,
+ * the actions, and the models and peers a line ends at.
+ */
+export function finding(draft: Doc): Choice[] {
+  const flows = Object.entries(obj(draft.flows)).map(([name, f]) => ({ name, inputs: list(obj(f).inputs), steps: (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).map(obj) }));
+  const rules = flows.filter((f) => directTo(f.name, f) === null);
+  const ends = flows.flatMap((f) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "fastest" ? t.of : t.kind === "model" || t.kind === "peer" ? [t] : []; }));
+  const models = [...new Set(ends.flatMap((e) => (e.kind === "model" ? [e.model] : [])))];
+  const peers = [...new Set(ends.flatMap((e) => (e.kind === "peer" ? [e.peer] : [])))];
+  const names = [...new Set(flows.flatMap((f) => f.inputs))];
+  const group = (label: string, items: Choice[]): Choice[] => (items.length ? [{ label, head: true }, ...items] : []);
+  return [
+    ...group("routing rules", rules.map((f) => ({ label: f.name, value: `flow:${f.name}`, mono: true, hint: f.inputs.length ? `takes ${f.inputs.join(", ")}` : "nothing reaches it yet" }))),
+    ...group("actions", Object.keys(obj(draft.actions)).map((a) => ({ label: a, value: `action:${a}`, mono: true }))),
+    ...group("names that are routed", names.map((n) => ({ label: n, value: `name:${n}`, mono: true, hint: `goes into ${flows.find((f) => f.inputs.includes(n))!.name}` }))),
+    ...group("models a line ends at", models.map((m) => ({ label: m, value: `model:${m}`, mono: true }))),
+    ...group("peers a line ends at", peers.map((p) => ({ label: p, value: `peer:${p}`, mono: true }))),
+  ];
+}
+
+/** Go to what a search found: bring it into view, and open it when it has a panel. */
+export function goTo(value: string): void {
+  const node = value.startsWith("name:") ? "self" : value;
+  focusOn(node);
+  const at = nodeOf(node);
+  const open = at.kind.opens?.(at.id);
+  if (open) editSelect(open);
+}
+
+/** Open the search over the map's nodes, at a point on the page. */
+export const openSearch = (x: number, y: number) => {
+  const { draft } = useEdit.getState();
+  if (draft) chooseAt(x, y, finding(draft), goTo, true);
+};
+
+/**
+ * The menu a right-click opens: on empty map, what can be added and found; on a rule or an
+ * action, what can be done with it.
+ */
+export function contextMenu(e: { clientX: number; clientY: number }, node: string | null): void {
+  const { draft } = useEdit.getState();
+  if (!draft) return;
+  const at = node ? nodeOf(node) : null;
+  const on = at?.kind.opens?.(at.id) ?? null;
+  const entry = on ? obj(obj(draft[SECTION[on.kind]])[on.id]) : {};
+  const items: Choice[] = on ? [
+    { label: `${on.kind === "flow" ? "rule" : "action"} ${on.id}`, head: true },
+    { label: "Edit…", value: "edit" },
+    ...(on.kind === "flow" ? [{ label: entry.off === true ? "Switch on" : "Switch off", value: "toggle", hint: entry.off === true ? undefined : "its names run as themselves until it is on again" }] : []),
+    { label: "Delete", value: "delete", danger: true },
+    { label: "the map", head: true },
+  ] : [];
+  chooseAt(e.clientX, e.clientY, [
+    ...items,
+    { label: "Find a node…", value: "find", hint: "or press /" },
+    ...ruleChoices(),
+    { label: "add an action", head: true },
+    ...ACTIONS.map((k) => ({ label: k.label, value: `action:${k.key}`, hint: k.hint })),
+    { label: "view", head: true },
+    { label: "Fit everything in view", value: "fit" },
+    ...(isObj(draft.layout) ? [{ label: "Tidy up", value: "tidy", hint: "back to the automatic arrangement" }] : []),
+  ], (v) => {
+    if (v === "find") openSearch(e.clientX, e.clientY);
+    else if (v.startsWith("rule:")) startRule(v.slice(5));
+    else if (v.startsWith("action:")) setAdding(`actions:${v.slice(7)}`);
+    else if (v === "fit") focusOn("*");
+    else if (v === "tidy") change(({ layout: _, ...rest }) => rest);
+    else if (on && v === "edit") { editSelect(on); focusOn(node!); }
+    else if (on && v === "delete") remove(on);
+    else if (on && v === "toggle") change((d) => { const { off: _, ...rest } = obj(obj(d.flows)[on.id]); return put(d, "flows", on.id, entry.off === true ? rest : { ...rest, off: true }); });
+  });
+}
 
 /** A first place for a choice between several to start from: something a backend already serves. */
 const anyModel = (draft: Doc | null): string =>
@@ -44,10 +117,20 @@ const anyModel = (draft: Doc | null): string =>
 
 /** The strip over the graph: add things, and review what the draft changes. */
 export function EditBar() {
-  const { draft, err, plan, past, unread } = useEdit();
+  const { draft, err, plan, past, unread, adding } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
-  const [adding, setAdding] = useState<string | null>(null);
+  // "/" opens the search from anywhere on the page, unless something is being typed into.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || el?.closest("input, textarea, select, [contenteditable]")) return;
+      e.preventDefault();
+      openSearch(innerWidth / 2 - 150, 120);
+    };
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, []);
   const changes = useEdit(changed);
   // The draft follows the file: read on arrival, and again whenever the file moves, with any changes here carried over.
   useEffect(() => { void loadDraft(); }, [hash]);
@@ -66,20 +149,7 @@ export function EditBar() {
     <>
       <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel/95 px-3 py-2 shadow-sm">
         <button type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-3 text-[13px] hover:bg-muted"
-                onClick={(e) => choose(e, [
-                  { label: "start from a common rule", head: true },
-                  ...TEMPLATES.map((t) => ({ label: t.label, value: t.name, hint: t.hint })),
-                  { label: "or", head: true },
-                  { label: "A blank rule…", value: "" },
-                ], (v) => {
-                  const t = TEMPLATES.find((x) => x.name === v);
-                  if (!t) { setAdding("flows"); return; }
-                  // A name that is free: the rule opens straight away, to be pointed at the models it is for.
-                  let name = t.name;
-                  for (let n = 2; name in obj(draft.flows); n++) name = `${t.name}-${n}`;
-                  change((d) => put(d, "flows", name, { inputs: [], steps: t.steps }));
-                  editSelect({ kind: "flow", id: name });
-                })}>
+                onClick={(e) => choose(e, ruleChoices(), (v) => startRule(v.slice(5)))}>
           <Plus size={13} />rule
         </button>
         <button type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-3 text-[13px] hover:bg-muted"
@@ -88,11 +158,15 @@ export function EditBar() {
           <Zap size={13} />action
         </button>
         {isObj(draft.layout) && <Button onClick={() => change(({ layout: _, ...rest }) => rest)}>tidy up</Button>}
+        <button type="button" aria-label="find a node" title="find a rule, an action, a name or a model on the map ( / )" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 text-[12px] text-dim hover:bg-muted hover:text-fg"
+                onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openSearch(r.left, r.bottom + 4); }}>
+          <Search size={13} />find<kbd className="rounded border border-line px-1 text-[10px]">/</kbd>
+        </button>
         <button type="button" aria-label="what the map shows" title="what the map shows" className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-panel text-dim hover:bg-muted hover:text-fg"
                 onClick={(e) => choose(e, LEGEND.map(([label, hint]) => ({ label, hint })), () => {})}>
           <CircleHelp size={14} />
         </button>
-        <span className="ml-2 truncate text-[11px] text-dim max-xl:hidden">Only what you have routed is shown. Drag a name's dot to send it elsewhere, or onto a rule.</span>
+        <span className="ml-2 truncate text-[11px] text-dim max-2xl:hidden">Only what you have routed is shown. Drag a dot to connect it; right-click for more.</span>
         <div className="ml-auto flex items-center gap-2">
           {isDirty && <span className="flex items-center gap-1.5 text-[12px] text-accent"><span className="size-1.5 rounded-full bg-accent" />{changes} unsaved {changes === 1 ? "change" : "changes"}</span>}
           <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
@@ -199,7 +273,7 @@ export function Menu() {
   const [q, setQ] = useState("");
   useEffect(() => setQ(""), [m]);
   if (!m) return null;
-  const long = m.items.filter((i) => !i.head).length > 8;
+  const long = m.search === true || m.items.filter((i) => !i.head).length > 8;
   const fits = m.items.filter((i) => i.head || i.label.toLowerCase().includes(q.trim().toLowerCase()));
   // A heading with nothing left under it goes too.
   const shown = fits.filter((i, k) => !i.head || (fits[k + 1] !== undefined && !fits[k + 1]!.head));
@@ -207,7 +281,7 @@ export function Menu() {
     <div className="fixed inset-0 z-50" onClick={closeMenu} onKeyDown={(e) => { if (e.key === "Escape") closeMenu(); }}>
       <div role="menu" className="absolute min-w-44 max-w-sm rounded-xl border border-line bg-panel p-1.5 shadow-2xl" onClick={(e) => e.stopPropagation()}
            style={{ left: Math.min(m.x, innerWidth - 300), ...(m.y + 340 > innerHeight ? { bottom: innerHeight - m.y + 34 } : { top: m.y }) }}>
-        {long && <input autoFocus aria-label="filter" placeholder="filter…" value={q} onChange={(e) => setQ(e.target.value)}
+        {long && <input autoFocus aria-label="filter" placeholder={m.search ? "find a rule, an action, a name or a model…" : "filter…"} value={q} onChange={(e) => setQ(e.target.value)}
                         onKeyDown={(e) => { const first = shown.find((i) => !i.head && !i.off); if (e.key === "Enter" && first) { closeMenu(); m.onPick(first.value ?? first.label); } }} className="mb-1 h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />}
         <div className="max-h-72 overflow-auto">
           {shown.map((i, k) => i.head ? (
@@ -497,16 +571,6 @@ export function EditRail() {
     change(() => next);
     editSelect({ kind: sel.kind, id: to.trim() });
   };
-  const remove = () => {
-    if (users.length) toast("ok", `${sel.id} deleted, and taken off ${users.length} ${users.length === 1 ? "line" : "lines"} that ran it — undo brings it back`);
-    change((d) => {
-      const gone = put(d, section, sel.id, undefined);
-      if (sel.kind !== "action") return gone;
-      return Object.entries(obj(gone.flows)).reduce((doc, [name, f]) =>
-        (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).reduce<Doc>((x, _, i) => withDo(x, name, i, sel.id, false) ?? x, doc), gone);
-    });
-    editSelect(null);
-  };
   return (
     <aside className="w-[480px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-10 max-lg:max-w-full">
       <div className="mb-3 flex items-center gap-2">
@@ -517,7 +581,7 @@ export function EditRail() {
                      onBlur={(e) => { rename(e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
             : <div className={cx("truncate text-base font-semibold", mono)}>{sel.id}</div>}
         </div>
-        {isObj(entry) && <button className="ml-auto text-dim hover:text-bad" aria-label={`delete ${sel.id}`} onClick={remove}><Trash2 size={15} /></button>}
+        {isObj(entry) && <button className="ml-auto text-dim hover:text-bad" aria-label={`delete ${sel.id}`} onClick={() => remove(sel)}><Trash2 size={15} /></button>}
         <button className={cx("text-dim hover:text-fg", !isObj(entry) && "ml-auto")} aria-label="close" onClick={() => editSelect(null)}><X size={16} /></button>
       </div>
       <Refs.Provider value={refsOf(draft, catalog)}>

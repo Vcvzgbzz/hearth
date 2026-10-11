@@ -744,6 +744,12 @@ line; **route a name** brings one onto the map.
   that cannot be arranged on demand (a model idle or just used, full, loaded,
   needing a swap, its hardware held, a line at its limit, a time of day, a
   caller, a lane) so each line can be tried.
+- **Dots and lines are coloured** by what they are plugged into: green for a
+  model here, violet for a peer, blue for a rule, teal for the fastest of
+  several, red for a refusal, amber for an action, grey for nowhere yet.
+- **find** (or the `/` key) searches the map for a rule, an action, a name or
+  a model and brings it into view. **Right-click** the map to add a rule or an
+  action there, or a rule or an action to edit it, switch it off or delete it.
 - **?** beside the buttons says what each thing on the map means. A rule or an
   action is renamed by clicking its name in the panel, and the name follows
   everywhere it is used.

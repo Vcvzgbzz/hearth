@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, unroutable, linesRunning, renamed, withDo, type Doc, type Landing, type To } from "../src/console/draft.js";
+import { applyOps, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, unroutable, linesRunning, removed, renamed, TEMPLATES, withDo, type Doc, type Landing, type To } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -101,6 +101,17 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
 
   const live = { net: { nodes: [{ name: "me", self: true, up: true, free: 1, slots: 1, queued: 0 }] }, routing: {} } as unknown as UiData;
   assert.deepEqual(draftView(acting, live).actions, { note: { kind: "log", says: "{asked} ran as {model}" }, tell: { kind: "call", says: "http://127.0.0.1:9/hook" } });
+
+  // Taking an action away takes it off every line that ran it, so what is left still loads.
+  const without = removed(withDo(ran, "pick", 1, "note", true)!, "actions", "note");
+  assert.deepEqual([Object.keys(without.actions as object), steps(without).map((s) => s.do)], [["tell"], [undefined, undefined]]);
+  assert.doesNotThrow(() => parseConfig(without));
+  assert.deepEqual(Object.keys(removed(ran, "flows", "heavy").flows as object), ["pick"]);
+  // Every rule to start from is one the file takes once its lines say where they go.
+  for (const t of TEMPLATES) {
+    const filled = { ...doc(), flows: { [t.name]: { inputs: ["auto"], steps: t.steps.map((s, i) => ({ ...s, to: i === 0 ? "image" : "chat", ...(s.when && "caller" in (s.when as object) ? { when: { caller: ["app"] } } : {}) })) } } };
+    assert.doesNotThrow(() => parseConfig(filled), `the "${t.label}" rule loads`);
+  }
 
   // Renaming follows the name everywhere it is used; a name that is taken is refused.
   assert.deepEqual(linesRunning(ran, "note"), [["pick", 0]]);

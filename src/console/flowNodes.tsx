@@ -144,6 +144,21 @@ const useWireFrom = () => useConnection((c) => (c.inProgress ? c.fromNode.id : n
 /** Is a line being drawn from a node that has outlets? Then what can end one shows that it can. */
 export const takesWork = (from: string | null) => from !== null && NODES[from.split(":")[0]!]?.outlet !== undefined;
 const RING = "ring-2 ring-ok/70";
+
+/**
+ * One colour per kind of thing a line can end at, worn by that thing's own dot, by the dot of any
+ * line that goes there, and by the line between them: a dot's colour says what it is plugged into.
+ */
+export const HUE: Record<string, { dot: string; stroke: string; says: string }> = {
+  model: { dot: "!bg-ok", stroke: "var(--ok)", says: "a model here" },
+  peer: { dot: "!bg-peer", stroke: "var(--peer)", says: "a peer" },
+  flow: { dot: "!bg-info", stroke: "var(--info)", says: "a routing rule" },
+  fastest: { dot: "!bg-pick", stroke: "var(--pick)", says: "the fastest of several" },
+  refuse: { dot: "!bg-bad", stroke: "var(--bad)", says: "a refusal" },
+  action: { dot: "!bg-warn", stroke: "var(--warn)", says: "an action" },
+  unset: { dot: "!bg-dim", stroke: "var(--dim)", says: "nowhere yet" },
+};
+const hue = (kind: string) => HUE[kind] ?? HUE.unset!;
 // Big enough to see and to grab at the size the whole picture is drawn.
 const PORT = "!h-3.5 !w-3.5 !border-2 !border-panel";
 
@@ -166,7 +181,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
       canTake && RING, data.off && "opacity-60",
     )} title={data.note}>
       <div className="relative flex h-9 items-center gap-2 border-b border-line px-3">
-        <Handle type="target" position={Position.Left} className={cx(PORT, "!bg-info")} style={{ left: -6 }} />
+        <Handle type="target" position={Position.Left} className={cx(PORT, HUE.flow!.dot)} style={{ left: -6 }} />
         <Split size={13} className="text-info" />
         <span className="text-[10px] uppercase tracking-wide text-info">routing rule</span>
         <span className="truncate font-mono font-medium">{data.name}</span>
@@ -224,7 +239,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                 <MoreHorizontal size={13} />
               </button>
             )}
-            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : "!bg-info", !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
+            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : hue(to.kind).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
           </div>
         );
       })}
@@ -246,7 +261,7 @@ export const FastestNode = memo(function FastestNode({ id, data }: NodeProps<Nod
   return (
     <div className={cx("w-[220px] rounded-xl border bg-panel shadow-sm", data.on ? "border-accent" : "border-ok/60")}>
       <div className="relative border-b border-line px-3 py-1.5">
-        <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : "!bg-ok")} style={{ left: -6, top: 14 }} />
+        <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : HUE.fastest!.dot)} style={{ left: -6, top: 14 }} />
         <div className="text-[10px] uppercase tracking-wide text-ok">fastest of</div>
         <div className="text-[10px] text-dim">whichever would start it soonest</div>
       </div>
@@ -257,7 +272,7 @@ export const FastestNode = memo(function FastestNode({ id, data }: NodeProps<Nod
             ? <button type="button" className={cx(CHIP, "min-w-0 flex-1 justify-between font-mono")} onClick={(ev) => pick({ x: ev.clientX, y: ev.clientY, from: { node: id, handle: `end-${k}` } })}><span className="truncate">{toText(e)}</span><ChevronDown size={10} className="shrink-0 text-dim" /></button>
             : <span className="min-w-0 flex-1 truncate font-mono">{toText(e)}</span>}
           {data.editable && data.ends.length > 2 && <button type="button" aria-label={`remove ${toText(e)}`} className="nodrag nopan text-dim hover:text-bad" onClick={() => write(data.ends.filter((_, n) => n !== k))}><X size={11} /></button>}
-          <Handle type="source" id={`end-${k}`} position={Position.Right} className={cx(PORT, data.lit === k ? "!bg-accent" : "!bg-ok", !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
+          <Handle type="source" id={`end-${k}`} position={Position.Right} className={cx(PORT, data.lit === k ? "!bg-accent" : hue(e.kind).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
         </div>
       ))}
       {data.editable && (
@@ -290,7 +305,7 @@ export const RefuseNode = memo(function RefuseNode({ data }: NodeProps<Node<Refu
 export type Hub = {
   title: string; sub: string; editable?: boolean;
   /** Every name a client can ask this node for, and what its line says: `loose` is one that goes nowhere yet. */
-  rows: { id: string; on?: boolean; loose?: boolean; /** Why this name cannot be routed; it then has no dot to drag. */ fixed?: string }[];
+  rows: { id: string; on?: boolean; loose?: boolean; /** The kind of thing its line goes to, for the colour of its dot. */ to?: string; /** Why this name cannot be routed; it then has no dot to drag. */ fixed?: string }[];
   /** Names that go to their own model and so are not drawn: there to be picked when one is to be routed. */
   others?: string[];
 };
@@ -315,7 +330,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
           {r.loose && <span className="ml-auto shrink-0 text-[10px] text-warn">drag me →</span>}
           {r.fixed && <span className="ml-auto shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title={r.fixed}>not chat</span>}
           <Handle type="source" id={`ask-${r.id}`} position={Position.Right} style={{ right: -6 }}
-                  className={cx(PORT, r.on ? "!bg-accent" : r.loose ? "!bg-warn" : "!bg-info", (!data.editable || r.fixed) && "!pointer-events-none", r.fixed && "!opacity-0")} />
+                  className={cx(PORT, r.on ? "!bg-accent" : hue(r.to ?? "unset").dot, (!data.editable || r.fixed) && "!pointer-events-none", r.fixed && "!opacity-0")} />
         </div>
       ))}
       {/* What is not routed is not drawn: it goes to its own model, and says so in one line. */}
@@ -339,7 +354,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   );
 });
 
-export type Dest = { title: string; sub: string; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
+export type Dest = { title: string; sub: string; /** `model` or `peer`. */ kind: string; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -347,7 +362,7 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
   return (
     <div title={data.shut ? `${data.title} is not a chat model, so a line cannot end here` : undefined}
          className={cx("w-[200px] rounded-xl border bg-panel px-3 py-1.5 shadow-sm", data.on ? "border-accent bg-accent/10" : "border-line", open && !data.shut && RING, open && data.shut && "opacity-40")}>
-      <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : "!bg-info", "!opacity-100")} style={{ left: -6 }} />
+      <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : hue(data.kind).dot, "!opacity-100")} style={{ left: -6 }} />
       <div className="truncate font-mono text-[12px] font-medium">{data.title}</div>
       <div className={cx("truncate text-[10px]", data.down ? "text-bad" : "text-dim")}>{data.sub}</div>
     </div>
@@ -363,7 +378,7 @@ export const ActionNode = memo(function ActionNode({ data }: NodeProps<Node<Acti
   const kind = ACTIONS.find((k) => k.key === data.kind);
   return (
     <div className={cx("w-[220px] rounded-xl border bg-panel px-3 py-2 shadow-sm", data.selected ? "border-accent ring-2 ring-accent/25" : data.on ? "border-accent bg-accent/10" : "border-warn/60", open && RING)}>
-      <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : "!bg-warn")} style={{ left: -6 }} />
+      <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : HUE.action!.dot, "!opacity-100")} style={{ left: -6 }} />
       <div className="flex items-center gap-1.5">
         <Zap size={12} className="shrink-0 text-warn" />
         <span className="text-[10px] uppercase tracking-wide text-warn">action</span>

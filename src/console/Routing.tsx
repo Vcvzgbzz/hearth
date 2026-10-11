@@ -3,12 +3,13 @@
  * them pass through, what a rule's lines end at and what they set off. Only what is routed is
  * drawn. The nodes are flowNodes.tsx's; what a drawn line changes is draft.ts's.
  */
-import { applyNodeChanges, Background, Controls, ReactFlow, type Edge, type Node } from "@xyflow/react";
+import { applyNodeChanges, Background, Controls, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { directTo, draftView, factsOf, list, nodeOf, refusal, toOf, unchecked, unroutable, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried } from "./editStore.js";
-import { takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type RefuseBox, type SwitchBox } from "./flowNodes.js";
+import { contextMenu } from "./editor.js";
+import { HUE, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type RefuseBox, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "./types.js";
 import { useStore } from "./store.js";
@@ -79,7 +80,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     nodes.push({
       id: `model:${model}`, type: "dest", position: { x: endX, y },
       data: {
-        title: model, on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
+        title: model, kind: "model", on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
         sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.server ? ` · ${where.server}` : ""}`,
       } satisfies Dest,
     });
@@ -89,7 +90,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     const p = peers.find((n) => n.name === name);
     nodes.push({
       id: `peer:${name}`, type: "dest", position: { x: endX, y },
-      data: { title: name, on: tried?.target === "peer" && tried.peer === name, down: !p?.up, sub: p?.up ? `a peer · lends you ${Object.keys(p.map ?? {}).length}` : "a peer · cannot be reached" } satisfies Dest,
+      data: { title: name, kind: "peer", on: tried?.target === "peer" && tried.peer === name, down: !p?.up, sub: p?.up ? `a peer · lends you ${Object.keys(p.map ?? {}).length}` : "a peer · cannot be reached" } satisfies Dest,
     });
     y += 56;
   }
@@ -112,13 +113,15 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       sub: `${self.name} · ${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`,
       rows: names.map((id) => ({
         id, on: edit?.asked === id && tried !== null, loose: (edit?.pending ?? []).includes(id) && !ruleOf(id) && !direct.has(id),
+        to: ruleOf(id) !== undefined ? "flow" : direct.get(id)?.kind ?? "unset",
         ...(fixed(id) ? { fixed: fixed(id)! } : {}),
       })),
       others: all.filter((id) => !names.includes(id) && !fixed(id)),
     } satisfies Hub,
   });
 
-  const wire = (id: string, lit: boolean, look: Partial<Line> = {}) => ({ id, type: "flow", ...(lit ? { zIndex: 1001 } : {}), data: { jobs: [], pulses: [], wire: true, lit, ...look } satisfies Line });
+  /** A line, in the colour of the kind of thing it goes to. */
+  const wire = (id: string, lit: boolean, kind: string, look: Partial<Line> = {}) => ({ id, type: "flow", ...(lit ? { zIndex: 1001 } : {}), data: { jobs: [], pulses: [], wire: true, lit, color: (HUE[kind] ?? HUE.unset!).stroke, ...look } satisfies Line });
   /** A line from an outlet to the model or the peer it ends at. */
   const to = (line: ReturnType<typeof wire>, source: string, handle: string, end: End): void => {
     edges.push({ ...line, source, sourceHandle: handle, target: end.kind === "peer" ? `peer:${end.peer}` : `model:${end.model}` });
@@ -134,7 +137,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     const rule = ruleOf(name);
     const off = rule !== undefined && d.flows?.[rule]?.off === true;
     // A rule that is off takes nothing: the line to it is drawn faint, and a tried request does not light it.
-    const line = wire(`e:ask:${name}`, edit?.asked === name && tried !== null && !off, off ? { faint: true } : {});
+    const line = wire(`e:ask:${name}`, edit?.asked === name && tried !== null && !off, rule !== undefined ? "flow" : direct.get(name)?.kind ?? "unset", off ? { faint: true } : {});
     if (rule !== undefined) edges.push({ ...line, source: "self", sourceHandle: `ask-${name}`, target: `flow:${rule}` });
     else if (direct.has(name)) to(line, "self", `ask-${name}`, direct.get(name)!);
   }
@@ -181,7 +184,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       f.steps.forEach((s, i) => {
         const t = toOf(s.to);
         const lit = step === i;
-        const line = wire(`e:${id}:${i}`, lit);
+        const line = wire(`e:${id}:${i}`, lit, t.kind);
         if (t.kind === "flow") edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `flow:${t.flow}` });
         else if (t.kind === "model" || t.kind === "peer") to(line, id, `step-${i}`, t);
         else if (t.kind === "fastest" || t.kind === "refuse") {
@@ -192,13 +195,13 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           else {
             const won = lit ? t.of.findIndex(reaches) : -1;
             nodes.push({ id: end, type: "fastest", position: { x: sideX, y: ty }, zIndex: 1000, data: { flow: name, step: i, ends: t.of, editable, on: lit, ...(won >= 0 ? { lit: won } : {}) } satisfies FastestBox });
-            t.of.forEach((e, k) => to(wire(`e:${end}:${k}`, won === k), end, `end-${k}`, e));
+            t.of.forEach((e, k) => to(wire(`e:${end}:${k}`, won === k, e.kind), end, `end-${k}`, e));
           }
           edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: end });
           mine.push(end);
         }
         // What a line sets off is a dashed line of its own: it is beside where the request goes, not instead of it.
-        for (const a of list(s.do)) if (d.actions?.[a]) edges.push({ ...wire(`e:${id}:${i}:do:${a}`, lit && tried !== null, { ghost: true }), source: id, sourceHandle: `step-${i}`, target: `action:${a}` });
+        for (const a of list(s.do)) if (d.actions?.[a]) edges.push({ ...wire(`e:${id}:${i}:do:${a}`, lit && tried !== null, "action", { ghost: true }), source: id, sourceHandle: `step-${i}`, target: `action:${a}` });
       });
       homed(name).forEach(([a], k) => {
         nodes.push(action(a, { x: sideX, y: fy + beside.actions + k * SIDE.action }));
@@ -248,12 +251,23 @@ export function Routing() {
   // crossing. Only the lines are redrawn for it: touching the nodes would cut off a drag that is just starting.
   const edges = useMemo(() => (edit.hover === null ? laid.edges : laid.edges.map((e) => (e.id === edit.hover ? { ...e, zIndex: 1001, data: { ...e.data, lit: true } } : e))), [laid.edges, edit.hover]);
 
+  // A node asked for by the search or a menu is brought into view; `*` is the whole map.
+  const flow = useRef<ReactFlowInstance | null>(null);
+  useEffect(() => {
+    const rf = flow.current;
+    if (!rf || !edit.focus) return;
+    const node = edit.focus.node;
+    // After the layout has caught up with whatever was just added.
+    const t = setTimeout(() => void rf.fitView(node === "*" ? { padding: 0.08, duration: 300 } : { nodes: [{ id: node }], maxZoom: 1, minZoom: 0.7, padding: 0.6, duration: 300 }), 60);
+    return () => clearTimeout(t);
+  }, [edit.focus]);
+
   return (
     <ReactFlow
       nodes={nodes} edges={edges} nodeTypes={VIEWS} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={editing} elementsSelectable={false} zoomOnDoubleClick={false}
       // The strip over the map is two rows tall when it has something to say.
-      minZoom={0.3} maxZoom={1.5} onInit={(rf) => arrive(rf, 120)}
+      minZoom={0.3} maxZoom={1.5} onInit={(rf) => { flow.current = rf; arrive(rf, 120); }}
       colorMode={dark ? "dark" : "light"} proOptions={{ hideAttribution: true }}
       onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes, ns))}
       onNodeDragStart={(_, n) => { dragging.current = n.id; }}
@@ -274,6 +288,9 @@ export function Routing() {
         if (open && editing) editSelect(open);
       }}
       onPaneClick={() => editSelect(null)}
+      // A right-click opens the map's own menu, on empty map or on a node.
+      onPaneContextMenu={(e) => { e.preventDefault(); if (editing) contextMenu(e, null); }}
+      onNodeContextMenu={(e, n) => { e.preventDefault(); if (editing) contextMenu(e, n.id); }}
     >
       <Background gap={20} size={1} color="var(--border)" />
       <Controls showInteractive={false} position="bottom-left" />

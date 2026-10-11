@@ -183,6 +183,23 @@ export function routeId(doc: Doc, id: string, to: To): Doc {
   return put(out, "flows", name, { inputs: [id], steps: [{ to: rawTo(to) }] });
 }
 
+/** A rule to start from: a common shape with its conditions in place and its destinations left to choose. */
+export const TEMPLATES: { label: string; hint: string; name: string; steps: Doc[] }[] = [
+  { label: "Borrow an idle model", hint: "use a bigger model while nobody else is", name: "borrow-idle", steps: [{ when: { idle: { ms: 300_000 }, ready: true }, to: "", max: 2 }, { to: "" }] },
+  { label: "Use another model at certain hours", hint: "overnight, say, when nobody is waiting on it", name: "by-hour", steps: [{ when: { time: { from: "22:00", to: "06:00" } }, to: "" }, { to: "" }] },
+  { label: "Send images somewhere else", hint: "requests with images go to a model that takes them", name: "images", steps: [{ when: { images: true }, to: "" }, { to: "" }] },
+  { label: "Send long prompts somewhere else", hint: "past a size, use a model with more room", name: "long-prompts", steps: [{ when: { tokensOver: 8000 }, to: "" }, { to: "" }] },
+  { label: "Stay off a busy model", hint: "use it while its queue is short, else another", name: "when-busy", steps: [{ when: { queuedUnder: 3 }, to: "" }, { to: "" }] },
+  { label: "One caller gets its own model", hint: "by api key label", name: "per-caller", steps: [{ when: { caller: [] }, to: "" }, { to: "" }] },
+];
+
+/** A rule or an action taken out of the draft. An action goes from every line that ran it too, so the file still loads. */
+export function removed(doc: Doc, section: "flows" | "actions", id: string): Doc {
+  const gone = put(doc, section, id, undefined);
+  if (section !== "actions") return gone;
+  return linesRunning(gone, id).reduce<Doc>((d, [rule, i]) => withDo(d, rule, i, id, false) ?? d, gone);
+}
+
 /** What an action is told about a request: the `{name}`s its text may use. The last four are known once the request has ended. */
 export const FACTS = ["asked", "model", "caller", "lane", "tokens", "images", "tools", "target", "peer", "flow", "line", "reason", "node", "action", "backend", "id", "outcome", "ms", "queuedMs", "ranMs", "error"];
 
