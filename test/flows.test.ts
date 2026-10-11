@@ -464,6 +464,22 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   assert.equal(goes({ ready: true }, { local: () => ({ queued: 0, free: 1, slots: 1, loaded: ["big"] }) }), "big");
   assert.throws(() => parseConfig(base({ a: { inputs: ["small"], steps: [{ when: { ready: true }, to: { flow: "b" } }, { to: "small" }] }, b: { inputs: [], steps: [{ to: "big" }] } })), /tests warm, free, queuedUnder, ready or idle/);
 
+  // A header the request carries. A request without it, or with it empty, matches no value and no "any value".
+  const sends = (headers: Record<string, string | undefined> | undefined) => (headers === undefined ? {} : { headers });
+  const one = { header: { "X-Stay": "local" } };
+  assert.deepEqual([goes(one, sends({ "x-stay": "local" })), goes(one, sends({ "x-stay": " local " })), goes(one, sends({ "x-stay": "away" })), goes(one, sends({})), goes(one, sends(undefined)), goes(one, sends({ "x-stay": undefined })), goes(one, sends({ "x-stay": "" }))],
+    ["big", "big", "small", "small", "small", "small", "small"], "the name is matched in lower case, the value trimmed");
+  assert.deepEqual([goes({ header: { "x-stay": [] } }, sends({ "x-stay": "anything" })), goes({ header: { "x-stay": null } }, sends({ "x-stay": "anything" })), goes({ header: { "x-stay": [] } }, sends({}))], ["big", "big", "small"], "no values asks only that it is there");
+  assert.deepEqual([goes({ header: { a: ["1"], b: ["2", "3"] } }, sends({ a: "1", b: "3" })), goes({ header: { a: ["1"], b: ["2"] } }, sends({ a: "1" }))], ["big", "small"], "every header named must match");
+  // The opposite: not one of these values, which a request without the header is not either.
+  const not = { headerNot: { "x-stay": ["local"] } };
+  assert.deepEqual([goes(not, sends({ "x-stay": "local" })), goes(not, sends({ "x-stay": "away" })), goes(not, sends({})), goes(not, sends(undefined)), goes(not, sends({ "x-stay": "" }))], ["small", "big", "big", "big", "big"]);
+  assert.deepEqual([goes({ headerNot: { "x-stay": [] } }, sends({})), goes({ headerNot: { "x-stay": [] } }, sends({ "x-stay": "x" }))], ["big", "small"], "no values asks that it is not there");
+  // Nothing under header: is no condition at all, and a name that cannot be a header is refused.
+  assert.equal(parseConfig(base(steps({ header: null, images: false }))).flows["a"]!.steps[0]!.when!.header, undefined);
+  assert.throws(() => parseConfig(base(steps({ header: { "bad name": "x" } }))), /when\.header names "bad name", which is not a header name/);
+  assert.throws(() => parseConfig(base(steps({ header: { "x-a": [1] } }))), /when\.header\.x-a must be a list of strings/);
+
   // A limit: the line takes that many at once, and the rest go on down the list.
   const capped = parseConfig(base(steps({ images: false }, { max: 2 })));
   assert.equal(capped.flows["a"]!.steps[0]!.max, 2);
@@ -820,6 +836,39 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   // A strict router's callers get the model the line names, or its failure.
   assert.ok((await post("k-test", "TTS:fast")) >= 500);
   assert.equal(got.length, before + 1, "and nothing ran in its place");
+  await node.close();
+  backend.closeAllConnections();
+  backend.close();
+}
+
+// --- a header the caller sends reaches the flow, on a path and in a tried request ----------------------
+{
+  const got: unknown[] = [];
+  const backend = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      try { if (req.method === "POST") got.push((JSON.parse(Buffer.concat(chunks).toString()) as { model?: unknown }).model); } catch { /* no body */ }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+  });
+  await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
+  const node = createNode(parseConfig({
+    backends: { embed: { url, kind: "none", serves: ["near", "far"], routes: [{ path: "/v1/embeddings", model: "near", lane: "chat" }] } },
+    scheduler: { lanes: { chat: { priority: 0 } } },
+    flows: {
+      Embed: { takes: "/v1/embeddings", inputs: ["Embed"], steps: [{ when: { headerNot: { "x-stay": "local" } }, to: "far" }, { to: "near" }] },
+      rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] },
+    },
+  }), silentLogger);
+  const at = await new Promise<string>((ready) =>
+    node.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(node.server.address() as AddressInfo).port}`)));
+  const ask = async (headers: Record<string, string>) => { await fetch(`${at}/v1/embeddings`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ model: "Embed", input: "x" }) }); return got.at(-1); };
+  assert.deepEqual([await ask({}), await ask({ "X-Stay": "local" }), await ask({ "x-stay": "elsewhere" })], ["far", "near", "far"]);
+  const tried = async (headers: unknown) => ((await (await fetch(`${at}/flows/try`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "Embed", headers }) })).json()) as { model: string }).model;
+  assert.deepEqual([await tried({ "X-Stay": "local" }), await tried(undefined), await tried({ "x-stay": 7 }), await tried(null)], ["near", "far", "far", "far"], "and one that is not text is as good as not sent");
   await node.close();
   backend.closeAllConnections();
   backend.close();

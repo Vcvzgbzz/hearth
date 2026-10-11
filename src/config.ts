@@ -191,6 +191,13 @@ export interface FlowWhen {
    * type `ImageGen` in its `realism` variant. A request with no variant matches none of these.
    */
   variant?: string[];
+  /**
+   * A header the request carries, by name (lower case), is one of these values; an empty list is
+   * any value at all. A request without the header matches none.
+   */
+  header?: Record<string, string[]>;
+  /** The opposite: the header is not one of these values, or with an empty list is not there. A request without it matches. */
+  headerNot?: Record<string, string[]>;
   /** The path the request arrived on is one of these, each as a backend declares it under `routes:`. A chat request matches none. */
   path?: string[];
   /** The opposite of `asked`, `caller` and `lane`: none of these. */
@@ -594,7 +601,7 @@ function layoutDecl(raw: unknown): Record<string, { x: number; y: number }> {
   return out;
 }
 
-const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "path", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
+const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "path", "header", "headerNot", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "time", "held", "down", "idle", "warm", "free", "queuedUnder", "ready"] as const;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, or a refusal. */
@@ -754,6 +761,16 @@ function flowDecls(
         for (const k of ["tokensOver", "tokensUnder", "queuedUnder"] as const) if (w[k] !== undefined) when[k] = count(w[k], `${here}.when.${k}`, 0, k === "tokensOver" ? 0 : 1);
         for (const k of ["variant", "path", "asked", "askedNot", "caller", "callerNot", "lane", "laneNot", "held", "down"] as const) if (w[k] !== undefined) when[k] = strList(typeof w[k] === "string" ? [w[k]] : w[k], `${here}.when.${k}`);
         for (const l of [...(when.lane ?? []), ...(when.laneNot ?? [])]) inLanes(l, `${here}.when.lane`);
+        for (const k of ["header", "headerNot"] as const) {
+          if (w[k] === undefined || w[k] === null) continue;
+          const named: Record<string, string[]> = {};
+          for (const [name, v] of Object.entries(asRecord(w[k], `${here}.when.${k}`))) {
+            if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) throw bad(`${here}.when.${k}`, `names "${name}", which is not a header name`);
+            // One value may be written bare, and nothing at all is the empty list: any value, or for headerNot none.
+            named[name.toLowerCase()] = strList(v === null || v === undefined ? [] : typeof v === "string" ? [v] : v, `${here}.when.${k}.${name}`).map((x) => x.trim());
+          }
+          if (Object.keys(named).length) when[k] = named;
+        }
         for (const p of when.path ?? []) if (!routed.includes(p)) throw bad(`${here}.when.path`, `names "${p}", which no backend declares under routes: (${routed.join(", ") || "none"})`);
         for (const v of when.variant ?? []) if (v === "" || v.includes(":")) throw bad(`${here}.when.variant`, `names "${v}": a variant is a plain word, asked for as <name>:<variant>`);
         if (w.time !== undefined) {

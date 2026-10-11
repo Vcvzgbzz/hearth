@@ -683,6 +683,7 @@ export function problems(doc: Doc, facts?: Facts): string[] {
       // A condition changed after the line was drawn can leave it pointing somewhere that cannot take it.
       const no = facts ? refusal(obj(s.when), to, facts, f.paths) : null;
       if (no) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: ${no}`);
+      for (const k of ["header", "headerNot"]) if ("" in obj(obj(s.when)[k])) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: say which header it tests, by name.`);
       if (to.kind === "unset") out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: choose where it sends requests.`);
       else if (!last && to.kind !== "peer" && typeof s.max !== "number" && Object.keys(obj(s.when)).length === 0) out.push(`Rule "${f.name}", line ${i + 1}: choose a condition, or the lines after it are never reached.`);
       for (const a of list(s.do)) if (!isObj(obj(doc.actions)[a])) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: it runs the action "${a}", which is gone.`);

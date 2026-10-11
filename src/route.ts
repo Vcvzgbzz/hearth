@@ -33,6 +33,8 @@ export interface World {
   lane: string;
   /** The path the request arrived on, as a backend declares it; absent for chat. */
   path?: string;
+  /** The headers the request carries, by lower-case name. Absent reads as a request with none. */
+  headers?: Readonly<Record<string, string | undefined>>;
   /** Load on the backend that serves a model here. */
   local: (model: string) => LocalLoad;
   /** Is this model's hardware held against this lane? */
@@ -219,6 +221,17 @@ export function resolve(named: string, w: World): Resolution {
     }
     return best === null ? "none of them can take it" : best.r;
   };
+  /** A header's value as sent, trimmed; null when the request has none by that name or it is empty. */
+  const sent = (name: string): string | null => {
+    const v = w.headers?.[name];
+    return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+  };
+  /** Does every header named carry one of its values? An empty list asks only that it is there. */
+  const carries = (named: Record<string, string[]>): boolean =>
+    Object.entries(named).every(([name, values]) => { const v = sent(name); return v !== null && (values.length === 0 || values.includes(v)); });
+  /** Does no header named carry one of its values? An empty list asks that it is not there at all. */
+  const lacks = (named: Record<string, string[]>): boolean =>
+    Object.entries(named).every(([name, values]) => { const v = sent(name); return v === null || (values.length > 0 && !values.includes(v)); });
   const asks = (c: FlowWhen): boolean =>
     (c.images === undefined || c.images === need.images)
     && (c.tools === undefined || c.tools === need.tools)
@@ -227,6 +240,8 @@ export function resolve(named: string, w: World): Resolution {
     && (c.asked === undefined || c.asked.includes(asked))
     && (c.variant === undefined || (variant !== null && c.variant.includes(variant)))
     && (c.path === undefined || (w.path !== undefined && c.path.includes(w.path)))
+    && (c.header === undefined || carries(c.header))
+    && (c.headerNot === undefined || lacks(c.headerNot))
     // A key's caller is `key:<label>`; a step names the label.
     && (c.caller === undefined || c.caller.some((n) => n === w.caller || `key:${n}` === w.caller))
     && (c.lane === undefined || c.lane.includes(lane))

@@ -306,6 +306,7 @@ export async function tryRequest(trial: Trial | null): Promise<void> {
     const tried = await request<Tried>("POST", "/flows/try", {
       model: trial.model, images: trial.images, tools: trial.tools, tokens: trial.long ? 50_000 : 200, flows: draft.flows ?? {}, actions: draft.actions ?? {},
       ...(trial.caller ? { caller: trial.caller } : {}), ...(trial.lane ? { lane: trial.lane } : {}),
+      headers: Object.fromEntries((trial.pretend ?? []).filter((p) => p.startsWith("hdr:")).map((p) => { const cut = p.indexOf("="); return [p.slice(4, cut), p.slice(cut + 1)]; })),
       pretend: {
         ...Object.fromEntries(["idle", "used", "busy", "warm", "held"].map((k) => [k, (trial.pretend ?? []).filter((p) => p.startsWith(`${k}:`)).map((p) => p.slice(k.length + 1))])),
         ...Object.fromEntries(["full", "unready"].map((k) => [k, (trial.pretend ?? []).filter((p) => p.startsWith(`${k}:`)).map((p) => p.slice(k.length + 1))])),

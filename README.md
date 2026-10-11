@@ -241,7 +241,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
 | `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
-| `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
+| `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, headers?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
 | `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |
 | `/` | anyone | `GET` redirects to `/ui` |
@@ -1303,6 +1303,8 @@ as named, so `to: chat-model` inside the flow that takes `chat-model` means
 | `tokensOver: n` / `tokensUnder: n` | the estimated prompt plus reserved output is over / under `n` |
 | `variant: [name]` | the name was asked for in one of these variants: `LLM:fast` is the type `LLM` in its `fast` variant. See [Types](#types) |
 | `path: [path]` | the request arrived on one of these paths, each as a backend declares it under `routes:`. A chat request matches none. Lets one type run a different model on each path it takes |
+| `header: { name: [value] }` | the request carries that header with one of these values; with no values, with any value. The name is matched in lower case and the value trimmed. A request without the header matches none. Use it for anything your callers can tell you that hearth has no word for: an account setting, a tier, a team |
+| `headerNot: { name: [value] }` | the opposite: the header is not one of these values, or with no values is not sent. A request without the header matches |
 | `asked: [id]` | the client asked for one of these ids |
 | `caller: [name]` | the request came with the api key labelled `name`, or `local` for loopback without a key |
 | `lane: [name]` | the request is in one of these lanes |
@@ -1428,6 +1430,25 @@ and `/v1/models` lists each beside its type. A variant no step tests is not
 offered, so a mistyped one is refused with the ones that exist and never
 quietly answered as the plain type. A name a flow takes as written is itself,
 colon and all.
+
+**A caller can tell a flow something of its own.** A step tests any header
+the request carries, by a name and values you choose, so an app in front of
+hearth can pass along what it knows about who is asking:
+
+```yaml
+flows:
+  chat:
+    inputs: [chat]
+    steps:
+      # Accounts that asked for their work to stay here never reach the peer.
+      - when: { headerNot: { x-stay: [local] } }
+        to: { peer: friend }
+      - to: my-model
+```
+
+A header is whatever the caller sends, so one that only narrows where work may
+go is safe from anyone, and one that widens it (`x-tier: paid`) belongs beside
+`caller:` for a key you trust.
 
 **A type can span several paths.** `takes:` may list more than one, and a step
 tests which the request arrived on with `path:`:

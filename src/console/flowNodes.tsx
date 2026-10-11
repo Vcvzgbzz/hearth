@@ -18,7 +18,8 @@ type Cond =
   | { key: string; kind: "num"; before: string; after: string; seed: number; about: About }
   | { key: string; kind: "list"; before: string; hint: string; about: About }
   | { key: "idle"; kind: "idle"; about: About }
-  | { key: "time"; kind: "time"; about: About };
+  | { key: "time"; kind: "time"; about: About }
+  | { key: "header" | "headerNot"; kind: "header"; about: About };
 
 /** Every condition a line can test, in the words the canvas uses for it. "The target" is where the line sends work. */
 export const CONDS: Cond[] = [
@@ -28,6 +29,8 @@ export const CONDS: Cond[] = [
   { key: "tokensUnder", kind: "num", before: "the prompt is under", after: "tokens", seed: 8000, about: "the request" },
   { key: "variant", kind: "list", before: "the variant is", hint: "e.g. realism, for Name:realism", about: "the request" },
   { key: "path", kind: "list", before: "the path is", hint: "e.g. /v1/embeddings", about: "the request" },
+  { key: "header", kind: "header", about: "the request" },
+  { key: "headerNot", kind: "header", about: "the request" },
   { key: "asked", kind: "list", before: "they asked for", hint: "model names", about: "the request" },
   { key: "askedNot", kind: "list", before: "they did not ask for", hint: "model names", about: "the request" },
   { key: "caller", kind: "list", before: "the caller is", hint: "key label, or local", about: "the request" },
@@ -44,14 +47,17 @@ export const CONDS: Cond[] = [
   { key: "time", kind: "time", about: "this node" },
 ];
 /** A condition as it appears in the list of ones to add. */
-const nameOf = (c: Cond) => (c.kind === "bool" ? c.yes : c.kind === "idle" ? "a model has been idle for a while" : c.kind === "time" ? "it is between two times of day" : `${c.before} …`);
-const seedOf = (c: Cond): unknown => (c.kind === "bool" ? true : c.kind === "num" ? c.seed : c.kind === "idle" ? { ms: 600_000 } : c.kind === "time" ? { from: "22:00", to: "06:00" } : []);
+const nameOf = (c: Cond) => (c.kind === "bool" ? c.yes : c.kind === "idle" ? "a model has been idle for a while" : c.kind === "time" ? "it is between two times of day"
+  : c.kind === "header" ? (c.key === "header" ? "a header it carries is …" : "a header it carries is not …") : `${c.before} …`);
+const seedOf = (c: Cond): unknown => (c.kind === "bool" ? true : c.kind === "num" ? c.seed : c.kind === "idle" ? { ms: 600_000 } : c.kind === "time" ? { from: "22:00", to: "06:00" } : c.kind === "header" ? { "": [] } : []);
 /** A condition and its value as one phrase, for a line that is read and not edited. */
 const phrase = (c: Cond, v: unknown): string =>
   c.kind === "bool" ? (v === false ? c.no : c.yes)
   : c.kind === "num" ? `${c.before} ${String(v)} ${c.after}`
   : c.kind === "list" ? `${c.before} ${list(v).join(" or ")}`
   : c.kind === "time" ? `it is between ${text(obj(v).from)} and ${text(obj(v).to)}`
+  // No values is the header being there at all, or for the opposite, not there.
+  : c.kind === "header" ? Object.entries(obj(v)).map(([n, vals]) => `the header ${n} ${c.key === "header" ? (list(vals).length ? `is ${list(vals).join(" or ")}` : "is sent") : (list(vals).length ? `is not ${list(vals).join(" or ")}` : "is not sent")}`).join(" and ")
   : `${text(obj(v).model) || "the target"} has been idle ${Number(obj(v).ms ?? 0) / 60_000} min`;
 /** A line's conditions as a sentence. */
 export const sentence = (when: Doc): string => CONDS.filter((c) => c.key in when).map((c) => phrase(c, when[c.key])).join(" and ");
@@ -103,7 +109,23 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
                        onChange={(e) => onChange({ ...when, [c.key]: e.target.value.split(",").map((x) => x.trim()).filter((x, k, all) => x !== "" || k === all.length - 1) })} />
                 {drop}
               </>
-            ) : c.kind === "time" ? (
+            ) : c.kind === "header" ? (() => {
+              // One header is edited here; any others the file names under the same condition are kept as they are.
+              const all = Object.entries(obj(v));
+              const [name, vals] = all[0] ?? ["", []];
+              const write = (n: string, values: string[]) => onChange({ ...when, [c.key]: Object.fromEntries([[n, values], ...all.slice(1)]) });
+              return (
+                <>
+                  <span>the header</span>
+                  <input aria-label="header name" autoFocus={fresh === c.key} spellCheck={false} className={cx(FIELD, "w-24 font-mono", name === "" && "border-warn")} placeholder="x-name" value={name}
+                         onChange={(e) => write(e.target.value.trim().toLowerCase(), list(vals))} />
+                  <span>{c.key === "header" ? "is" : "is not"}</span>
+                  <input aria-label={c.key === "header" ? "the values it may have" : "the values it may not have"} spellCheck={false} className={cx(FIELD, "w-24 font-mono")} placeholder={c.key === "header" ? "any value" : "sent at all"} value={list(vals).join(", ")}
+                         onChange={(e) => write(name, e.target.value.split(",").map((x) => x.trim()).filter((x, k, parts) => x !== "" || k === parts.length - 1))} />
+                  {drop}
+                </>
+              );
+            })() : c.kind === "time" ? (
               <>
                 <span>it is between</span>
                 {(["from", "to"] as const).map((k) => (

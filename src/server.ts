@@ -540,9 +540,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   /** The config as a caller's requests see it: its router's rulebook in place of `flows:`. */
   const rulesFor = (caller: string): HearthConfig => { const r = routerOf(caller); return r ? { ...cfg, flows: r.flows } : cfg; };
 
-  function worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = rulesFor(caller)): World {
+  /** A request's headers as a flow reads them: one value per lower-case name, the first where a name was sent twice. */
+  const headersOf = (req: IncomingMessage): Record<string, string> =>
+    Object.fromEntries(Object.entries(req.headers).flatMap(([k, v]) => { const one = Array.isArray(v) ? v[0] : v; return typeof one === "string" ? [[k.toLowerCase(), one]] : []; }));
+
+  function worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = rulesFor(caller), headers: World["headers"] = {}): World {
     return {
-      cfg: from, peers, caller, lane, need,
+      cfg: from, peers, caller, lane, need, headers,
       local: (m) => localLoad(pool.for(m), m),
       held: (m, l) => pool.heldOff(pool.for(m).cfg, l),
       ready,
@@ -575,7 +579,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       }
       if (mayLeave(from, asked)) await peers.ensureFresh();
       const need = { tokens: typeof b.tokens === "number" ? b.tokens : 0, images: b.images === true, tools: b.tools === true };
-      const real = worldFor(typeof b.caller === "string" ? b.caller : "local", from.models[asked]?.lane ?? lane, need, from);
+      // Headers to try it with, as `{ name: value }`; anything that is not text is left out.
+      const tried = Object.fromEntries(Object.entries(typeof b.headers === "object" && b.headers !== null ? b.headers as Record<string, unknown> : {})
+        .flatMap(([k, v]) => (typeof v === "string" ? [[k.toLowerCase(), v]] : [])));
+      const real = worldFor(typeof b.caller === "string" ? b.caller : "local", from.models[asked]?.lane ?? lane, need, from, tried);
       // `pretend` stands in for state that cannot be arranged on demand: models named as idle, just used, busy, loaded or held.
       const pretend = (typeof b.pretend === "object" && b.pretend !== null ? b.pretend : {}) as Record<string, unknown>;
       const said = (k: string): string[] => (Array.isArray(pretend[k]) ? (pretend[k] as unknown[]).filter((x): x is string => typeof x === "string") : []);
@@ -614,11 +621,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     signal: AbortSignal,
     onPosition?: (position: number) => void,
     id?: string,
+    headers: World["headers"] = {},
   ): Promise<void> {
     const ended: ((error: string | null) => void)[] = [];
     let error: string | null = null;
     try {
-      const status = await route(payload, asked, askedLane, caller, res, signal, ended, onPosition, id);
+      const status = await route(payload, asked, askedLane, caller, res, signal, ended, onPosition, id, headers);
       if (status >= 400) error = `backend answered ${status}`;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -639,6 +647,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     ended: ((error: string | null) => void)[],
     onPosition?: (position: number) => void,
     id?: string,
+    headers: World["headers"] = {},
   ): Promise<number> {
     // Refresh peer state only when a decision needs it, and only for requests that may leave.
     if (mayLeave(cfg, asked)) await peers.ensureFresh();
@@ -650,7 +659,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // rather than sent the prompt across the network to be refused there.
     const talk = conversation(caller, asked, payload);
     const world: World = {
-      ...worldFor(caller, askedLane, needsOf(payload, cfg.models[asked]?.videoTokens)),
+      ...worldFor(caller, askedLane, needsOf(payload, cfg.models[asked]?.videoTokens), rulesFor(caller), headers),
       // Only a later turn is held to where the conversation started; an opening turn is decided afresh.
       ...(talk?.later ? { pinned: (flow: string) => { const at = placed.get(`${flow}\0${talk.key}`); return at && at.until > Date.now() ? at.end : undefined; } } : {}),
     };
@@ -1745,7 +1754,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     });
 
     if (fromPeer === null) {
-      await dispatch(payload, model, lane, caller, res, ctrl.signal, positionStream(c.req, res, payload), jobId(c.req));
+      await dispatch(payload, model, lane, caller, res, ctrl.signal, positionStream(c.req, res, payload), jobId(c.req), headersOf(c.req));
       return;
     }
     // A peer running a model here is that model in use.
@@ -1967,7 +1976,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const rules = rulesFor(who).flows;
       const taker = Object.values(rules).find((f) => !f.off && f.takes?.includes(held?.path ?? pathname));
       const name = held?.name ?? viaBody ?? taker?.inputs[0] ?? routed!.rule.model;
-      const world: World = { ...worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined), path: held?.path ?? pathname };
+      const world: World = { ...worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined, rulesFor(who), headersOf(req)), path: held?.path ?? pathname };
       const r = resolve(name, world);
       const refuse = (status: number, why: string) => fail(res, new Refusal(status, why, status === 404 ? "invalid_request_error" : "server_error"));
       if (r.unlisted) return refuse(404, r.reason);

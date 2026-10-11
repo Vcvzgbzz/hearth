@@ -437,6 +437,8 @@ function situations(draft: Doc, on: string[]): Choice[] {
       if (target && (when.warm !== undefined || when.ready !== undefined)) out.set(`warm:${target}`, `${target} is already loaded`);
       if (target && when.ready !== undefined) out.set(`unready:${target}`, `${target} would need a swap`);
       if (isObj(when.time)) { out.set(`now:${text(when.time.from)}`, `the time is ${text(when.time.from)}`); out.set(`now:${text(when.time.to)}`, `the time is ${text(when.time.to)}`); }
+      // A header a line tests can be tried with each value it names, or with any value where it names none.
+      for (const k of ["header", "headerNot"]) for (const [h, vals] of Object.entries(obj(when[k]))) for (const val of list(vals).length ? list(vals) : ["1"]) if (h) out.set(`hdr:${h}=${val}`, `the request carries ${h}: ${val}`);
       list(when.caller).forEach((c) => callers.add(c));
       list(when.lane).forEach((l) => lanes.add(l));
     }
