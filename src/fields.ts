@@ -123,6 +123,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     lane: { type: "ref", ref: "lanes", desc: "Lane this model's requests queue in, over the client's." },
     concurrency: { type: "number", min: 1, desc: "Jobs this model may run at once, above or below its backend's.", def: "backend's" },
     shareAfterMs: ms("A turn joins running turns only once each has run this long. Matters above concurrency 1.", undefined, 0),
+    cacheMs: ms("Keep an answer this long and give it to an identical request without running it. 0 keeps none.", 0, 0),
     videoTokens: { type: "number", min: 1, desc: "What one video costs when checking a request fits the context window.", def: 49152 },
     params: { type: "object", desc: "Request fields stamped on every call: temperature, top_p and the like.", seed: {} },
     stats: { type: "object", scope: "stats", desc: "What the model takes, for one that hasn't loaded or a backend that can't say.", seed: {} },

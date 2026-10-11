@@ -288,6 +288,8 @@ export interface ModelRoute {
   pool: { tokens: number; output: number | null } | null;
   /** A turn shares the backend with this model's running turns only once each has run this long; unset never waits. */
   shareAfterMs?: number;
+  /** How long an answer is kept for an identical request; unset or 0 keeps none. */
+  cacheMs?: number;
   /**
    * Jobs this model may run at once locally, overriding the backend's `concurrency` either way:
    * vLLM's --max-num-seqs above it, llama.cpp's --parallel below it. A raise applies only while
@@ -1546,6 +1548,9 @@ export function parseConfig(raw: unknown): HearthConfig {
     };
     if (entry.shareAfterMs !== undefined) {
       models[id].shareAfterMs = count(entry.shareAfterMs, `models.${id}.shareAfterMs`, 0, 0);
+    }
+    if (entry.cacheMs !== undefined) {
+      models[id].cacheMs = count(entry.cacheMs, `models.${id}.cacheMs`, 0, 0);
     }
     if (entry.videoTokens !== undefined) {
       models[id].videoTokens = count(entry.videoTokens, `models.${id}.videoTokens`, 1);

@@ -22,6 +22,7 @@ import { decide, mayLeave, resolve, variantsOf, type LocalLoad, type World } fro
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
 import { KEEP_DAYS, meter, Usage, type Meter } from "./usage.js";
+import { Answers } from "./answers.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_HTML } from "./ui.js";
 import { createViews, type CallerUse, type KeyInfo } from "./views.js";
@@ -160,6 +161,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /** Requests and tokens per caller per model per day. */
   const usage = new Usage();
+  /** Answers kept for the models that say so. */
+  const answers = new Answers();
   const history = new History(() => {
     const agg = pool.aggregate();
     return {
@@ -802,6 +805,21 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       logRequest(t, { model, lane, caller, target: "unavailable" }, false, decision.reason);
       // The flow's own words: a refusal step's reason, with why a peer was passed over when one was.
       throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
+    }
+
+    // A model that keeps its answers gives one back to a request identical to the one it answered.
+    // A stream opened early to report queue position is neither kept nor answered from what is.
+    const keepMs = cfg.models[model]?.cacheMs ?? 0;
+    if (keepMs > 0 && onPosition === undefined) {
+      const key = answers.key(model, payload);
+      const hit = answers.get(key);
+      if (hit !== null) {
+        res.writeHead(200, { "Content-Type": hit.type, "X-Hearth-Cache": "hit", "X-Accel-Buffering": "no", ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}) });
+        res.end(hit.body);
+        logRequest(t, { model, lane, caller, target: "cache" }, true);
+        return 200;
+      }
+      answers.keep(res, key, keepMs);
     }
 
     if (decision.target === "local") {

@@ -157,6 +157,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `models.<id>.pool` | unset | token budget shared by this model's running turns: `tokens`, and `output` to cap what each turn reserves. See [One backend, models with different ceilings](#one-backend-models-with-different-ceilings) |
 | `models.<id>.stats` | unset | what the model takes, for one that hasn't loaded or a backend that can't say: `context`, `vision`, `tools`, `thinking`, `effort`, `quant`. See [Knowing what a borrowed model can take](#knowing-what-a-borrowed-model-can-take) |
 | `models.<id>.shareAfterMs` | unset | a turn joins this model's running turns only once each has run this long, so two turns started together do not both pay for sharing the card. Only matters where `concurrency` is above 1 |
+| `models.<id>.cacheMs` | `0` | keep an answer this long and give it to an identical request without running it. Identical means the same model and every request field the same. Shared by every caller, held in memory, and lost on restart. 0 keeps none. See [Keeping answers](#keeping-answers) |
 | `models.<id>.videoTokens` | `49152` | what one video costs this model when checking a request fits its context window. Size it from the seat: frames sampled per clip × tokens per frame |
 | `peers.<name>` | — | one entry per friend: `url` and `token` to borrow from them, `accept` to lend to them, or both |
 | `peers.<name>.url` | — | the peer's hearth, main port |
@@ -1751,6 +1752,31 @@ The rules:
   warm bonus, they batch together where the model batches, and `concurrency:`
   on the seat covers every id that fronts it. Slots belong to the weights, not
   to the name you reached them by.
+
+### Keeping answers
+
+`cacheMs` on a model keeps each answer for that long. A request that names the
+same model with every field the same gets the kept answer back at once, marked
+`X-Hearth-Cache: hit`, and takes no slot and no queue.
+
+```yaml
+models:
+  classifier: { cacheMs: 600000 }   # ten minutes
+```
+
+It suits requests that are asked again word for word: a classifier, an
+embedding-like lookup done through chat, a fixed prompt behind a button. It
+does not suit a conversation model, where asking again is asking for a
+different answer: with this on, "regenerate" returns the same text until the
+time is up.
+
+What is kept is what was sent to the client, so a stream is kept and replayed
+whole. Only a `200` is kept, and for a stream only one that reached its end.
+An answer larger than 1 MB is not kept, and the node keeps 500 at most, the
+least recently asked for going first. The answers are shared by every caller
+of that model: two callers who send the same request see the same answer, so
+leave it off where an answer depends on who asked. A stream opened with
+`X-Hearth-Queue: stream` is neither kept nor answered from what is.
 
 ### Knowing what is warm
 
