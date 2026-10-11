@@ -410,7 +410,7 @@ export type Dest = { title: string; sub: string; /** `model` or `peer`. */ kind:
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
   const open = useConnection((c) => (c.inProgress ? takesWork(c.fromNode.id) : false));
   return (
-    <div title={data.shut ? `${data.title} is not a chat model, so a line cannot end here` : undefined}
+    <div title={data.shut ? `${data.title} is not a chat model: only a rule that takes its path can send here` : undefined}
          className={cx("w-[200px] rounded-xl border bg-panel px-3 py-1.5 shadow-sm", data.on ? "border-accent bg-accent/10" : "border-line", open && !data.shut && RING, open && data.shut && "opacity-40")}>
       <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : hue(data.kind).dot, "!opacity-100")} style={{ left: -6 }} />
       <div className="truncate font-mono text-[12px] font-medium">{data.title}</div>

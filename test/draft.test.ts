@@ -250,9 +250,9 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   // A model only a route names (a path with no name in it) is not chat either.
   const filmed = factsOf({ ...withFacts, backends: { ...(withFacts.backends as object), film: { url: "http://127.0.0.1:8", kind: "none", routes: [{ path: "/generate", model: "film-model", lane: "chat" }] } } }, live);
   assert.equal(filmed.kind("film-model"), "paths");
-  // A rule that takes a path is the other way about: its lines end at what answers that path, never at chat or a peer.
+  // A rule that takes a path may end at any model here, one whose backend declares no path included, but never at a peer.
   assert.equal(refusal(null, to("paint"), facts, true), null);
-  assert.match(refusal(null, to("chat"), facts, true)!, /takes requests that are not chat, and chat answers chat/);
+  assert.equal(refusal(null, to("chat"), facts, true), null);
   assert.match(refusal(null, { kind: "peer", peer: "friend", model: null }, facts, true)!, /a peer is only ever sent chat/);
 }
 

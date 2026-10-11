@@ -242,9 +242,11 @@ export function Picker() {
   const ends = out?.endsOnly ?? false;
   const self = out?.rule ?? null;
   const known = facts();
+  // A rule that takes a backend's own path may send to any model; a chat rule only to one that answers chat.
+  const chat = !(out?.paths ?? false);
   // What cannot take a chat request is left out, unless it is searched for by name: then it is shown, and says why not.
   const models = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => list(obj(b).serves)).concat(Object.keys(obj(draft.models))))].filter(hit)
-    .filter((m) => q.trim() !== "" || known?.kind(m) !== "paths");
+    .filter((m) => !chat || q.trim() !== "" || known?.kind(m) !== "paths");
   const peers = Object.keys(obj(draft.peers)).filter(hit);
   const flows = Object.keys(obj(draft.flows)).filter((f) => f !== self && hit(f));
   // A rule one name enters can send it on as itself; with several names there is no single "itself" to offer.
@@ -262,7 +264,7 @@ export function Picker() {
           <input autoFocus aria-label="send it to" placeholder="send these requests to…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => {
                    if (e.key === "Escape") pick(null);
                    // Enter takes the first model that fits what was typed.
-                   const first = models.find((m) => known?.kind(m) !== "paths");
+                   const first = models.find((m) => !chat || known?.kind(m) !== "paths");
                    if (e.key === "Enter" && q.trim() && first) send({ kind: "model", model: first });
                  }}
                  className="h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
@@ -279,8 +281,8 @@ export function Picker() {
           {own && hit("its own model") && <button className={row} onClick={() => send(entering.length === 1 ? { kind: "model", model: own } : { kind: "asked" })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
           {models.length > 0 && <div className={head}>a model on this node</div>}
           {models.map((m) => {
-            const shut = known?.kind(m) === "paths";
-            return <button key={m} disabled={shut} title={shut ? `${m} is not a chat model, so a chat request cannot run as it` : undefined} className={cx(row, mono, "disabled:opacity-40")} onClick={() => send({ kind: "model", model: m })}>{m}{shut && <span className="ml-auto font-sans text-[10px] text-dim">not chat</span>}</button>;
+            const shut = chat && known?.kind(m) === "paths";
+            return <button key={m} disabled={shut} title={shut ? `${m} is not a chat model, and this rule takes chat requests. To send it requests on its own path, open the rule and set "It takes" to that path.` : undefined} className={cx(row, mono, "disabled:opacity-40")} onClick={() => send({ kind: "model", model: m })}>{m}{shut && <span className="ml-auto font-sans text-[10px] text-dim">not chat: set what the rule takes</span>}</button>;
           })}
           {peers.length > 0 && <div className={head}>a peer</div>}
           {peers.map((p) => <button key={p} className={row} onClick={() => send({ kind: "peer", peer: p, model: null })}>{p}</button>)}

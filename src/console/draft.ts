@@ -511,9 +511,9 @@ export function refusal(when: Doc | null | undefined, to: To, facts: Facts, path
   const ends: End[] = to.kind === "fastest" ? to.of : to.kind === "model" || to.kind === "peer" ? [to] : [];
   for (const end of ends) {
     const name = end.kind === "peer" ? `${end.model ?? "the model"} on ${end.peer}` : end.model;
-    // `paths`: the rule takes requests that are not chat, so what it sends them to must answer those and not chat.
+    // `paths`: the rule takes requests that are not chat. Any model here may answer those: one whose backend
+    // declares no path of its own is still sent a request that names it, so only a peer is ruled out.
     if (paths && end.kind === "peer") return `This rule takes requests that are not chat, and a peer is only ever sent chat.`;
-    if (paths && end.kind === "model" && facts.kind(end.model) === "chat") return `This rule takes requests that are not chat, and ${end.model} answers chat.`;
     if (paths) continue;
     if (end.kind === "model" && facts.kind(end.model) === "paths") {
       return `${end.model} is not a chat model: its backend answers it on paths of its own (image generation and the like), so a chat request cannot run as it. Give the rule the path it takes to route those.`;
