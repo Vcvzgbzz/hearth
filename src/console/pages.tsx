@@ -286,12 +286,16 @@ export function Models() {
 /** A count as a person reads it: 950, 12.4k, 3.1M. */
 const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
 
+/** Dollars as a person reads them: cents for small sums, whole dollars for large ones. */
+const money = (n: number): string => `$${n < 10 ? n.toFixed(2) : n < 1000 ? n.toFixed(0) : short(Math.round(n))}`;
+
 /** Requests and tokens over some days, as one cell. */
 function UsedCell({ used }: { used?: Used }) {
   if (!used || used.requests === 0) return <span className="text-dim">—</span>;
   return (
     <span title={`${used.requests} requests, ${used.failed} failed · ${used.in} tokens in, ${used.out} out`}>
       {short(used.requests)} <span className="text-dim">req ·</span> {short(used.in)} <span className="text-dim">in /</span> {short(used.out)} <span className="text-dim">out</span>
+      {(used.cost ?? 0) > 0 && <span title="at the prices the models carry now"> <span className="text-dim">·</span> {money(used.cost!)}</span>}
       {used.failed > 0 && <span className="text-bad"> · {short(used.failed)} failed</span>}
     </span>
   );
@@ -303,15 +307,16 @@ type Rule = NonNullable<NonNullable<UiData["keys"]>[number]["rule"]>;
 function limitsOf(rule: Rule | null | undefined, today?: Used) {
   if (!rule) return "—";
   const gone = rule.expires !== null && Date.now() >= rule.expires;
-  const spent = rule.tokensPerDay > 0 && (today?.in ?? 0) + (today?.out ?? 0) >= rule.tokensPerDay;
+  const spent = (rule.tokensPerDay > 0 && (today?.in ?? 0) + (today?.out ?? 0) >= rule.tokensPerDay) || ((rule.dollarsPerDay ?? 0) > 0 && (today?.cost ?? 0) >= rule.dollarsPerDay!);
   const parts = [
     rule.requestsPerMinute > 0 ? `${short(rule.requestsPerMinute)} req/min` : null,
     rule.tokensPerDay > 0 ? `${short(rule.tokensPerDay)} tokens/day` : null,
+    (rule.dollarsPerDay ?? 0) > 0 ? `${money(rule.dollarsPerDay!)}/day` : null,
     // The last day it works, as the file has it.
     rule.expires !== null ? `${gone ? "expired" : "until"} ${new Date(rule.expires - 1).toISOString().slice(0, 10)}` : null,
   ].filter(Boolean);
   if (parts.length === 0) return "—";
-  return <span className={gone || spent ? "text-bad" : undefined} title={spent ? "today's tokens are used up; it works again at midnight UTC" : undefined}>{parts.join(" · ")}</span>;
+  return <span className={gone || spent ? "text-bad" : undefined} title={spent ? "today's allowance is used up; it works again at midnight UTC" : undefined}>{parts.join(" · ")}</span>;
 }
 
 export function Keys() {
@@ -323,6 +328,7 @@ export function Keys() {
   const [expires, setExpires] = useState("");
   const [perMinute, setPerMinute] = useState("");
   const [perDay, setPerDay] = useState("");
+  const [dollars, setDollars] = useState("");
   const [shown, setShown] = useState<{ label: string; key: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -331,7 +337,7 @@ export function Keys() {
     if (l === "" || busy) return;
     setBusy(true);
     const models = scope.split(",").map((s) => s.trim()).filter(Boolean);
-    const limits = { ...(Number(perMinute) > 0 ? { requestsPerMinute: Math.floor(Number(perMinute)) } : {}), ...(Number(perDay) > 0 ? { tokensPerDay: Math.floor(Number(perDay)) } : {}) };
+    const limits = { ...(Number(perMinute) > 0 ? { requestsPerMinute: Math.floor(Number(perMinute)) } : {}), ...(Number(perDay) > 0 ? { tokensPerDay: Math.floor(Number(perDay)) } : {}), ...(Number(dollars) > 0 ? { dollarsPerDay: Number(dollars) } : {}) };
     const key = await mintKey(l, models.length > 0 ? models : null, { ...(expires ? { expires } : {}), ...(Object.keys(limits).length ? { limits } : {}) });
     setBusy(false);
     if (key !== null) {
@@ -342,6 +348,7 @@ export function Keys() {
       setExpires("");
       setPerMinute("");
       setPerDay("");
+      setDollars("");
     }
   };
   const copy = async (key: string) => {
@@ -412,6 +419,8 @@ export function Keys() {
         <input value={perMinute} onChange={(e) => setPerMinute(e.target.value)} type="number" min={0} placeholder="req / min" aria-label="requests a minute, blank for no limit"
                className="h-8 w-24 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         <input value={perDay} onChange={(e) => setPerDay(e.target.value)} type="number" min={0} placeholder="tokens / day" aria-label="tokens a day, blank for no limit"
+               className="h-8 w-28 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
+        <input value={dollars} onChange={(e) => setDollars(e.target.value)} type="number" min={0} placeholder="$ / day" aria-label="dollars a day, blank for no limit" step="any"
                className="h-8 w-28 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         <label className="flex items-center gap-1.5 text-[11px] text-dim">expires
           <input value={expires} onChange={(e) => setExpires(e.target.value)} type="date" aria-label="the last day it works, blank for never"

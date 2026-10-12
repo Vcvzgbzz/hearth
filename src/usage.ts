@@ -152,6 +152,17 @@ export class Usage {
     return sum;
   }
 
+  /** One caller's totals per model over the last `days` days, today included. */
+  byModel(caller: string, days = 1): Record<string, Row> {
+    const from = dayOf(this.now() - (days - 1) * DAY_MS);
+    const out: Record<string, Row> = {};
+    for (const [day, callers] of Object.entries(this.days)) {
+      if (day < from) continue;
+      for (const [model, row] of Object.entries(callers[caller] ?? {})) out[model] = plus(out[model] ?? blank(), row);
+    }
+    return out;
+  }
+
   /** Every caller seen in the last `days` days. */
   callers(days = KEEP_DAYS): string[] {
     const from = dayOf(this.now() - (days - 1) * DAY_MS);

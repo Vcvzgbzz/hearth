@@ -41,14 +41,17 @@ export interface CanaryView {
 }
 
 /** One api key, as the keys page draws it: who it is, what it may run, when it last spoke to this node. */
+/** What was used, and what it cost in dollars at the prices the models carry now. */
+export type Spent = Row & { cost: number };
+
 export interface KeyInfo {
   label: string;
   id: string;
   models: string[] | null;
   lastSeen: number | null;
   /** What it used today (UTC) and over the days that are kept. */
-  today: Row;
-  month: Row;
+  today: Spent;
+  month: Spent;
   /** When it expires and what it is limited to; null for a bare key. */
   rule: KeyRule | null;
 }
@@ -56,8 +59,8 @@ export interface KeyInfo {
 /** A caller that is not a key: this machine with none, or a peer. */
 export interface CallerUse {
   caller: string;
-  today: Row;
-  month: Row;
+  today: Spent;
+  month: Spent;
 }
 
 export interface ViewDeps {

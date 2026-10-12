@@ -306,6 +306,8 @@ export interface ModelRoute {
   emulate: Emulation | null;
   /** Tokens the model's running requests share (vLLM's KV cache, llama.cpp `--kv-unified`); `output` caps each request's counted `max_tokens`, null counts it whole. */
   pool: { tokens: number; output: number | null } | null;
+  /** What a million tokens in and out cost, in dollars, where using this model is paid for. null is not priced. */
+  price: { in: number; out: number } | null;
   /** A turn shares the backend with this model's running turns only once each has run this long; unset never waits. */
   shareAfterMs?: number;
   /** How long an answer is kept for an identical request; unset or 0 keeps none. */
@@ -886,6 +888,14 @@ function modelConcurrency(entry: Record<string, unknown>, id: string): number | 
   return count(entry.concurrency, `models.${id}.concurrency`, 1, 1);
 }
 
+/** `price: { in: 3, out: 15 }`: dollars per million tokens. */
+function modelPrice(v: unknown, id: string): ModelRoute["price"] {
+  if (v === undefined || v === null) return null;
+  const p = asRecord(v, `models.${id}.price`);
+  only(p, "price", `models.${id}.price`);
+  return { in: atLeast(p.in, `models.${id}.price.in`, 0), out: atLeast(p.out, `models.${id}.price.out`, 0) };
+}
+
 /** `pool: 144000`, or `pool: { tokens: 144000, output: 8192 }`. */
 function modelPool(v: unknown, id: string): ModelRoute["pool"] {
   if (v === undefined || v === null) return null;
@@ -936,8 +946,10 @@ export interface KeyRule {
   expires: number | null;
   requestsPerMinute: number;
   tokensPerDay: number;
+  /** What it may spend in a UTC day, in dollars, on models that carry a `price`. 0 is no limit. */
+  dollarsPerDay: number;
 }
-const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0 };
+const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0, dollarsPerDay: 0 };
 
 /** `apiKeys:` entries: a bare secret, or `{ key, label }`. Labels are shown wherever caller ids are. */
 function apiKeyList(
@@ -1013,13 +1025,13 @@ function apiKeyList(
       expires = t + 86_400_000;
     }
     const limits = entry.limits === undefined ? {} : asRecord(entry.limits, `${at}.limits`);
-    only(limits, ["requestsPerMinute", "tokensPerDay"], `${at}.limits`);
+    only(limits, ["requestsPerMinute", "tokensPerDay", "dollarsPerDay"], `${at}.limits`);
     const cap = (k: "requestsPerMinute" | "tokensPerDay"): number => {
       const n = num(limits[k], `${at}.limits.${k}`, 0);
       if (!Number.isInteger(n) || n < 0) throw bad(`${at}.limits.${k}`, "must be a whole number, 0 or more");
       return n;
     };
-    take(key, label, at, scope, { expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay") });
+    take(key, label, at, scope, { expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay"), dollarsPerDay: atLeast(limits.dollarsPerDay, `${at}.limits.dollarsPerDay`, 0) });
   });
   return { keys, labels, models, rules };
 }
@@ -1584,6 +1596,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       stats: declaredStats(entry.stats, id),
       emulate: emulate === "" ? null : (emulate as Emulation),
       pool: modelPool(entry.pool, id),
+      price: modelPrice(entry.price, id),
     };
     if (entry.shareAfterMs !== undefined) {
       models[id].shareAfterMs = count(entry.shareAfterMs, `models.${id}.shareAfterMs`, 0, 0);

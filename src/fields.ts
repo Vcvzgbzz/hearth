@@ -22,7 +22,7 @@ export type Field =
 
 export type Scope =
   | "node" | "listen" | "backendDefaults" | "backend" | "activity" | "resource" | "server" | "flow" | "action" | "scheduler" | "lane"
-  | "model" | "stats" | "pool" | "peer" | "lending" | "borrowing" | "operator";
+  | "model" | "stats" | "pool" | "price" | "peer" | "lending" | "borrowing" | "operator";
 
 const ms = (desc: string, def?: number | string, min?: number): Field =>
   ({ type: "ms", desc, ...(def !== undefined ? { def } : {}), ...(min !== undefined ? { min } : {}) });
@@ -132,6 +132,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     videoTokens: { type: "number", min: 1, desc: "What one video costs when checking a request fits the context window.", def: 49152 },
     params: { type: "object", desc: "Request fields stamped on every call: temperature, top_p and the like.", seed: {} },
     stats: { type: "object", scope: "stats", desc: "What the model takes, for one that hasn't loaded or a backend that can't say.", seed: {} },
+    price: { type: "object", scope: "price", desc: "What a million tokens in and out cost, in dollars: usage is then shown as spend, and a key can be capped by it.", seed: { in: 0, out: 0 } },
     pool: { type: "object", scope: "pool", desc: "Token budget shared by this model's running turns.", seed: { tokens: 131072 } },
     emulate: { type: "enum", options: ["llama-server"], desc: "Reshape this backend's answers into another server's format." },
   },
@@ -142,6 +143,10 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     thinking: { type: "bool", desc: "Reasons before answering." },
     effort: { type: "bool", desc: "Takes a reasoning-effort setting." },
     quant: { type: "text", desc: "Quantization, shown to borrowers." },
+  },
+  price: {
+    in: { type: "number", min: 0, desc: "Dollars per million tokens sent to it." },
+    out: { type: "number", min: 0, desc: "Dollars per million tokens it answers with." },
   },
   pool: {
     tokens: { type: "number", min: 1, desc: "Tokens shared by this model's running turns." },

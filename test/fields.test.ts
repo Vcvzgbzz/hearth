@@ -29,7 +29,7 @@ const AT: Record<Scope, (string | number)[]> = {
   activity: ["backends", "card", "activity"], resource: ["resources", "gpu0"], server: ["servers", "box"], flow: ["flows", "pick"], action: ["actions", "tell"],
   scheduler: ["scheduler"],
   lane: ["scheduler", "lanes", "chat"], model: ["models", "m"], stats: ["models", "m", "stats"],
-  pool: ["models", "m", "pool"], peer: ["peers", "p"], lending: ["lending"], borrowing: ["borrowing"],
+  pool: ["models", "m", "pool"], price: ["models", "m", "price"], peer: ["peers", "p"], lending: ["lending"], borrowing: ["borrowing"],
   operator: ["operator"],
 };
 

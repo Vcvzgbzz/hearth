@@ -162,6 +162,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `models.<id>.pool` | unset | token budget shared by this model's running turns: `tokens`, and `output` to cap what each turn reserves. See [One backend, models with different ceilings](#one-backend-models-with-different-ceilings) |
 | `models.<id>.stats` | unset | what the model takes, for one that hasn't loaded or a backend that can't say: `context`, `vision`, `tools`, `thinking`, `effort`, `quant`. See [Knowing what a borrowed model can take](#knowing-what-a-borrowed-model-can-take) |
 | `models.<id>.shareAfterMs` | unset | a turn joins this model's running turns only once each has run this long, so two turns started together do not both pay for sharing the card. Only matters where `concurrency` is above 1 |
+| `models.<id>.price` | unset | `{ in, out }`: what a million tokens sent to it and answered by it cost, in dollars. Usage is then shown as spend on the Keys page, `/usage` lists the prices, and a key's `limits.dollarsPerDay` counts it. Spend is worked out from the token counts at the price set now |
 | `models.<id>.cacheMs` | `0` | keep an answer this long and give it to an identical request without running it. Identical means the same model and every request field the same. Shared by every caller, held in memory, and lost on restart. 0 keeps none. See [Keeping answers](#keeping-answers) |
 | `models.<id>.videoTokens` | `49152` | what one video costs this model when checking a request fits its context window. Size it from the seat: frames sampled per clip × tokens per frame |
 | `peers.<name>` | — | one entry per friend: `url` and `token` to borrow from them, `accept` to lend to them, or both |
@@ -229,9 +230,10 @@ apiKeys:
 
 A key can **expire** and be **limited**. `expires` is a day, and the key works
 through the end of it (UTC); after that it is refused like any unknown key.
-`limits` holds it to so many requests a minute and so many tokens a UTC day,
-counted in and out; a request over either is answered `429`. Leave one out, or
-set it to 0, for no limit. The token count is the one [`/usage`](#endpoints)
+`limits` holds it to so many requests a minute, so many tokens a UTC day,
+counted in and out, and so many dollars a UTC day (`dollarsPerDay`) on models
+that carry a [`price`](#configuration); a request over any is answered `429`.
+Leave one out, or set it to 0, for no limit. The token count is the one [`/usage`](#endpoints)
 reports, so it is the backend's own where its answer carries one and an
 estimate where it does not.
 
@@ -264,7 +266,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/backends/probe` | local | `POST { url, key?, format? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
 | `/keys/mint`, `/keys/revoke` | local | `POST { label, models?, expires?, limits? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
-| `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
+| `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model, with `prices` for the models that carry one. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
 | `/flows/try` | local | `POST { model, images?, tools?, tokens?, caller?, lane?, headers?, flows?, actions?, pretend? }`: where that request would go right now, the step that decides it in each flow, and the actions those steps name. Sends nothing, sets nothing off and counts nothing. `flows` and `actions` try unsaved sections; `pretend: { idle, used, busy, warm, unready, held }` lists models to read as in that state, `pretend.full` steps to read as at their `max` (each `<step>:<flow>`), and `pretend.now` a time of day to read the clock as |
 | `/login`, `/logout` | anyone | `POST {user, pass}` for the operator session cookie; 404 with no `operator` set |
 | `/setup` | anyone, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists |

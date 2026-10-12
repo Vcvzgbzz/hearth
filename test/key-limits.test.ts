@@ -34,6 +34,8 @@ backends:
     url: http://127.0.0.1:${(backend.address() as AddressInfo).port}
     kind: none
     serves: [chat]
+models:
+  chat: {price: {in: 100000, out: 200000}}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 `;
@@ -43,6 +45,7 @@ writeFileSync(cfgPath, `${base}apiKeys:
   - {key: last-day-secret, label: last-day, expires: "${today}"}
   - {key: slow-secret, label: slow, limits: {requestsPerMinute: 2}}
   - {key: small-secret, label: small, limits: {tokensPerDay: 20}}
+  - {key: paid-secret, label: paid, limits: {dollarsPerDay: 3.5}}
 `);
 
 const bad = (entry: string, path: RegExp) => assert.throws(() => parseConfig({ ...loadYaml(), apiKeys: [JSON.parse(entry)] }), path);
@@ -79,6 +82,17 @@ assert.equal((await chat("small-secret")).status, 200, "15 of 20 used: there is 
 const spent = await chat("small-secret");
 assert.equal(spent.status, 429);
 assert.match(spent.body, /20 tokens for today/);
+
+// Dollars: each call here is 10 tokens in at $0.10 and 5 out at $0.20, so $2. Two fit under $3.50, as the page and /usage say.
+assert.equal((await chat("paid-secret")).status, 200);
+assert.equal((await chat("paid-secret")).status, 200, "$2 of $3.50 spent: there is still room");
+const broke = await chat("paid-secret");
+assert.equal(broke.status, 429);
+assert.match(broke.body, /spent its \$3\.5 for today/);
+const told = (await (await fetch(`${url}/usage?days=1`, { headers: { Authorization: "Bearer admin-secret" } })).json()) as { prices: Record<string, { in: number; out: number }> };
+assert.deepEqual(told.prices, { chat: { in: 100000, out: 200000 } });
+const page = (await (await fetch(`${url}/ui/data`, { headers: { Authorization: "Bearer admin-secret" } })).json()) as { keys: { label: string; today: { cost: number } }[] };
+assert.equal(page.keys.find((k) => k.label === "paid")!.today.cost, 4, "what it spent, the refused call not among it");
 
 // Minting carries them into the file, and the file's parser judges them.
 const minted = await post("/keys/mint", "admin-secret", { label: "guest", expires: "2099-12-31", limits: { requestsPerMinute: 1 } });

@@ -27,7 +27,7 @@ import { KEEP_DAYS, meter, Usage, withoutUsage, type Meter } from "./usage.js";
 import { Answers } from "./answers.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_HTML } from "./ui.js";
-import { createViews, type CallerUse, type KeyInfo } from "./views.js";
+import { createViews, type CallerUse, type KeyInfo, type Spent } from "./views.js";
 import { multipartField, replaceMultipartField } from "./multipart.js";
 import { relayAnthropic, toAnthropic } from "./anthropic.js";
 import { troubleSays } from "./backend.js";
@@ -229,6 +229,19 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   /** When each limited key last asked, for its requests-a-minute limit. */
   const asked = new Map<string, number[]>();
 
+  /**
+   * What a caller used over some days, with what it cost. ponytail: priced at what each model
+   * costs now, not on the day; keep dollars in the ledger if prices change often enough to matter.
+   */
+  function spent(caller: string, days: number): Spent {
+    let cost = 0;
+    for (const [model, row] of Object.entries(usage.byModel(caller, days))) {
+      const p = cfg.models[model]?.price;
+      if (p) cost += (row.in * p.in + row.out * p.out) / 1_000_000;
+    }
+    return { ...usage.total(caller, days), cost };
+  }
+
   /** Hold a key to its limits: so many requests a minute, so many tokens a UTC day. Counts the request it lets through. */
   function withinLimits(caller: string): void {
     if (!caller.startsWith("key:")) return;
@@ -239,6 +252,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const used = usage.total(caller, 1);
       if (used.in + used.out >= rule.tokensPerDay) throw new Refusal(429, `this key has used its ${rule.tokensPerDay} tokens for today (UTC)`, "rate_limit_error");
     }
+    if (rule.dollarsPerDay > 0 && spent(caller, 1).cost >= rule.dollarsPerDay) throw new Refusal(429, `this key has spent its $${rule.dollarsPerDay} for today (UTC)`, "rate_limit_error");
     if (rule.requestsPerMinute > 0) {
       const now = Date.now();
       const recent = (asked.get(caller) ?? []).filter((t) => now - t < 60_000);
@@ -1619,19 +1633,20 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   const keysView = (): KeyInfo[] =>
     cfg.apiKeys.map((k, i) => {
       const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
-      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: usage.total(caller, 1), month: usage.total(caller, KEEP_DAYS), rule: cfg.apiKeyRules[i] ?? null };
+      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: spent(caller, 1), month: spent(caller, KEEP_DAYS), rule: cfg.apiKeyRules[i] ?? null };
     });
 
   /** Whoever else used this node in the last month: this machine with no key, and peers. */
   const othersView = (): CallerUse[] => {
     const keys = new Set(cfg.apiKeys.map((k, i) => "key:" + (cfg.apiKeyLabels[i] || keyId(k))));
-    return usage.callers().filter((c) => !keys.has(c)).map((caller) => ({ caller, today: usage.total(caller, 1), month: usage.total(caller, KEEP_DAYS) }));
+    return usage.callers().filter((c) => !keys.has(c)).map((caller) => ({ caller, today: spent(caller, 1), month: spent(caller, KEEP_DAYS) }));
   };
 
   // What was used, by whom: the last `days` days (31 at most) as day -> caller -> model -> counts.
   async function routeUsage(c: Call): Promise<void> {
     const days = Math.min(KEEP_DAYS, Math.max(1, Number(c.url.searchParams.get("days")) || KEEP_DAYS));
-    json(c.res, 200, { days, usage: usage.since(days) });
+    const prices = Object.fromEntries(Object.entries(cfg.models).flatMap(([id, m]) => (m.price ? [[id, m.price]] : [])));
+    json(c.res, 200, { days, usage: usage.since(days), prices });
   }
 
   // Drop a model off the card that serves it. Per-model where the backend can, because that

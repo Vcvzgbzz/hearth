@@ -185,7 +185,7 @@ export async function evict(model: string): Promise<void> {
 }
 
 /** Mint a key into hearth.yaml. The plaintext comes back once, in this result. */
-export async function mintKey(label: string, models: string[] | null, more: { expires?: string; limits?: { requestsPerMinute?: number; tokensPerDay?: number } } = {}): Promise<string | null> {
+export async function mintKey(label: string, models: string[] | null, more: { expires?: string; limits?: { requestsPerMinute?: number; tokensPerDay?: number; dollarsPerDay?: number } } = {}): Promise<string | null> {
   try {
     const d = await request<{ key: string }>("POST", "/keys/mint", { label, ...(models !== null && models.length > 0 ? { models } : {}), ...more });
     toast("ok", `key for ${label} minted — it is shown once, below`);
