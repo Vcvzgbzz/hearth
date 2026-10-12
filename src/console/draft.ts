@@ -93,6 +93,8 @@ export function draftView(doc: Doc, live: UiData): UiData {
     return {
       ...(running ?? { knowsWarm: false }), name, url: text(obj(b).url) || running?.url || "", server: text(obj(b).server) || null,
       resources: list(obj(b).resources), serves: serves.length ? serves : running?.serves ?? [],
+      // The draft says whether it is a provider's; what the node reports of one it runs is kept only while it still is.
+      cloud: obj(b).cloud === true, ...(obj(b).cloud === true ? {} : { trouble: undefined }),
     };
   });
   const peers: NetNode[] = Object.entries(obj(doc.peers)).map(([name, p]) =>

@@ -258,6 +258,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
 | `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
+| `/backends/probe` | local | `POST { url, key? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
 | `/keys/mint`, `/keys/revoke` | local | `POST { label, models?, expires?, limits? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
 | `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
@@ -1018,7 +1019,7 @@ yours. Mark it `cloud` and give it the key the provider issued:
 ```yaml
 backends:
   provider:
-    url: https://api.example.com      # what comes before /v1
+    url: https://api.example.com/v1
     cloud: true
     key: env:PROVIDER_KEY
     serves: [their-large-model]
@@ -1043,8 +1044,16 @@ flows:
   name and not the provider's whole list.
 - It is queued like any backend. `concurrency` is how many requests you let it
   have at once, and per-key usage and limits count what goes there.
-- The console draws these backends in a Cloud group on the topology, and marks
-  a model that runs on one on the routing map.
+- `url` is the address every call's `/v1/...` path is added to. One copied with
+  `/v1` on the end is read as the same server.
+- If the provider refuses the key, the caller gets a `502` saying so, not the
+  provider's `401`, which would read as this node refusing the caller. A flow
+  with another line that fits moves on to it.
+- The console draws these backends in a Cloud group on the topology, each with
+  what is wrong when its model list cannot be read (key refused, rate limited,
+  not reachable), and gives a rule line that sends to one a colour of its own.
+  **+ provider** there asks for the url and key, tries them, and lets you pick
+  the models to offer from what the provider lists.
 
 **A request sent to a cloud backend leaves this machine and this network**, with
 the whole prompt. Nothing sends one there unless a flow or a model's `backend`

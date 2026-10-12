@@ -82,15 +82,19 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   // Only what a line ends at is drawn: the models and peers the rules and the redirected names use.
   let y = 0;
   const used: End[] = [...direct.values(), ...flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "fastest" ? t.of : t.kind === "model" || t.kind === "peer" ? [t] : []; }))];
+  /** The models drawn that run on a provider's server: a line to one wears that colour. */
+  const away = new Set<string>();
+  const kindOf = (e: { kind: string; model?: string | null }): string => (e.kind === "model" && away.has(e.model ?? "") ? "cloud" : e.kind);
   for (const model of new Set(used.flatMap((e) => (e.kind === "model" ? [e.model] : [])))) {
     const on = d.routing?.[model]?.backend ?? (self.backends ?? []).find((b) => (b.serves ?? []).includes(model) || (b.routes ?? []).some((r) => r.model === model))?.name;
     const where = (self.backends ?? []).find((b) => b.name === on);
+    if (where?.cloud) away.add(model);
     nodes.push({
       id: `model:${model}`, type: "dest", position: { x: endX, y },
       data: {
         hardware: (where?.resources ?? []).map((name) => ({ name, cpu: (d.net.resources ?? []).find((r) => r.name === name)?.kind === "cpu" })),
-        title: model, kind: "model", on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
-        sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.cloud ? " · cloud" : where?.server ? ` · ${where.server}` : ""}`,
+        title: model, kind: "model", ...(where?.cloud ? { cloud: true } : {}), on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
+        sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.server ? ` · ${where.server}` : ""}`,
       } satisfies Dest,
     });
     y += 56;
@@ -190,7 +194,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         id, type: "flow", position: { x: colX[col]!, y: fy }, zIndex: 1000,
         data: {
           name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step,
-          models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined, takes: f.takes,
+          cloud: [...away], models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined, takes: f.takes,
           ...(d.flowHits && !edit?.changed(name) ? { hits: f.steps.map((_, i) => d.flowHits![name]?.[i] ?? 0) } : {}),
           ...(edit ? { marks: f.steps.map((s) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts, (f.takes ?? []).length > 0); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
           orphan: f.inputs.length === 0 && handsTo(name).length === 0,
@@ -200,7 +204,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       f.steps.forEach((s, i) => {
         const t = toOf(s.to);
         const lit = step === i;
-        const line = wire(`e:${id}:${i}`, lit, t.kind);
+        const line = wire(`e:${id}:${i}`, lit, kindOf(t));
         if (t.kind === "flow") edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `flow:${t.flow}` });
         else if (t.kind === "model" || t.kind === "peer") to(line, id, `step-${i}`, t);
         else if (t.kind === "fastest" || t.kind === "refuse") {
@@ -211,7 +215,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           else {
             const won = lit ? t.of.findIndex(reaches) : -1;
             nodes.push({ id: end, type: "fastest", position: { x: sideX, y: ty }, zIndex: 1000, data: { flow: name, step: i, ends: t.of, editable, on: lit, ...(won >= 0 ? { lit: won } : {}) } satisfies FastestBox });
-            t.of.forEach((e, k) => to(wire(`e:${end}:${k}`, won === k, e.kind), end, `end-${k}`, e));
+            t.of.forEach((e, k) => to(wire(`e:${end}:${k}`, won === k, kindOf(e)), end, `end-${k}`, e));
           }
           edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: end });
           mine.push(end);

@@ -34,6 +34,8 @@ export interface Backend {
   kind?: string;
   /** A provider's server on the internet: it uses no hardware here. */
   cloud?: boolean;
+  /** Why a provider's server could not be read, in a few words; absent when it could. */
+  trouble?: string;
   loaded?: string[];
   /** Models being read off the disk right now; drawn only when the backend reports it. */
   loading?: string[];

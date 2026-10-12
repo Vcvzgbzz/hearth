@@ -87,6 +87,35 @@ try {
   assert.match(net, /"cloud":true/);
   for (const page of [net, cfg]) assert.ok(!page.includes("provider-secret"), "the key stays out of what the console reads");
   assert.match(cfg, /hearth-secret/, "a literal key is shown as a stand-in");
+  // A url copied with its /v1 is the same server.
+  assert.equal(parseConfig(parse(file(good.replace(there, `${there}/v1/`)))).backends[0]!.url, there);
+
+  // Asked before it is a backend: what it serves with this key, or why nothing came back.
+  const probe = async (body: unknown) => (await (await fetch(`${url}/backends/probe`, { method: "POST", headers: ours, body: JSON.stringify(body) })).json()) as { ok: boolean; models?: string[]; problem?: string };
+  assert.deepEqual(await probe({ url: `${there}/v1`, key: "provider-secret" }), { ok: true, url: there, models: ["their-large", "their-other", "their-small"] });
+  assert.equal((await probe({ url: there, key: "wrong" })).problem, "key refused");
+  assert.equal((await probe({ url: there })).problem, "key refused");
+  assert.equal((await probe({ url: "http://127.0.0.1:1" })).problem, "not reachable");
+  assert.equal((await fetch(`${url}/backends/probe`, { method: "POST", headers: ours, body: JSON.stringify({ url: "nowhere" }) })).status, 400);
+
+  // With a key the provider refuses, the caller is told whose key it was, and the page what is wrong.
+  const badPath = join(mkdtempSync(join(tmpdir(), "hearth-cloud-")), "hearth.yaml");
+  writeFileSync(badPath, file(good.replace("key: provider-secret", "key: stale-secret")));
+  const stale = createNode(loadConfig(badPath), silentLogger);
+  stale.start();
+  await new Promise<void>((r) => stale.server.listen(0, "127.0.0.1", r));
+  const at = `http://127.0.0.1:${(stale.server.address() as AddressInfo).port}`;
+  try {
+    const no = await fetch(`${at}/v1/chat/completions`, { method: "POST", headers: ours, body: JSON.stringify({ model: "large", messages: [{ role: "user", content: "hi" }] }) });
+    assert.equal(no.status, 502, "not the provider's 401, which would read as this node refusing the caller");
+    assert.match(await no.text(), /refused the key this node sends it/);
+    const emb = await fetch(`${at}/v1/embeddings`, { method: "POST", headers: ours, body: JSON.stringify({ model: "their-small", input: "hi" }) });
+    assert.equal(emb.status, 502);
+    assert.match(await (await fetch(`${at}/network`, { headers: ours })).text(), /"trouble":"key refused"/);
+  } finally {
+    await stale.close();
+  }
+  assert.ok(!net.includes('"trouble"'), "a provider that answers has none");
   console.log("cloud.test.ts ok");
 } finally {
   await node.close();

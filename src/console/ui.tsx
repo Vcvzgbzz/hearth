@@ -1,6 +1,7 @@
 /** Small primitives, styled once: cards, pills, switches, stats. */
 import { X } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "accent" | "dim";
 
@@ -21,8 +22,8 @@ const DIALOG = { sm: "max-w-sm", md: "max-w-lg", lg: "max-h-[85vh] max-w-3xl", f
 
 /**
  * The console's one dialog: a titled panel over the page, closed by Escape, its × or a click outside it.
- * `head` sits beside the title; the body and any row of buttons are the caller's. It stands under the
- * menus, so a choice offered from inside one opens over it.
+ * `head` sits beside the title; the body and any row of buttons are the caller's. It is drawn on the page
+ * itself, over whatever part of it opened it, and under the menus, so a choice offered from inside one opens over it.
  */
 export function Dialog({ title, label, head, size = "md", onClose, children }: {
   title: ReactNode; /** Its name to a screen reader, where the title is not plain text. */ label?: string; head?: ReactNode; size?: keyof typeof DIALOG; onClose: () => void; children: ReactNode;
@@ -39,7 +40,7 @@ export function Dialog({ title, label, head, size = "md", onClose, children }: {
     window.addEventListener("keydown", key);
     return () => { window.removeEventListener("keydown", key); before?.focus(); };
   }, []);
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-30 grid place-items-center bg-black/40 p-6 max-sm:p-2" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div ref={panel} role="dialog" aria-modal="true" aria-label={label ?? (typeof title === "string" ? title : undefined)} tabIndex={-1}
            className={cx("flex max-h-full w-full flex-col rounded-xl border border-line bg-panel text-fg shadow-2xl outline-none", DIALOG[size])}>
@@ -50,7 +51,8 @@ export function Dialog({ title, label, head, size = "md", onClose, children }: {
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -1118,11 +1118,14 @@ function trimUrl(u: string, where: string): string {
   return u.replace(/\/+$/, "");
 }
 
+/** A backend's base url as given, without the `/v1` every call adds: a provider's is usually copied with it. */
+export const backendBase = (url: string, where: string): string => trimUrl(url, where).replace(/\/v1$/, "");
+
 /** A backend's address: its own `url`, else `http://<its server's host>:<port>`. */
 function backendUrl(entry: Record<string, unknown>, at: string, host: string | null): string {
   if (entry.url !== undefined) {
     if (entry.port !== undefined) throw bad(`${at}.port`, "is set beside url — keep one: url already carries a port");
-    return trimUrl(str(entry.url, `${at}.url`), `${at}.url`);
+    return backendBase(str(entry.url, `${at}.url`), `${at}.url`);
   }
   if (entry.port === undefined) throw bad(`${at}.url`, "is required, or set server and port");
   if (host === null) throw bad(`${at}.port`, "needs server: a port alone says nothing about which machine");

@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
-import { ANY, ConfigError, flowsFor, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ANY, backendBase, ConfigError, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
@@ -28,7 +28,8 @@ import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js
 import { CONSOLE_HTML } from "./ui.js";
 import { createViews, type CallerUse, type KeyInfo } from "./views.js";
 import { multipartField, replaceMultipartField } from "./multipart.js";
-import { send, type UpstreamResponse } from "./upstream.js";
+import { troubleSays } from "./backend.js";
+import { getJson, send, UpstreamError, type UpstreamResponse } from "./upstream.js";
 
 /** Constant-time compare over sha256 digests, so neither length nor content leaks. */
 function secretEq(a: string, b: string): boolean {
@@ -105,6 +106,10 @@ const HOP_BY_HOP = new Set([
   "content-length",
   "host",
 ]);
+
+/** Said to a caller whose own key was fine: a 401 passed on from the backend would read as this node refusing them. */
+const KEY_REFUSED = "the backend refused the key this node sends it; the key you sent this node was accepted";
+const refusedKey = (status: number): boolean => status === 401 || status === 403;
 
 /** A backend's own key as the header it is sent in; `name` matches the case of the headers it joins. */
 const keyed = (key: string, name = "Authorization"): Record<string, string> => ({ [name]: `Bearer ${key}` });
@@ -453,6 +458,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     const body = pool.outboundBody(model, payload);
     const sentAt = Date.now();
     const up = await send(`${url}/v1/chat/completions`, { json: emulate ? emulatedRequest(body) : body, ...opts });
+    // The key refused was this node's, not the caller's: said as such, and the request may move on.
+    if (opts.headers && refusedKey(up.status) && !res.headersSent) { await up.text(); throw new BackendFailed(502, KEY_REFUSED); }
     // With somewhere else to run it, a backend's own failure is not relayed: the request moves on.
     if (spare && up.status >= 500 && !res.headersSent) throw new BackendFailed(up.status, (await up.text()).slice(0, 200));
     if (emulate) return relayEmulated(up, res, relayable(up), sentAt);
@@ -1150,6 +1157,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // Mint and revoke write the config file, and the node follows it at once.
     { path: ["/keys/mint", "/keys/revoke"], methods: ["POST"], auth: "local", handler: routeKeys },
     { path: "/usage", methods: ["GET"], auth: "local", handler: routeUsage },
+    { path: "/backends/probe", methods: ["POST"], auth: "local", handler: routeProbe },
 
     // The OpenAI surface: a peer may send us work here, and so may we.
     { path: "/v1/warm", methods: ["POST"], auth: "either", envelope: "openai", handler: routeWarm },
@@ -1625,6 +1633,28 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       json(c.res, 200, { model, backend: slot.name, evicted: true, via });
     } catch (e) {
       fail(c.res, e);
+    }
+  }
+
+  // Asks a server what it serves before it is a backend, with the key it would be sent: the answer is its
+  // model ids, or in a few words why there are none. Nothing is kept.
+  async function routeProbe(c: Call): Promise<void> {
+    try {
+      const body = await readJson(c.req);
+      if (typeof body.url !== "string") throw new Refusal(400, "url is required");
+      const key = typeof body.key === "string" && body.key.trim() !== "" ? resolveSecret(body.key.trim(), "key") : null;
+      let url: string;
+      try { url = backendBase(body.url.trim(), "url"); } catch (e) { throw new Refusal(400, e instanceof Error ? e.message : String(e)); }
+      try {
+        const got = await getJson<{ data?: { id?: unknown }[] }>(`${url}/v1/models`, { headers: key ? keyed(key) : {}, headersTimeoutMs: 5_000 });
+        const models = (got.data ?? []).map((m) => m.id).filter((m): m is string => typeof m === "string" && m !== "").sort();
+        json(c.res, 200, { ok: true, url, models });
+      } catch (e) {
+        json(c.res, 200, { ok: false, url, problem: troubleSays(e instanceof UpstreamError && e.status !== undefined ? e.status : 0) });
+      }
+    } catch (e) {
+      // A key written as env:NAME with no such variable is the asker's mistake.
+      fail(c.res, e instanceof ConfigError ? new Refusal(400, e.message) : e);
     }
   }
 
@@ -2272,6 +2302,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         ...backendDeadline(to.cfg),
       });
       log.debug("passthrough", { path, status: up.status });
+      if (to.cfg.key && refusedKey(up.status)) {
+        up.body.resume();
+        throw new Refusal(502, KEY_REFUSED, "server_error");
+      }
       if (orFail && up.status >= 500) {
         up.body.resume();
         throw new Error(`${to.name} answered ${up.status}`);

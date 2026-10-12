@@ -5,7 +5,7 @@
  * them by node type; how each behaves when a line is drawn is NODES in draft.ts.
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronDown, CircuitBoard, Cpu, MoreHorizontal, Pencil, Plus, Split, Trash2, X, Zap } from "lucide-react";
+import { ChevronDown, CircuitBoard, Cloud, Cpu, MoreHorizontal, Pencil, Plus, Split, Trash2, X, Zap } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 
 import { ACTIONS, ANY, editStep, GROUP, groupsOf, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
@@ -189,6 +189,7 @@ const RING = "ring-2 ring-ok/70";
 export const HUE: Record<string, { dot: string; stroke: string; says: string }> = {
   model: { dot: "!bg-ok", stroke: "var(--ok)", says: "a model here" },
   peer: { dot: "!bg-peer", stroke: "var(--peer)", says: "a peer" },
+  cloud: { dot: "!bg-cloud", stroke: "var(--cloud)", says: "a provider's model: the request leaves this network" },
   flow: { dot: "!bg-info", stroke: "var(--info)", says: "a routing rule" },
   fastest: { dot: "!bg-pick", stroke: "var(--pick)", says: "the fastest of several" },
   refuse: { dot: "!bg-bad", stroke: "var(--bad)", says: "a refusal" },
@@ -239,7 +240,7 @@ const BIN = "nodrag nopan grid h-6 w-6 shrink-0 place-items-center rounded-md te
 /** What is known about a line: `bad` is why it cannot work, `unsure` that its target has not said whether it can take what the line tests. */
 export type Mark = { bad: string } | { unsure: true } | null;
 
-export type SwitchBox = { marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean };
+export type SwitchBox = { marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** The models that run on a provider's server. */ cloud?: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean };
 
 export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<SwitchBox>>) {
   const from = useWireFrom();
@@ -249,6 +250,8 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
   // Sending a name to the model of the same name is leaving it alone: the default, said as such.
   const own = (to: ReturnType<typeof toOf>) => to.kind === "asked" || (to.kind === "model" && (data.inputs ?? []).includes(to.model));
   const groups = groupsOf(data.steps);
+  /** The colour a line wears: what it is plugged into, and for a model, whether that is a provider's. */
+  const worn = (to: ReturnType<typeof toOf>) => hue(to.kind === "asked" ? "model" : to.kind === "model" && (data.cloud ?? []).includes(to.model) ? "cloud" : to.kind);
   return (
     <div className={cx(
       "w-[640px] rounded-xl border bg-panel shadow-sm transition-colors",
@@ -301,7 +304,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
               <span className="min-w-0 flex-1 truncate">{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</span>
             )}
             <span className="flex w-[200px] min-w-0 shrink-0 items-center gap-1.5">
-              <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", hue(to.kind === "asked" ? "model" : to.kind).dot)} title={hue(to.kind === "asked" ? "model" : to.kind).says} />
+              <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", worn(to).dot)} title={worn(to).says} />
               {to.kind !== "refuse" && <span className="shrink-0 text-dim">send to</span>}
               {data.editable ? (
                 <button type="button" className={cx(CHIP, "min-w-0 flex-1 font-mono", to.kind === "unset" && "border-warn text-warn")} title={to.kind === "unset" ? "choose where this line sends requests" : `${toText(to)} — click to choose where this line sends requests`}
@@ -339,7 +342,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                 <MoreHorizontal size={13} />
               </button>
             )}
-            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : hue(to.kind).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
+            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : to.kind === "asked" ? hue(to.kind).dot : worn(to).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
           </div>
           {group?.to === i && group.foot && (
             <div className="relative flex items-center px-3 text-[10px] italic text-dim" style={{ height: GROUP.foot }}>
@@ -519,7 +522,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   );
 });
 
-export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
+export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; /** A model on a provider's server. */ cloud?: boolean; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -527,9 +530,10 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
   return (
     <div title={data.shut ? `${data.title} is not a chat model: only a rule that takes its path can send here` : undefined}
          className={cx("w-[200px] rounded-xl border bg-panel px-3 py-1.5 shadow-sm", data.on ? "border-accent bg-accent/10" : "border-line", open && !data.shut && RING, open && data.shut && "opacity-40")}>
-      <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : hue(data.kind).dot, "!opacity-100")} style={{ left: -6 }} />
+      <Handle type="target" position={Position.Left} className={cx(PORT, data.on ? "!bg-accent" : hue(data.cloud ? "cloud" : data.kind).dot, "!opacity-100")} style={{ left: -6 }} />
       <div className="flex items-center gap-1.5">
         <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium">{data.title}</span>
+        {data.cloud && <span title={HUE.cloud!.says} className="inline-flex shrink-0 items-center gap-0.5 rounded border border-cloud/50 px-1 text-[9px] uppercase text-cloud"><Cloud size={9} />cloud</span>}
         {(data.hardware ?? []).map((h) => (
           <span key={h.name} title={`runs on ${h.name}`} className={cx("inline-flex shrink-0 items-center gap-0.5 rounded border px-1 text-[9px] uppercase", h.cpu ? "border-line text-dim" : "border-ok/50 text-ok")}>
             {h.cpu ? <Cpu size={9} /> : <CircuitBoard size={9} />}{h.name}

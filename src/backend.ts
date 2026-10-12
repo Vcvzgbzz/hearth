@@ -7,9 +7,13 @@ import type { ActivityDecl } from "./config.js";
 import { KINDS, readingFromStatus, type Kind, type KindName, type ModelStatus, type Placement } from "./kinds.js";
 import type { Logger } from "./log.js";
 import { known, type ModelStats } from "./stats.js";
-import { getJson, send } from "./upstream.js";
+import { getJson, send, UpstreamError } from "./upstream.js";
 
 /** How often an activity path is read, and its timeout; sampled while a page is open, or always for a backend with a `hold`. */
+/** Why a read of a backend's model list failed, in a few words, from the status it answered with (0: no answer). */
+export const troubleSays = (status: number): string =>
+  status === 401 || status === 403 ? "key refused" : status === 429 ? "rate limited" : status === 0 ? "not reachable" : `answered ${status}`;
+
 const ACTIVITY_POLL_MS = 2_000;
 const ACTIVITY_TIMEOUT_MS = 2_000;
 
@@ -45,6 +49,7 @@ export class BackendState {
   private placements = new Map<string, Placement>();
   private placementFor: string = "";
   private catalogIds: string[] = [];
+  private catalogFault: number | null = null;
   /** False for `kind: none`, where an empty warm set means "we cannot see",
    *  not "nothing is warm". Callers must not turn one into the other. */
   private warmIsKnown = true;
@@ -215,6 +220,11 @@ export class BackendState {
     return this.streaming;
   }
 
+  /** How the last read of the model list failed: the status it answered with, 0 for no answer at all, null when it worked or has not been tried. */
+  catalogTrouble(): number | null {
+    return this.catalogFault;
+  }
+
   /** True where we hold an event stream, the only place silence from a backend means anything; never before the first attempt settles. */
   watched(): boolean {
     return this.useEvents && (this.streaming || this.probed);
@@ -301,6 +311,7 @@ export class BackendState {
     ]);
 
     if (catalog.status === "fulfilled") this.catalogIds = catalog.value.filter((m) => this.mine(m));
+    this.catalogFault = catalog.status === "fulfilled" ? null : catalog.reason instanceof UpstreamError && catalog.reason.status !== undefined ? catalog.reason.status : 0;
 
     if (warm.status === "fulfilled" && warm.value !== null) {
       this.setLoaded(warm.value.loaded.filter((m) => this.mine(m)));

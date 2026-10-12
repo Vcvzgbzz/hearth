@@ -16,8 +16,8 @@ import { NEW, NewDialog, Refs, refsOf, Review } from "./config.js";
 import { callersIn, draftView, EVERYONE, list, obj, put, routerFor, usersOf, withCaller } from "./draft.js";
 import { change, chooseAt, dirty, edits, follow, loadDraft, redo, revert, review, showRouter, undo, useEdit } from "./editStore.js";
 import { Menu, VersionsButton } from "./editor.js";
-import { control, go, restartNode, select, toast, useStore } from "./store.js";
-import { Button, cx, Dot, type Tone } from "./ui.js";
+import { control, go, request, restartNode, select, toast, useStore } from "./store.js";
+import { Button, cx, Dialog, Dot, type Tone } from "./ui.js";
 
 /** `tags`: hardware a backend uses besides the group it sits in. `tip`: what the status dot is saying. */
 type Card = { title: string; sub: string; tone: Tone; icon: ReactNode; meter?: [number, number]; busy?: boolean; selected?: boolean; tags?: string[]; tip?: string };
@@ -103,6 +103,88 @@ function dropBackend(backend: string, x: number, y: number): void {
   const under = document.elementsFromPoint(x, y).map((el) => el.closest(".react-flow__node")?.getAttribute("data-id") ?? "").find((id) => drops.has(id));
   const to = under ? drops.get(under) : undefined;
   if (to && useEdit.getState().draft) change((d) => moved(d, backend, to));
+}
+
+const FIELD = "h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none";
+
+/**
+ * "+ provider": a provider's url and key are tried against it before anything is added, and the models to
+ * offer are picked from what it lists. It joins the draft as one cloud backend.
+ */
+function ProviderDialog({ taken, onClose, onCreate }: { taken: string[]; onClose: () => void; onCreate: (id: string, backend: Record<string, unknown>) => void }) {
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("https://");
+  const [key, setKey] = useState("");
+  const [found, setFound] = useState<{ url: string; models: string[] } | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState("");
+  // What was listed is only true of the url and key it was listed with.
+  const typed = (set: (v: string) => void) => (v: string) => { set(v); setFound(null); setPicked([]); setProblem(null); };
+  const check = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const got = await request<{ ok: boolean; url: string; models?: string[]; problem?: string }>("POST", "/backends/probe", { url, key });
+      if (got.ok && (got.models ?? []).length > 0) setFound({ url: got.url, models: got.models! });
+      else setProblem(got.ok ? "it answered, but listed no models" : got.problem ?? "it did not answer");
+    } catch (e) {
+      setProblem((e as Error).message);
+    }
+    setBusy(false);
+  };
+  const id = name.trim();
+  const clash = taken.includes(id) ? `a backend named ${id} already exists` : null;
+  const shown = (found?.models ?? []).filter((m) => m.toLowerCase().includes(filter.trim().toLowerCase()));
+  const ready = id !== "" && !clash && found !== null && picked.length > 0;
+  return (
+    <Dialog title="New provider" onClose={onClose}>
+      <form className="flex min-h-0 flex-col" onSubmit={(e) => { e.preventDefault(); if (ready) onCreate(id, { url: found!.url, cloud: true, ...(key.trim() ? { key: key.trim() } : {}), serves: picked }); else if (!found) void check(); }}>
+        <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4">
+          <div className="text-[12px] text-dim">A provider's OpenAI-compatible API, used as a backend. <span className="text-cloud">A request sent to it leaves this machine and this network.</span></div>
+          <label className="block text-[12px] font-medium">Name
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="what you call it here" className={cx(FIELD, "mt-1 font-mono font-normal", clash && "border-bad")} />
+          </label>
+          <label className="block text-[12px] font-medium">Its url
+            <input value={url} onChange={(e) => typed(setUrl)(e.target.value)} spellCheck={false} placeholder="https://api.example.com/v1" className={cx(FIELD, "mt-1 font-mono font-normal")} />
+          </label>
+          <label className="block text-[12px] font-medium">The key it gave you
+            <input value={key} onChange={(e) => typed(setKey)(e.target.value)} spellCheck={false} autoComplete="off" placeholder="env:PROVIDER_KEY" className={cx(FIELD, "mt-1 font-mono font-normal")} />
+            <span className="mt-1 block font-normal text-dim"><span className="font-mono">env:NAME</span> reads it from this node's environment and keeps it out of the file. Typed here in full, it is written to hearth.yaml.</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <Button onClick={() => void check()} disabled={busy || !/^https?:\/\/[^\s/]+/.test(url.trim())}>{busy ? "asking…" : found ? "ask again" : "check it and list its models"}</Button>
+            {found && <span className="text-[12px] text-ok">it answered: {found.models.length} models</span>}
+            {problem && <span className="text-[12px] text-bad">{problem}</span>}
+          </div>
+          {found && (
+            <div>
+              <div className="mb-1 flex items-center gap-2 text-[12px] font-medium">Offer these from it
+                <span className="font-normal text-dim">{picked.length} chosen</span>
+                {found.models.length > 8 && <input aria-label="filter the models" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter" className={cx(FIELD, "ml-auto !h-7 !w-40 font-normal")} />}
+              </div>
+              <div className="max-h-52 overflow-auto rounded-md border border-line">
+                {shown.map((m) => (
+                  <label key={m} className="flex cursor-pointer items-center gap-2 px-2 py-1 text-[12px] hover:bg-muted">
+                    <input type="checkbox" checked={picked.includes(m)} onChange={(e) => setPicked(e.target.checked ? [...picked, m] : picked.filter((x) => x !== m))} />
+                    <span className="truncate font-mono">{m}</span>
+                  </label>
+                ))}
+                {shown.length === 0 && <div className="px-2 py-1 text-[12px] text-dim">none match</div>}
+              </div>
+              <div className="mt-1 text-[11px] text-dim">Only the ones you choose can be asked for here. A rule can then send requests to them.</div>
+            </div>
+          )}
+          {clash && <div className="text-[12px] text-bad">{clash}</div>}
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-line px-4 py-3">
+          <Button onClick={onClose}>cancel</Button>
+          <Button tone="primary" type="submit" disabled={!ready}><Plus size={13} />add provider</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }
 
 /** A card or CPU: the frame its backends sit in, so "runs on" needs no line. */
@@ -450,9 +532,9 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
       const run = runningIds.get(b.name) ?? [];
       nodes.push({
         id: `backend:${b.name}`, type: "card", parentId: "cloud", extent: "parent", position: { x: PAD, y: HEAD + n * (H + GAP) },
-        data: { title: b.name, icon: <Cloud size={14} />, tone: run.length > 0 ? "accent" : backendTone(b), tip: backendTip(b, run.length),
-          // Nothing is loaded or unloaded there: what it offers says more than "idle".
-          sub: run.length === 0 && b.answering !== false && (b.serves ?? []).length ? b.serves!.join(", ") : backendSub(b, run.length), meter: [run.length, b.slots ?? 0], busy: run.length > 0, selected: is("backend", b.name) } satisfies Card,
+        data: { title: b.name, icon: <Cloud size={14} />, tone: run.length > 0 ? "accent" : b.trouble ? "bad" : "ok", tip: b.trouble ? `Its model list could not be read: ${b.trouble}. Requests sent to it are likely to fail the same way.` : backendTip(b, run.length),
+          // Nothing is loaded or unloaded there: what is wrong with it, else what it offers, says more than "idle".
+          sub: run.length > 0 ? backendSub(b, run.length) : b.trouble ?? ((b.serves ?? []).length ? b.serves!.join(", ") : backendSub(b, 0)), meter: [run.length, b.slots ?? 0], busy: run.length > 0, selected: is("backend", b.name) } satisfies Card,
       });
       edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run) } });
     });
@@ -643,6 +725,7 @@ export function Topology() {
   const future = useEdit((s) => s.future);
   const changes = useEdit(edits);
   const [adding, setAdding] = useState<string | null>(null);
+  const [providing, setProviding] = useState(false);
   const flow = useRef<ReactFlowInstance | null>(null);
   const waiting = live.config.restartPending;
   // Escape closes the panel beside the picture.
@@ -676,6 +759,9 @@ export function Topology() {
           <Plus size={12} />{NEW[k]!.noun}
         </button>
       ))}
+      <button type="button" className="flex h-7 items-center gap-1 rounded-lg border border-line bg-panel px-2 text-[12px] hover:bg-muted" title="a provider's API on the internet, as a backend" onClick={() => setProviding(true)}>
+        <Plus size={12} />provider
+      </button>
       <VersionsButton />
       {/* The hint gives way to whatever the strip has to say, so it stays one row. */}
       {!isDirty && waiting.length === 0 && <span className="truncate text-[11px] text-dim max-xl:hidden">Click anything for its settings. Drag a backend onto hardware, or a caller onto a router.</span>}
@@ -752,6 +838,10 @@ export function Topology() {
     >
       <Background gap={20} size={1} color="var(--border)" />
       <Controls showInteractive={false} position="bottom-left" />
+      {draft && providing && (
+        <ProviderDialog taken={Object.keys(obj(draft.backends))} onClose={() => setProviding(false)}
+                        onCreate={(id, backend) => { change((d) => put(d, "backends", id, backend)); setProviding(false); select({ kind: "backend", id }); }} />
+      )}
       {draft && adding && (
         <Refs.Provider value={refsOf(draft, live.catalog ?? [])}>
           <NewDialog spec={NEW[adding]!} taken={Object.keys(obj(draft[adding]))} onClose={() => setAdding(null)}

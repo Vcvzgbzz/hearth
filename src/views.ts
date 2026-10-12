@@ -9,6 +9,7 @@ import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
 import type { ConfigFile } from "./configfile.js";
 import type { PeerRegistry } from "./peers.js";
+import { troubleSays } from "./backend.js";
 import type { BackendPool } from "./pool.js";
 import type { ModelStats } from "./stats.js";
 
@@ -201,7 +202,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
             url: b.cfg.url,
             server: b.cfg.server,
             kind: b.cfg.kind,
-            ...(b.cfg.cloud ? { cloud: true } : {}),
+            // A provider's model list is the one thing asked of it between requests, so how that went is its state.
+            ...(b.cfg.cloud ? { cloud: true, ...(b.state.catalogTrouble() !== null ? { trouble: troubleSays(b.state.catalogTrouble()!) } : {}) } : {}),
             // Whether it CAN report warm state. An empty loaded list from a
             // backend that cannot see is not the same claim as one from a
             // backend that looked, and the page must not render it as such.
