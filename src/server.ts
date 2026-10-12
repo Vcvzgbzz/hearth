@@ -315,11 +315,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   /** The JSON body: 413 over maxBodyBytes, 400 when not JSON. */
   async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
     const raw = await readBody(req, cfg.maxBodyBytes);
+    let body: unknown;
     try {
-      return JSON.parse(raw.toString()) as Record<string, unknown>;
+      body = JSON.parse(raw.toString());
     } catch (e) {
       throw new Refusal(400, `body was not JSON: ${String(e)}`);
     }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Refusal(400, "body must be a JSON object");
+    return body as Record<string, unknown>;
   }
 
   /** Answer any failure with its status, or end a response already under way. */
@@ -1390,6 +1393,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       apiError(res, 400, `body was not JSON: ${String(e)}`);
       return;
     }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      apiError(res, 400, "body must be a JSON object");
+      return;
+    }
     // Strict booleans. A missing field means "leave it", so accepting a
     // truthy string here would make `{"lending":"false"}` turn lending ON —
     // the exact opposite of what someone typing that in a hurry wants.
@@ -2181,7 +2188,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     json(c.res, 200, { ok: true });
   }
 
-  /** A caller id like `operator:jadeyn` is the login the page can show and sign out of. */
+  /** A caller id like `operator:admin` is the login the page can show and sign out of. */
   const opOf = (caller: string): string | null => (caller.startsWith("operator:") ? caller.slice(9) : null);
 
   async function routeUi(c: Call): Promise<void> {
@@ -2633,7 +2640,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   });
 
   /** Expired sessions, swept like any other in-memory state; unref'd so it never holds the process. */
-  const sessionSweep = setInterval(() => { sessions.prune(); }, 30 * 60_000);
+  const sessionSweep = setInterval(() => { sessions.prune(); loginThrottle.prune(); }, 30 * 60_000);
   sessionSweep.unref?.();
 
   /** The day of history and recent logs, read once at start and written every minute and at close. */

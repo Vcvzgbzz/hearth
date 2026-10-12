@@ -18,6 +18,8 @@ export interface UpstreamResponse {
 
 /** The most of a buffered body we hold, so a peer's oversized reply costs bounded memory. */
 const MAX_TEXT_BYTES = 1 << 20;
+/** The most of a stream held while waiting for the end of a line or an event: past it, what is held goes on as it is. */
+export const MAX_HELD_CHARS = 16 << 20;
 
 export class UpstreamError extends Error {
   constructor(

@@ -50,11 +50,14 @@ export interface Policy {
   type?(name: string): boolean;
 }
 
-/** May a key held to `scope` ask for `model`? By its own name, or as a variant of a type the scope names. */
+/**
+ * May a key held to `scope` ask for `model`? By its own name, or as a variant of a type the scope
+ * names. A name some flow takes for itself is not a variant of anything, colon or not.
+ */
 export function inScope(scope: readonly string[], model: string, type: (name: string) => boolean = () => false): boolean {
   if (scope.includes(model)) return true;
   const base = model.slice(0, Math.max(0, model.lastIndexOf(":")));
-  return base !== "" && scope.includes(base) && type(base);
+  return base !== "" && scope.includes(base) && type(base) && !type(model);
 }
 
 /** The model gates, in order: named, lent to this peer, within this key's scope, served by someone. */

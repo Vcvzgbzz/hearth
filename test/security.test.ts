@@ -104,6 +104,15 @@ const host = url.slice("http://".length);
     headers: { Origin: "https://evil.example", Authorization: "Bearer my-key" } })).status, 200);
 }
 
+/* ------------------------------------------- a body that is not an object */
+
+{
+  for (const path of ["/control", "/keys/mint", "/backends/probe"]) {
+    const r = await fetch(`${url}${path}`, { method: "POST", headers: { Authorization: "Bearer my-key" }, body: "null" });
+    assert.equal(r.status, 400, `${path} answers a null body as the caller's mistake`);
+  }
+}
+
 /* ------------------------------------------------ our key stays with us */
 
 {

@@ -5,7 +5,7 @@
 import type { ServerResponse } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 
-import type { UpstreamResponse } from "./upstream.js";
+import { MAX_HELD_CHARS, type UpstreamResponse } from "./upstream.js";
 
 export type Emulation = "llama-server";
 
@@ -130,6 +130,7 @@ export async function relayEmulated(
     const lines = pending.split("\n");
     pending = lines.pop() ?? "";
     if (lines.length) res.write(lines.map(line).join("\n") + "\n");
+    if (pending.length > MAX_HELD_CHARS) { res.write(pending); pending = ""; }
   }
   pending += decoder.end();
   res.end(pending ? line(pending) : undefined);

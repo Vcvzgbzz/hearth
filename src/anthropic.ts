@@ -6,7 +6,7 @@ import type { ServerResponse } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 
 import { streamErrorFrame } from "./emulate.js";
-import type { UpstreamResponse } from "./upstream.js";
+import { MAX_HELD_CHARS, type UpstreamResponse } from "./upstream.js";
 import type { Meter } from "./usage.js";
 
 type Doc = Record<string, unknown>;
@@ -234,6 +234,8 @@ export async function relayAnthropic(up: UpstreamResponse, res: ServerResponse, 
   for await (const c of up.body) {
     held += decoder.write(c as Buffer);
     take();
+    // Not an event stream at all: nothing in it will ever be an event.
+    if (held.length > MAX_HELD_CHARS) held = "";
   }
   held += `${decoder.end()}\n\n`;
   take();

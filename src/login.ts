@@ -133,17 +133,26 @@ export class LoginThrottle {
     return kept;
   };
 
+  /** What a name is counted under: bounded, so a caller cannot make the table hold what it sends. */
+  private name = (user: string): string => user.slice(0, 64);
+
+  /** Forget everyone whose failures have all aged out. */
+  prune(now: number = Date.now()): void {
+    for (const [k, list] of this.fails) if (this.live(list, now, this.userWindowMs).length === 0) this.fails.delete(k);
+    for (const [k, list] of this.ips) if (this.live(list, now, this.ipWindowMs).length === 0) this.ips.delete(k);
+  }
+
   blocked(user: string, ip: string, now: number = Date.now()): boolean {
     return (
-      this.live(this.fails.get(user) ?? [], now, this.userWindowMs).length >= this.userMax ||
+      this.live(this.fails.get(this.name(user)) ?? [], now, this.userWindowMs).length >= this.userMax ||
       this.live(this.ips.get(ip) ?? [], now, this.ipWindowMs).length >= this.ipMax
     );
   }
 
   note(user: string, ip: string, now: number = Date.now()): void {
-    const f = this.live(this.fails.get(user) ?? [], now, this.userWindowMs);
+    const f = this.live(this.fails.get(this.name(user)) ?? [], now, this.userWindowMs);
     f.push(now);
-    this.fails.set(user, f);
+    this.fails.set(this.name(user), f);
     const i = this.live(this.ips.get(ip) ?? [], now, this.ipWindowMs);
     i.push(now);
     this.ips.set(ip, i);
@@ -151,6 +160,6 @@ export class LoginThrottle {
 
   /** A successful login clears the per-username count, not the per-address one. */
   clear(user: string): void {
-    this.fails.delete(user);
+    this.fails.delete(this.name(user));
   }
 }

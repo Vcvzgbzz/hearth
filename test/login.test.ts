@@ -42,12 +42,12 @@ import {
 // --- sessions: mint, check, slide, drop, expire -------------------------------
 {
   const s = new OperatorSessions(1000);
-  const t = s.mint("jadeyn", 0);
+  const t = s.mint("admin", 0);
   assert.equal(s.size, 1);
-  assert.equal(s.check(t, 500), "jadeyn");
+  assert.equal(s.check(t, 500), "admin");
   // The check at 950 slides the expiry to 1950, so 1500 is still in.
-  assert.equal(s.check(t, 950), "jadeyn", "a use slides the session forward");
-  assert.equal(s.check(t, 1500), "jadeyn");
+  assert.equal(s.check(t, 950), "admin", "a use slides the session forward");
+  assert.equal(s.check(t, 1500), "admin");
   assert.equal(s.check(t, 3000), null, "past the slid expiry it is gone");
   assert.equal(s.size, 0, "and the store holds no ghosts");
 
@@ -60,11 +60,15 @@ import {
 {
   const th = new LoginThrottle(3, 1000, 5, 1000);
   const t0 = 1_000_000;
-  for (let i = 0; i < 3; i++) th.note("jadeyn", "10.0.0.9", t0 + i);
-  assert.equal(th.blocked("jadeyn", "10.0.0.9", t0 + 10), true, "the per-name count trips first");
+  for (let i = 0; i < 3; i++) th.note("admin", "10.0.0.9", t0 + i);
+  assert.equal(th.blocked("admin", "10.0.0.9", t0 + 10), true, "the per-name count trips first");
   assert.equal(th.blocked("someone-else", "10.0.0.9", t0 + 10), false, "a fresh name is not blocked");
-  th.clear("jadeyn");
-  assert.equal(th.blocked("jadeyn", "10.0.0.9", t0 + 10), false, "a success clears the name");
+  assert.equal(th.blocked("admin" + "x".repeat(5000), "10.0.0.9", t0 + 10), false, "a long name is counted under its start, not the operator's");
+  th.prune(t0 + 60 * 60_000);
+  assert.equal(th.blocked("admin", "10.0.0.9", t0 + 60 * 60_000), false, "aged-out failures are forgotten");
+  for (let i = 0; i < 3; i++) th.note("admin", "10.0.0.9", t0 + i);
+  th.clear("admin");
+  assert.equal(th.blocked("admin", "10.0.0.9", t0 + 10), false, "a success clears the name");
 
   // The per-address cap trips with a fresh name every time: spray from one machine.
   for (let i = 0; i < 5; i++) th.note(`spray-${i}`, "10.0.0.9", t0 + 100 + i);

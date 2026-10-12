@@ -22,6 +22,7 @@ assert.equal(inScope(["chat"], "chat", type), true);
 assert.equal(inScope(["chat"], "chat:fast", type), true, "a variant of a type the scope names");
 assert.equal(inScope(["small"], "small:8b", type), false, "a colon in a model id is not a variant of a model");
 assert.equal(inScope(["chat"], "other:fast", type), false);
+assert.equal(inScope(["chat"], "chat:pro", (n) => n === "chat" || n === "chat:pro"), false, "a flow of its own is asked for by its own name");
 
 const backend = createServer((req, res) => {
   req.resume();

@@ -7,7 +7,7 @@ import type { ActivityDecl } from "./config.js";
 import { KINDS, readingFromStatus, type Kind, type KindName, type ModelStatus, type Placement } from "./kinds.js";
 import type { Logger } from "./log.js";
 import { known, type ModelStats } from "./stats.js";
-import { getJson, send, UpstreamError } from "./upstream.js";
+import { getJson, MAX_HELD_CHARS, send, UpstreamError } from "./upstream.js";
 
 /** How often an activity path is read, and its timeout; sampled while a page is open, or always for a backend with a `hold`. */
 /** Why a read of a backend's model list failed, in a few words, from the status it answered with (0: no answer). */
@@ -457,6 +457,7 @@ export class BackendState {
       // Frames are blank-line delimited. Hang on to the trailing partial.
       const frames = buffer.split("\n\n");
       buffer = frames.pop() ?? "";
+      if (buffer.length > MAX_HELD_CHARS) buffer = "";
       for (const frame of frames) {
         // Data lines get joined with newlines. It's not just the first one.
         const data = frame

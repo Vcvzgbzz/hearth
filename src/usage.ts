@@ -3,6 +3,7 @@
  * read off answers on their way to the caller, never by holding or altering one.
  */
 import type { ServerResponse } from "node:http";
+import { MAX_HELD_CHARS } from "./upstream.js";
 import { Transform } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 
@@ -91,6 +92,7 @@ export function withoutUsage(m: Meter): Transform {
     transform(chunk: Buffer, _enc, done) {
       held += text.write(chunk);
       for (let end = /\r?\n\r?\n/.exec(held); end; end = /\r?\n\r?\n/.exec(held)) pass(this, end.index + end[0].length);
+      if (held.length > MAX_HELD_CHARS) pass(this, held.length);
       done();
     },
     flush(done) {
