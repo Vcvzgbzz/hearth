@@ -1908,6 +1908,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     return;
   }
 
+  /** A model as the OpenAI API lists one: clients that check an answer's shape look for `object`. */
+  const asModel = <T extends { id: string }>(m: T) => ({ object: "model" as const, owned_by: cfg.name, ...m });
+
   async function routeModels(c: Call): Promise<void> {
     const { res } = c;
     const modelsPeer = c.peer;
@@ -1993,10 +1996,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           apiError(res, 404, `no model "${want}"`, "invalid_request_error");
           return;
         }
-        json(res, 200, one);
+        json(res, 200, asModel(one));
         return;
       }
-      json(res, 200, upstream);
+      json(res, 200, { object: "list", data: upstream.data!.map(asModel) });
     } catch (e) {
       apiError(res, 502, `backend unreachable: ${String(e)}`, "server_error");
     }
