@@ -67,6 +67,7 @@ const refused = (backend: string, path: string) => assert.throws(() => parseConf
 refused(`${good}\n    resources: [gpu0]`, "backends.away.resources");
 refused(`${good}\n    kind: llama-swap`, "backends.away.kind");
 refused(`    url: ${there}\n    cloud: true\n    key: provider-secret`, "backends.away.serves");
+assert.throws(() => parseConfig(parse(`${file(good)}lending:\n  models: [large]\n`)), (e) => e instanceof ConfigError && e.path === "lending.models", "a provider's model is not lent");
 const parsed = parseConfig(parse(file(good))).backends[0]!;
 assert.deepEqual([parsed.cloud, parsed.kind, parsed.key], [true, "none", "provider-secret"], "a cloud backend reads no warm state unless told to");
 
@@ -116,6 +117,11 @@ try {
   assert.deepEqual([after.in - before.in, after.out - before.out], [21, 9], "counted from the provider's own numbers, not estimated");
   const asked = await stream({ stream_options: { include_usage: true } });
   assert.match(asked, /"choices":\[\],"usage"/, "a caller who asked gets it as the provider sent it");
+
+  // Nor from the page: a peer's requests would be paid for with this node's key.
+  const lend = await fetch(`${url}/control`, { method: "POST", headers: ours, body: JSON.stringify({ share: { large: true } }) });
+  assert.equal(lend.status, 400);
+  assert.match(await lend.text(), /cloud backend/);
 
   // A url copied with its /v1 is the same server.
   assert.equal(parseConfig(parse(file(good.replace(there, `${there}/v1/`)))).backends[0]!.url, there);

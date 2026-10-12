@@ -85,7 +85,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `peers.<name>.token` | — | what you present when borrowing from them |
 | `peers.<name>.accept` | — | what they present when borrowing from you. Without it they cannot |
 | `peers.<name>.models` | `{}` | `your id: their id` for each model you borrow. Also the allowlist |
-| `lending.models` | `[]` | models peers may run here. Empty lends nothing |
+| `lending.models` | `[]` | models peers may run here. Empty lends nothing. A model on a `cloud` backend is refused: a peer would be spending that provider's key |
 | `lending.lane` | lowest-priority lane | which lane borrowed work enters |
 | `lending.maxConcurrent` | `2` | jobs one peer may have in flight |
 | `lending.rateLimit` | `600` | peer inference requests per hour. Capacity polling has its own budget |

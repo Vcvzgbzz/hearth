@@ -1622,6 +1622,13 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
   }
 
+  // A provider's model is not ours to lend: a peer's requests would be paid for with this node's key.
+  const lent = strList(lending.models, "lending.models");
+  for (const id of lent) {
+    const on = backends.find((b) => b.name === models[id]?.backend) ?? backends.find((b) => b.serves.includes(id));
+    if (on?.cloud) throw bad("lending.models", `names "${id}", which runs on the cloud backend "${on.name}": lending it would spend that provider's key on a peer's requests`);
+  }
+
   const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels, rules: apiKeyRules } =
     apiKeyList(root.apiKeys, "apiKeys", new Set(Object.keys(models)));
 
@@ -1681,7 +1688,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     apiKeyRules,
     peerTokens,
     operator,
-    share: strList(lending.models, "lending.models"),
+    share: lent,
     notes,
     peerRateLimit: count(lending.rateLimit, "lending.rateLimit", 600, 1),
     peerLane: (() => {

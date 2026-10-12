@@ -214,8 +214,12 @@ export function Models() {
     for (const p of d.net.nodes) if (!p.self && (p.serves ?? []).includes(m)) out.push(`${p.name} (peer)`);
     return out;
   };
+  // A name a flow takes is not a model: a rule decides what answers it. A provider's model is never loaded or unloaded here.
+  const types = new Set(Object.values(d.flows ?? {}).flatMap((f) => f.inputs));
+  const hosted = new Set((self.backends ?? []).filter((b) => b.cloud).flatMap((b) => b.serves ?? []));
   const state = (m: string): [Tone, string] =>
-    d.net.readyNow.includes(m) ? ["ok", "warm"] : (d.net.unknownWarm ?? []).includes(m) ? ["dim", "unknown"] : ["info", "cold"];
+    types.has(m) ? ["accent", "type"] : hosted.has(m) ? ["dim", "hosted"]
+    : d.net.readyNow.includes(m) ? ["ok", "warm"] : (d.net.unknownWarm ?? []).includes(m) ? ["dim", "unknown"] : ["info", "cold"];
   const [busy, setBusy] = useState<string | null>(null);
   const act = (k: string, fn: () => Promise<void>): void => {
     if (busy !== null) return;
@@ -246,7 +250,7 @@ export function Models() {
                 <td className={cx("px-4 py-2", mono)}>{m}</td>
                 <td className="px-2 py-2"><Pill tone={tone}>{word}</Pill></td>
                 <td className="px-2 py-2">
-                  {local.has(m) ? (
+                  {local.has(m) && !types.has(m) && !hosted.has(m) ? (
                     <button disabled={busy !== null}
                             onClick={() => {
                               if (word === "warm" && !confirm(`Evict ${m}? It leaves the card and the next request for it pays the reload.`)) return;
@@ -257,10 +261,10 @@ export function Models() {
                     </button>
                   ) : <span className="text-dim">—</span>}
                 </td>
-                <td className="px-2 py-2 text-dim">{where(m).join(", ")}</td>
+                <td className="px-2 py-2 text-dim">{types.has(m) ? "a routing rule" : where(m).join(", ")}</td>
                 <td className="tabular px-2 py-2 text-dim">{stats?.context ? `${Math.round(stats.context / 1024)}k` : "—"}</td>
                 <td className="px-2 py-2">
-                  {local.has(m)
+                  {local.has(m) && !hosted.has(m)
                     ? <Switch label={`lend ${m}`} on={lent} onChange={(on) => void control({ share: { [m]: on } }, on ? `lending ${m}` : `holding ${m}`)} />
                     : <span className="text-dim">—</span>}
                 </td>

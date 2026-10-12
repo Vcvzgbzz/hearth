@@ -29,6 +29,8 @@ flows:
 - `cloud` says it is not yours: it takes no `resources` and no `server`, its
   `kind` is `none`, and `serves` is required, so the node offers the models you
   name and not the provider's whole list.
+- Its models cannot be lent to a peer: a peer's requests would be paid for
+  with your key.
 - It is queued like any backend. `concurrency` is how many requests you let it
   have at once, and per-key usage and limits count what goes there.
 - `url` is the address every call's `/v1/...` path is added to. One copied with

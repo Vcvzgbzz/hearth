@@ -1407,6 +1407,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           apiError(res, 400, `share.${model} must be true, false or null`);
           return;
         }
+        if (want === true && catalog.includes(model) && pool.for(model).cfg.cloud) {
+          apiError(res, 400, `cannot lend "${model}": it runs on a cloud backend, and a peer's requests would spend that provider's key`);
+          return;
+        }
         if (want === true && !catalog.includes(model)) {
           apiError(
             res,
