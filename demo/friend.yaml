@@ -1,0 +1,25 @@
+# The other end of the demo's peer: a second node, with a model to lend.
+name: friend
+listen: { host: 127.0.0.1, port: 4301 }
+backends:
+  card:
+    url: http://127.0.0.1:42030
+    kind: llama-swap
+    serves: [their-big-model]
+models:
+  their-big-model:
+    note: "Lent to the demo node for long prompts."
+flows:
+  anything-else:
+    inputs: ["*"]
+    steps:
+      - to: { asked: true }
+peers:
+  demo:
+    url: http://127.0.0.1:4300
+    token: demo-from-friend
+    accept: demo-to-friend
+    models:
+      small-model: small-model
+lending:
+  models: [their-big-model]

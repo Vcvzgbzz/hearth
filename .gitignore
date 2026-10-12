@@ -2,3 +2,5 @@ node_modules
 dist/
 *.log
 hearth.yaml
+demo/.state/
+!demo/hearth.yaml

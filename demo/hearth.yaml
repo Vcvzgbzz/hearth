@@ -1,0 +1,213 @@
+# A node with one of everything, for looking at hearth without setting it up.
+# Nothing here runs a model: demo/backends.mjs stands in for every server named below.
+# Start it with `npm run demo` and open http://127.0.0.1:4300/ui
+
+name: demo
+listen: { host: 127.0.0.1, port: 4300 }
+historyFile: demo/.state/history.json
+
+scheduler:
+  maxPerCaller: 2
+  lanes:
+    chat:  { priority: 0 }                    # a person is waiting
+    agent: { priority: 50 }                   # a tool working through a task
+    batch: { priority: 100, concurrency: 1 }  # nobody is waiting, and it never takes more than one slot
+
+# Hardware, by your own names. Backends on one card take turns for it.
+resources:
+  gpu0: { kind: gpu }
+  gpu1: { kind: gpu }
+  gpu2: { kind: gpu }
+  cpu:  { kind: cpu, shared: true }
+
+# Another machine on the network that some backends run on.
+servers:
+  render-box: { host: 127.0.0.1 }
+
+backends:
+  # A model swapper: three models, one on the card at a time.
+  swap:
+    url: http://127.0.0.1:42001
+    kind: llama-swap
+    resources: [gpu0]
+    serves: [big-model, code-model, vision-model]
+  # Something small that lives on the same card beside whichever model is loaded.
+  voice:
+    url: http://127.0.0.1:42005
+    kind: none
+    resources: [gpu0]
+    resident: true
+    serves: [voice-model]
+  # One model that stays loaded and takes four requests at once.
+  small:
+    url: http://127.0.0.1:42002
+    kind: single
+    resources: [gpu1]
+    concurrency: 4
+    serves: [small-model]
+  # Small models on the CPU, which several backends may use at once.
+  cpu-models:
+    url: http://127.0.0.1:42003
+    kind: ollama
+    resources: [cpu]
+    concurrency: 4
+    serves: [embed-small, rerank-small]
+    routes:
+      - { path: /v1/embeddings, model: embed-small, lane: batch }
+  # An image app on the other machine. It is not chat: its paths are named, and it reports its own queue.
+  image-app:
+    server: render-box
+    port: 42004
+    kind: none
+    resources: [gpu2]
+    activity: { path: /queue, running: queue_running, queued: queue_pending }
+    routes:
+      - { path: /sdapi/v1/txt2img, model: image-model, lane: batch }
+      - { path: /sdapi/v1/progress, queue: false }
+  # Two providers. A request sent to either leaves this network.
+  provider-a:
+    url: http://127.0.0.1:42010/v1
+    cloud: true
+    key: env:DEMO_KEY_A
+    concurrency: 8
+    serves: [hosted-large, hosted-fast]
+  provider-b:
+    url: http://127.0.0.1:42011
+    cloud: true
+    format: anthropic
+    key: env:DEMO_KEY_B
+    concurrency: 8
+    serves: [messages-large, messages-fast]
+
+models:
+  big-model:
+    note: "The large one, for long documents and hard questions."
+    pool: { tokens: 131072, output: 8192 }
+  code-model:
+    note: "Tuned for code."
+    params: { temperature: 0.2 }
+  vision-model:
+    note: "Takes images."
+    stats: { vision: true }
+  small-model:
+    note: "Fast, and good enough for most questions."
+  # One loaded model under a second name with its own defaults: identical requests get the kept answer.
+  classify:
+    backend: small
+    as: small-model
+    lane: batch
+    cacheMs: 300000
+    params: { temperature: 0 }
+  hosted-large:   { price: { in: 2.5, out: 10 } }
+  hosted-fast:    { price: { in: 0.15, out: 0.6 } }
+  messages-large: { price: { in: 3, out: 15 } }
+  messages-fast:  { price: { in: 0.8, out: 4 } }
+
+# What can be asked for, and where each request goes. Lines are tried top to bottom.
+flows:
+  chat:
+    inputs: [chat]
+    note: "What people talk to. Home first; out only when asked, or when the prompt is too big."
+    sticky: 1800000
+    steps:
+      - when: { header: { x-stay: [local] }, variant: [best] }
+        to: big-model
+      - when: { variant: [best] }
+        to: messages-large
+      - when: { variant: [fast] }
+        to: small-model
+      - when: { variant: [code] }
+        to: { flow: code-then }
+      - when: { images: true }
+        to: vision-model
+      - when: { tokensOver: 100000, headerNot: { x-stay: [local] } }
+        to: hosted-large
+        do: [note-spill, tell]
+      - when: { tokensOver: 24000, headerNot: { x-stay: [local] } }
+        to: { peer: friend, model: borrowed-big }
+      - to: big-model
+  # Places tried in order: the next one when the one before fails.
+  code-then:
+    inputs: []
+    steps:
+      - to: code-model
+      - to: hosted-large
+  summaries:
+    inputs: [summaries]
+    note: "Background work: the big model when nobody needs it, else whichever small one starts soonest."
+    steps:
+      - when: { time: { from: "22:00", to: "06:00" } }
+        to: big-model
+      - when: { idle: { model: big-model, ms: 600000 }, ready: true }
+        to: big-model
+        max: 1
+      - to: { fastest: [small-model, hosted-fast, messages-fast] }
+        lane: batch
+  classify:
+    inputs: [classify]
+    note: "A fixed question asked over and over: identical requests get the kept answer."
+    steps:
+      - to: classify
+  embed:
+    inputs: [embed]
+    takes: /v1/embeddings
+    steps:
+      - to: embed-small
+  image:
+    inputs: [image]
+    takes: /sdapi/v1/txt2img
+    steps:
+      - to: image-model
+  anything-else:
+    inputs: ["*"]
+    steps:
+      - to: { refuse: "ask for chat, summaries, classify, embed or image" }
+
+# A rulebook of its own for one caller: guests get the small model and nothing else.
+routers:
+  guests:
+    strict: true
+    note: "Guests get the small model, whatever they ask for."
+    flows:
+      chat: { inputs: [chat], steps: [{ to: small-model }] }
+      anything-else: { inputs: ["*"], steps: [{ to: { refuse: "guests may ask for chat" } }] }
+callers:
+  guest: guests
+
+apiKeys:
+  - { key: demo-app, label: app }
+  - { key: demo-laptop, label: laptop, limits: { tokensPerDay: 2000000, dollarsPerDay: 5 } }
+  - { key: demo-agent, label: agent, limits: { requestsPerMinute: 240 } }
+  - { key: demo-guest, label: guest, expires: 2030-12-31, limits: { requestsPerMinute: 30, tokensPerDay: 200000 } }
+  # Held to one model: it can ask for nothing else, on any route.
+  - { key: demo-sensor, label: sensor, models: [classify] }
+
+# Things set off beside routing: a line in the log, and a call to a webhook.
+actions:
+  note-spill:
+    log: "{asked} went out to {model} for {caller}"
+  tell:
+    call: http://127.0.0.1:42020/hook
+    body: { text: "{asked} went to {model} ({reason})" }
+
+# A question asked of a model now and then: one that stops making sense is taken out until it answers again.
+canary:
+  prompt: "What is the capital of France? Reply with the city name only."
+  expect: "Paris"
+  intervalMs: 60000
+  models:
+    small-model: {}
+    big-model: {}
+  notify:
+    url: http://127.0.0.1:42020/canary
+
+# A friend's node. We borrow their big model for long prompts, and lend them our small one.
+peers:
+  friend:
+    url: http://127.0.0.1:4301
+    token: demo-to-friend
+    accept: demo-from-friend
+    models:
+      borrowed-big: their-big-model
+lending:
+  models: [small-model]

@@ -41,6 +41,7 @@
     "typecheck": "tsc -p tsconfig.test.json && tsc -p tsconfig.ui.json",
     "pretest": "npm run build:console",
     "dev": "tsx src/cli.ts serve",
+    "demo": "npm run build && node demo/run.mjs",
     "test": "for f in test/*.test.ts; do tsx $f || exit 1; done",
     "build:console": "tailwindcss -i src/console/app.css -o dist/console.css --minify && esbuild src/console/main.tsx --bundle --minify --format=iife --target=es2022 --tsconfig=tsconfig.ui.json --define:process.env.NODE_ENV=\\\"production\\\" --outfile=dist/console.js"
   },
