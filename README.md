@@ -1060,8 +1060,17 @@ the whole prompt. Nothing sends one there unless a flow or a model's `backend`
 says so. A flow line can keep some requests home the same way it keeps them
 off a peer, by a header, a caller or a lane.
 
+- A streamed answer's token count comes from the provider: the node asks for
+  it (`stream_options.include_usage`) on every streamed chat it sends to a cloud
+  backend, and keeps the extra event from a caller who did not ask for it. Per-key
+  usage and `tokensPerDay` then count what the provider billed, not an estimate.
+
 The API has to be OpenAI-shaped. One with a format of its own is not reached
-this way.
+this way. Where a provider offers an OpenAI-compatible layer beside a native
+API, the layer is what this talks to, and it usually leaves things out: prompt
+caching, strict tool schemas and reasoning text are common ones, and a field it
+does not know is often dropped without an error. Check the provider's notes on
+its compatibility layer before relying on one of those.
 
 ### Backends that share a card
 

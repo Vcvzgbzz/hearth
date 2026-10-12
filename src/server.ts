@@ -3,6 +3,7 @@
  * protocol. Bodies stream through untouched; only the model id and stream flag are read.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { pipeline as pipeline_ } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -22,7 +23,7 @@ import { BackendPool, type BackendSlot } from "./pool.js";
 import { decide, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
-import { KEEP_DAYS, meter, Usage, type Meter } from "./usage.js";
+import { KEEP_DAYS, meter, Usage, withoutUsage, type Meter } from "./usage.js";
 import { Answers } from "./answers.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_HTML } from "./ui.js";
@@ -453,11 +454,18 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /** Sends a chat completion to a local backend, emulating another server's answers if the route asks. */
-  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal; headers?: Record<string, string> } & ReturnType<typeof backendDeadline>, spare = false): Promise<number> {
+  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal; headers?: Record<string, string>; /** Where a stream's usage is counted, for a backend that reports it only when asked. */ count?: Meter } & ReturnType<typeof backendDeadline>, spare = false): Promise<number> {
     const emulate = cfg.models[model]?.emulate ?? null;
-    const body = pool.outboundBody(model, payload);
+    const { count, ...reach } = opts;
+    const sent = pool.outboundBody(model, payload);
+    const options = typeof sent.stream_options === "object" && sent.stream_options !== null ? sent.stream_options as Record<string, unknown> : {};
+    // A provider says what a stream cost only when asked. Asked here for the count, the report is kept from a caller who did not ask for it.
+    const ask = count !== undefined && sent.stream === true && options.include_usage !== true;
+    const body = ask ? { ...sent, stream_options: { ...options, include_usage: true } } : sent;
     const sentAt = Date.now();
-    const up = await send(`${url}/v1/chat/completions`, { json: emulate ? emulatedRequest(body) : body, ...opts });
+    const got = await send(`${url}/v1/chat/completions`, { json: emulate ? emulatedRequest(body) : body, ...reach });
+    // Errors on either side end both, so the relay below sees a failed stream as it would the backend's own.
+    const up = ask && got.status < 400 ? { ...got, body: pipeline_(got.body, withoutUsage(count!), () => {}) } : got;
     // The key refused was this node's, not the caller's: said as such, and the request may move on.
     if (opts.headers && refusedKey(up.status) && !res.headersSent) { await up.text(); throw new BackendFailed(502, KEY_REFUSED); }
     // With somewhere else to run it, a backend's own failure is not relayed: the request moves on.
@@ -833,7 +841,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       ranOn = local.name;
       await local.state.ensureFresh();
     // Our id and the route's params on the way to the backend; untouched when neither is set.
-      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg), ...(local.cfg.key ? { headers: keyed(local.cfg.key) } : {}) }, spare);
+      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg), ...(local.cfg.key ? { headers: keyed(local.cfg.key) } : {}), ...(local.cfg.cloud && t.meter ? { count: t.meter } : {}) }, spare);
     };
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (need?.tokens ?? 0) - (need?.output ?? 0)) };

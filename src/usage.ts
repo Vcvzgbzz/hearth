@@ -3,6 +3,8 @@
  * read off answers on their way to the caller, never by holding or altering one.
  */
 import type { ServerResponse } from "node:http";
+import { Transform } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 /** What one answer cost. `est` marks an output count that was inferred because the answer carried no `usage`. */
 export interface Counted {
@@ -70,6 +72,33 @@ export function meter(res: ServerResponse): Meter {
     return (end as (...a: unknown[]) => ServerResponse).call(this, chunk, ...rest);
   } as typeof res.end;
   return m;
+}
+
+/**
+ * A stream with the event that only reports usage taken out and handed to `m`: for an answer whose
+ * usage this node asked for and its caller did not. Every other event goes on whole, as it completes.
+ */
+export function withoutUsage(m: Meter): Transform {
+  const text = new StringDecoder("utf8");
+  let held = "";
+  const pass = (t: Transform, upTo: number): void => {
+    const event = held.slice(0, upTo);
+    held = held.slice(upTo);
+    if (/"choices"\s*:\s*\[\s*\]/.test(event) && event.includes('"usage"')) m.feed(event);
+    else t.push(event);
+  };
+  return new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      held += text.write(chunk);
+      for (let end = /\r?\n\r?\n/.exec(held); end; end = /\r?\n\r?\n/.exec(held)) pass(this, end.index + end[0].length);
+      done();
+    },
+    flush(done) {
+      held += text.end();
+      if (held !== "") pass(this, held.length);
+      done();
+    },
+  });
 }
 
 /** One caller's use of one model on one day. */

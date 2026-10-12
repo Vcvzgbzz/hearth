@@ -4,13 +4,14 @@
  */
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
+import type { Readable } from "node:stream";
 
 export interface UpstreamResponse {
   ok: boolean;
   status: number;
   headers: Record<string, string | string[] | undefined>;
   /** Raw body chunks. Async-iterable: `for await (const chunk of body)`. */
-  body: IncomingMessage;
+  body: Readable;
   /** Drain the body to a string, capped at `maxBytes`; error and control-plane paths only. */
   text: (maxBytes?: number) => Promise<string>;
 }
