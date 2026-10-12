@@ -136,21 +136,51 @@ flows:
 }
 
 function hostnameGuess(): string {
-  // node:os, not process.env.HOSTNAME. HOSTNAME is a bash shell variable and
-  // isn't exported, so it's missing under systemd, under `sh -c` and in Docker.
-  // This returned "hearth" for basically every install.
+  // node:os, not process.env.HOSTNAME: that is a shell variable and is missing under systemd, `sh -c` and Docker.
   return hostname() || "hearth";
 }
 
+const USAGE = `usage: hearth [command] [--config path]
+
+  serve                        run the node (the default)
+  init                         probe for a local inference server and write hearth.yaml
+  set-operator <user> <pass>   set the console login
+  migrate                      rewrite an older hearth.yaml in the current layout, keeping a backup
+
+  -c, --config <path>          the config file (default: ${DEFAULT_CONFIG})
+      --check                  with serve: load the config, say whether it is valid, and exit
+      --log <level>            debug, info, warn or error
+  -v, --version
+  -h, --help
+`;
+
 async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      config: { type: "string", short: "c" },
-      check: { type: "boolean", default: false },
-      log: { type: "string" },
-    },
-  });
+  let parsed;
+  try {
+    parsed = parseArgs({
+      allowPositionals: true,
+      options: {
+        config: { type: "string", short: "c" },
+        check: { type: "boolean", default: false },
+        log: { type: "string" },
+        help: { type: "boolean", short: "h", default: false },
+        version: { type: "boolean", short: "v", default: false },
+      },
+    });
+  } catch (e) {
+    // A mistyped flag is answered with how to type it, not a stack trace.
+    console.error(`${e instanceof Error ? e.message.split(". ")[0] : String(e)}\n\n${USAGE}`);
+    process.exit(1);
+  }
+  const { values, positionals } = parsed;
+  if (values.help || positionals[0] === "help") {
+    console.log(USAGE);
+    return;
+  }
+  if (values.version) {
+    console.log((JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version);
+    return;
+  }
 
   const command = positionals[0] ?? "serve";
   const configPath = values.config ?? DEFAULT_CONFIG;
@@ -250,6 +280,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  if (!existsSync(configPath)) {
+    console.error(`no ${configPath} here. Run \`hearth init\` to write one, or point at yours with --config.`);
+    process.exit(1);
+  }
   let cfg;
   try {
     cfg = loadConfig(configPath);

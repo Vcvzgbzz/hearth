@@ -852,7 +852,7 @@ line; **route a name** brings one onto the map.
   originals already picked out. A model, a peer or a refusal is moved with the
   rest and otherwise left alone. Escape or a click on the map lets go.
 - **?** beside the buttons says what each thing on the map means. A rule or an
-  action is renamed by clicking its name, on the map or in the panel, and the
+  action is renamed by clicking its name, on the map or where it is edited, and the
   name follows everywhere it is used.
 - **A number at the end of a line** is how many requests it has decided since
   the rules last changed or the node started.
