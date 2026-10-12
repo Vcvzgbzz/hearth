@@ -354,6 +354,40 @@ operator:
   delete process.env.HEARTH_TEST_SECRET;
 }
 
+/* ------------------------------------ a stand-in goes home, and nowhere else */
+
+{
+  const path = join(mkdtempSync(join(tmpdir(), "hearth-standin-")), "hearth.yaml");
+  const peers = Array.from({ length: 6 }, (_, i) => `  p${i}: { url: "http://127.0.0.1:1", token: token-${i}, accept: accept-${i}, models: {} }`).join("\n");
+  writeFileSync(path, `name: n
+backends:
+  main: { url: "${beUrl}", kind: none, serves: [mine], key: "odd: key #1" }
+peers:
+${peers}
+actions:
+  tell: { call: "http://127.0.0.1:1/hook", headers: { Authorization: "Bearer hook-secret" } }
+canary: { prompt: hi, expect: hi, models: { mine: {} }, notify: { url: "http://127.0.0.1:1/c", headers: { X-Token: canary-secret } } }
+flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}}]}}
+`);
+  const before = readFileSync(path, "utf8");
+  const a = await boot(path);
+  const f = await a.file();
+  for (const secret of ["token-", "accept-", "odd: key", "hook-secret", "canary-secret"]) assert.ok(!f.text.includes(secret), `${secret} is out of the page`);
+
+  // Past nine secrets one stand-in is the start of another; each still comes home as its own.
+  assert.equal((await a.patch({ baseHash: f.hash, text: f.text })).status, 200);
+  assert.equal(readFileSync(path, "utf8"), before, "an untouched save writes the file back as it was");
+
+  // A stand-in typed where the page shows a value would read the secret out.
+  const leak = await a.patch({ baseHash: f.hash, text: f.text.replace("name: n", "name: hearth-secret1") });
+  assert.equal(leak.status, 422);
+  assert.match(((await leak.json()) as { error: { message: string } }).error.message, /^name carries the stand-in/);
+  assert.equal((await a.patch({ baseHash: f.hash, ops: [{ path: ["backends", "main", "url"], value: "http://127.0.0.1:1/hearth-secret1" }] })).status, 422, "by an op as well");
+  assert.equal((await a.patch({ baseHash: f.hash, ops: [{ path: ["backends", "main", "key"], value: "hearth-secret99" }] })).status, 422, "and one this node never handed out is not written as a key");
+  assert.equal(readFileSync(path, "utf8"), before);
+  await a.node.close();
+}
+
 /* ---------------------------------------- a node built in code edits memory */
 
 {

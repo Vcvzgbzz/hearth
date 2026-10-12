@@ -60,60 +60,122 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
  */
 const SECRET = "hearth-secret";
 
-/** One stand-in per secret in the file, in file order; `env:NAME` entries are already out of the file. */
-function secretTable(doc: unknown): Map<string, string> {
-  const d = (doc ?? {}) as Record<string, unknown>;
-  const table = new Map<string, string>();
-  let n = 0;
-  const grab = (v: unknown): void => {
-    if (typeof v === "string" && v !== "" && !v.startsWith("env:")) table.set(`${SECRET}${++n}`, v);
+const HAS_STANDIN = /hearth-secret\d+/;
+const IS_STANDIN = /^hearth-secret\d+$/;
+type Path = (string | number)[];
+
+/** Every place a secret sits in the file, in one order: the table, the masking and the way home all walk this. */
+function secretPaths(d: Record<string, unknown>): Path[] {
+  const out: Path[] = [];
+  const each = (v: unknown, f: (name: string, o: Record<string, unknown>) => void): void => {
+    if (isObj(v)) for (const [name, o] of Object.entries(v)) if (isObj(o)) f(name, o);
   };
-  // An apiKeys entry is a bare key or {key, label, models}; the secret sits in the same place either way.
-  for (const e of (d.apiKeys ?? []) as unknown[]) {
-    if (typeof e === "string") grab(e);
-    else if (isObj(e)) grab(e.key);
-  }
-  if (isObj(d.peers)) for (const p of Object.values(d.peers)) if (isObj(p)) { grab(p.token); grab(p.accept); }
+  const headers = (h: unknown, at: Path): void => {
+    if (isObj(h)) for (const name of Object.keys(h)) out.push([...at, name]);
+  };
+  // An apiKeys entry is a bare key or {key, label, models}.
+  if (Array.isArray(d.apiKeys)) d.apiKeys.forEach((e, i) => out.push(isObj(e) ? ["apiKeys", i, "key"] : ["apiKeys", i]));
+  each(d.peers, (name) => out.push(["peers", name, "token"], ["peers", name, "accept"]));
   // Only a hash, but one that can be attacked offline, and nothing on the page needs it.
-  if (isObj(d.operator)) grab(d.operator.passHash);
-  if (isObj(d.backends)) for (const b of Object.values(d.backends)) if (isObj(b)) grab(b.key);
+  out.push(["operator", "passHash"]);
+  each(d.backends, (name) => out.push(["backends", name, "key"]));
+  // What a webhook is sent to prove who is calling.
+  each(d.actions, (name, a) => headers(a.headers, ["actions", name, "headers"]));
+  if (isObj(d.canary) && isObj(d.canary.notify)) headers(d.canary.notify.headers, ["canary", "notify", "headers"]);
+  return out;
+}
+
+const valueAt = (d: unknown, path: Path): unknown =>
+  path.reduce<unknown>((v, k) => (typeof v === "object" && v !== null ? (v as Record<string | number, unknown>)[k] : undefined), d);
+/** A secret that is in the file; `env:NAME` entries are already out of it. */
+const held = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.startsWith("env:");
+
+/** One stand-in per secret in the file, in the order of `secretPaths`. */
+function secretTable(doc: unknown): Map<string, string> {
+  const table = new Map<string, string>();
+  if (!isObj(doc)) return table;
+  let n = 0;
+  for (const path of secretPaths(doc)) {
+    const v = valueAt(doc, path);
+    if (held(v)) table.set(`${SECRET}${++n}`, v);
+  }
   return table;
 }
 
-function maskSecrets(text: string, doc: unknown): { text: string; doc: unknown } {
-  const table = secretTable(doc);
-  if (table.size === 0) return { text, doc };
+/** Each `[from, to, text]` written over the source, last first so earlier offsets hold. */
+function splice(text: string, cuts: [number, number, string][]): string {
+  let out = text;
+  for (const [from, to, put] of cuts.sort((x, y) => y[0] - x[0])) out = out.slice(0, from) + put + out.slice(to);
+  return out;
+}
+
+function maskSecrets(text: string, doc: Record<string, unknown>): { text: string; doc: unknown } {
   const d = JSON.parse(JSON.stringify(doc)) as Record<string, unknown>;
+  const src = parseDocument(text);
+  const cuts: [number, number, string][] = [];
+  const loose: [string, string][] = [];
   let n = 0;
-  // Must skip exactly what secretTable skipped, or the stand-ins misalign.
-  const swap = (v: unknown): unknown =>
-    typeof v === "string" && v !== "" && !v.startsWith("env:") ? `${SECRET}${++n}` : v;
-  const keys = d.apiKeys as unknown[] | undefined;
-  if (Array.isArray(keys))
-    for (let i = 0; i < keys.length; i++) {
-      const e = keys[i];
-      if (typeof e === "string") keys[i] = swap(e);
-      else if (isObj(e)) e.key = swap(e.key);
-    }
-  if (isObj(d.peers)) {
-    for (const p of Object.values(d.peers)) {
-      if (!isObj(p)) continue;
-      if (p.token !== undefined) p.token = swap(p.token);
-      if (p.accept !== undefined) p.accept = swap(p.accept);
-    }
+  for (const path of secretPaths(d)) {
+    const v = valueAt(d, path);
+    if (!held(v)) continue;
+    const standIn = `${SECRET}${++n}`;
+    (valueAt(d, path.slice(0, -1)) as Record<string | number, unknown>)[path[path.length - 1]!] = standIn;
+    const node = src.getIn(path, true);
+    if (isScalar(node) && node.range) cuts.push([node.range[0], node.range[1], standIn]);
+    else loose.push([v, standIn]);
   }
-  if (isObj(d.operator)) d.operator.passHash = swap(d.operator.passHash);
-  if (isObj(d.backends)) for (const b of Object.values(d.backends)) if (isObj(b) && b.key !== undefined) b.key = swap(b.key);
-  let masked = text;
-  for (const [m, s] of table) masked = masked.split(s).join(m);
+  if (n === 0) return { text, doc };
+  let masked = splice(text, cuts);
+  // A secret with no scalar of its own in the text (an alias) is taken out wherever it is written.
+  for (const [secret, standIn] of loose) masked = masked.split(secret).join(standIn);
   return { text: masked, doc: d };
 }
 
-/** A file the console sent back: every stand-in it left standing comes home as the original. */
+/** A string as a YAML scalar that reads back as that string wherever it is put. */
+const scalarOf = (s: string): string =>
+  /^[\w./+=:@-]+$/.test(s) && !s.endsWith(":") && parseDocument(s).toJS() === s ? s : JSON.stringify(s);
+
+/** The first value or key outside a secret's place that carries a stand-in, as a dotted path. */
+function strayStandIn(v: unknown, path: Path, own: Set<string>): string | null {
+  if (typeof v === "string") return HAS_STANDIN.test(v) && !own.has(JSON.stringify(path)) ? path.join(".") : null;
+  if (typeof v !== "object" || v === null) return null;
+  for (const [k, x] of Array.isArray(v) ? v.entries() : Object.entries(v)) {
+    if (typeof k === "string" && HAS_STANDIN.test(k)) return [...path, k].join(".");
+    const found = strayStandIn(x, [...path, k], own);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/**
+ * A file the console sent back: every stand-in left standing where a secret goes comes home as
+ * the original. Anywhere else it is refused, or a stand-in typed into a field the page shows
+ * would read the secret out.
+ */
 function unmaskSecrets(text: string, table: Map<string, string>): string {
-  let out = text;
-  for (const [m, s] of table) out = out.split(m).join(s);
-  return out;
+  let d: unknown;
+  const src = parseDocument(text);
+  try {
+    d = src.toJS();
+  } catch {
+    return text;
+  }
+  // A file that does not parse is refused whole by the commit; nothing of it is written.
+  if (src.errors.length > 0 || !isObj(d)) return text;
+  const paths = secretPaths(d);
+  const stray = strayStandIn(d, [], new Set(paths.map((p) => JSON.stringify(p))));
+  if (stray !== null) throw new ConfigRefusal(422, `${stray} carries the stand-in for a secret, which only goes back where a secret is kept`, stray);
+  const cuts: [number, number, string][] = [];
+  for (const path of paths) {
+    const v = valueAt(d, path);
+    if (typeof v !== "string" || !IS_STANDIN.test(v)) continue;
+    const at = path.join(".");
+    const secret = table.get(v);
+    const node = src.getIn(path, true);
+    if (secret === undefined || !isScalar(node) || !node.range) throw new ConfigRefusal(422, `${at} is a stand-in this node did not hand out for this file; enter the value itself`, at);
+    cuts.push([node.range[0], node.range[1], scalarOf(secret)]);
+  }
+  return splice(text, cuts);
 }
 
 export interface ConfigStatus {
