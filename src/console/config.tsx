@@ -10,7 +10,7 @@ import { lineDiff, opsBetween, type Op } from "./diff.js";
 import { FIELDS, fieldAt, humanMs, scopeOf, seedOf, type Field, type Ref, type Scope } from "../fields.js";
 import { changed, choose, useEdit } from "./editStore.js";
 import { go, request, RequestError, toast, useStore } from "./store.js";
-import { Button, Card, cx, mono, Pill, Switch } from "./ui.js";
+import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";
 
 export type File = { text: string; hash: string; doc: Record<string, unknown> | null };
 export type Plan = { before: string; after: string; restartPending: string[]; /** Write it, under a name for the list of versions when one was typed. */ commit: (name?: string) => Promise<void>; /** Offer to name this version. */ naming?: boolean; /** What it changes, a line per thing, in the map's words. */ summary?: string[]; /** What the button that writes says. */ verb?: string; /** Things worth knowing before writing: the file loads, but may not do what was meant. */ notes?: string[] };
@@ -515,7 +515,6 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
   /** What happens next, in place of the usual line about settings. */
   note?: string;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const refs = useContext(Refs);
   const [id, setId] = useState("");
   const [vals, setVals] = useState<Record<string, unknown>>(() => {
@@ -527,8 +526,7 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
     return out;
   });
   const first = useRef<HTMLInputElement>(null);
-  // After showModal, which otherwise hands focus to the first button: the close ×.
-  useEffect(() => { ref.current?.showModal(); first.current?.focus(); }, []);
+  useEffect(() => first.current?.focus(), []);
   const name = id.trim();
   const problem = !name ? null : taken.includes(name) ? `a ${spec.noun} named ${name} already exists`
     : typeof vals.url === "string" && vals.url !== "" && !/^https?:\/\/[^/:]+(:\d+)?$/.test(vals.url.replace(/\/$/, "")) ? "the url needs a host and port, like http://127.0.0.1:8080"
@@ -543,13 +541,8 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
     onCreate(name, Object.fromEntries(Object.entries(vals).filter(([, x]) => x !== null && x !== "" && !(Array.isArray(x) && x.length === 0))));
   };
   return (
-    <dialog ref={ref} onClose={onClose} onCancel={onClose}
-            className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-line bg-panel p-0 text-fg shadow-2xl backdrop:bg-black/40">
-      <form method="dialog" onSubmit={(e) => { e.preventDefault(); create(); }} className="flex flex-col">
-        <div className="flex items-center border-b border-line px-4 py-3">
-          <span className="font-semibold">New {spec.noun}</span>
-          <button type="button" className="ml-auto text-dim hover:text-fg" aria-label="close" onClick={() => ref.current?.close()}><X size={16} /></button>
-        </div>
+    <Dialog title={`New ${spec.noun}`} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); create(); }} className="flex min-h-0 flex-col overflow-auto">
         <div className="flex flex-col gap-3 p-4">
           <div>
             <label htmlFor="new-name" className="mb-1 block text-[12px] font-medium">{spec.scope === "model" ? "Model id" : "Name"}</label>
@@ -571,11 +564,11 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
           <div className="text-[11px] text-dim">{note ?? "Everything else is under “add setting” once it exists."} Nothing is written until you review it.</div>
         </div>
         <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
-          <Button onClick={() => ref.current?.close()}>cancel</Button>
+          <Button onClick={onClose}>cancel</Button>
           <Button tone="primary" type="submit" disabled={!name || problem !== null}><Plus size={13} />add {spec.noun}</Button>
         </div>
       </form>
-    </dialog>
+    </Dialog>
   );
 }
 
@@ -586,13 +579,8 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
   const [name, setName] = useState("");
   const lines = lineDiff(plan.before, plan.after);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-6" onClick={onClose}>
-      <Card className="flex max-h-[85vh] w-full max-w-3xl flex-col shadow-2xl">
-        <div className="flex items-center gap-3 border-b border-line px-4 py-3" onClick={(e) => e.stopPropagation()}>
-          <span className="font-semibold">Review changes to hearth.yaml</span>
-          {plan.restartPending.length ? <Pill tone="warn">restart to apply {plan.restartPending.join(", ")}</Pill> : <Pill tone="ok">applies live</Pill>}
-          <button className="ml-auto text-dim hover:text-fg" onClick={onClose} aria-label="close"><X size={16} /></button>
-        </div>
+    <Dialog title="Review changes to hearth.yaml" size="lg" onClose={onClose}
+            head={plan.restartPending.length ? <Pill tone="warn">restart to apply {plan.restartPending.join(", ")}</Pill> : <Pill tone="ok">applies live</Pill>}>
         {(plan.summary ?? []).length > 0 && (
           <div className="max-h-40 shrink-0 overflow-auto border-b border-line px-4 py-2 text-[12px]" onClick={(e) => e.stopPropagation()}>
             <div className="mb-0.5 font-medium">What this changes</div>
@@ -621,8 +609,7 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
             <Save size={13} />{plan.verb ?? "save"}
           </Button>
         </div>
-      </Card>
-    </div>
+    </Dialog>
   );
 }
 

@@ -5,11 +5,11 @@
  * them by node type; how each behaves when a line is drawn is NODES in draft.ts.
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronDown, CircuitBoard, Cpu, MoreHorizontal, Plus, Split, Trash2, X, Zap } from "lucide-react";
+import { ChevronDown, CircuitBoard, Cpu, MoreHorizontal, Pencil, Plus, Split, Trash2, X, Zap } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 
 import { ACTIONS, ANY, editStep, GROUP, groupsOf, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
-import { addName, change, choose, dropName, editSelect, hover, pick, remove, rename, retype, type Choice } from "./editStore.js";
+import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { cx } from "./ui.js";
 
 type About = "the request" | "where it would go" | "this node";
@@ -248,8 +248,6 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
   const edit = (i: number, fn: (s: Doc) => Doc | null) => change((d) => editStep(d, data.name, i, fn));
   // Sending a name to the model of the same name is leaving it alone: the default, said as such.
   const own = (to: ReturnType<typeof toOf>) => to.kind === "asked" || (to.kind === "model" && (data.inputs ?? []).includes(to.model));
-  // One line is open to edit at a time; the rest read as a sentence, so a long rule stays short.
-  const [open, setOpen] = useState<number | null>(null);
   const groups = groupsOf(data.steps);
   return (
     <div className={cx(
@@ -264,13 +262,14 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
         {data.editable ? <Renamed name={data.name} label={`name of rule ${data.name}`} onRename={(to) => rename({ kind: "flow", id: data.name }, to)} /> : <span className="truncate font-mono font-medium">{data.name}</span>}
         {(data.takes ?? []).length > 0 && <span className="shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title={`not chat: it takes requests on ${data.takes!.join(", ")}`}>not chat</span>}
         <span className={cx("ml-auto shrink-0 text-[10px]", data.orphan ? "text-warn" : "text-dim")}>{data.off ? "switched off" : data.orphan ? "nothing reaches this yet" : data.sticky ? "a conversation stays where it starts" : "top to bottom, first match wins"}</span>
+        {data.editable && <button type="button" aria-label={`edit rule ${data.name}`} title="edit this rule" className={cx(BIN, "hover:!text-fg")} onClick={() => openRule(data.name)}><Pencil size={13} /></button>}
         {data.editable && <button type="button" aria-label={`delete rule ${data.name}`} title="delete this rule" className={BIN} onClick={(e) => { e.stopPropagation(); remove({ kind: "flow", id: data.name }); }}><Trash2 size={13} /></button>}
       </div>
       {data.steps.map((s, i) => {
         const to = toOf(s.to);
         const when = obj(s.when);
         const group = groups.find((g) => g.from <= i && i <= g.to);
-        // Under a heading a line says only what is its own; opened, it shows all it tests.
+        // Under a heading a line says only what is its own; its dialog shows all it tests.
         const { [group?.key ?? ""]: _shared, ...mine } = when;
         const word = i === last ? "Otherwise" : group ? (Object.keys(mine).length === 0 && i === group.to ? "Else" : i === group.from ? "If" : "Else if") : i === 0 ? "If" : "Else if";
         return (
@@ -290,15 +289,14 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
             {/* Every line is the same three columns, so the where-it-goes and the counts read in line:
                 the word, the conditions, and the fixed-width place the line ends at. */}
             <span className="w-4 shrink-0 text-right text-[10px] tabular text-dim/70" title={`step ${i + 1}`}>{i + 1}</span>
-            {/* The word closes a line that is open. */}
-            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate", group && "ml-4", open === i && "cursor-pointer")} onClick={() => { if (open === i) setOpen(null); }}>{word}</span>
+            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate", group && "ml-4")}>{word}</span>
             {i === last ? (
               <span className="min-w-0 flex-1" />
-            ) : data.editable && (open === i || (Object.keys(when).length === 0 && to.kind !== "peer")) ? (
-              // A peer can be down, so a line that sends to one may stand with no condition of its own.
-              <Conds when={when} models={data.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (r) => ({ ...r, when: w }))} />
+            ) : data.editable && Object.keys(when).length === 0 && to.kind !== "peer" ? (
+              // A peer can be down, so only a line that sends to one may stand with no condition of its own.
+              <span className="min-w-0 flex-1"><button type="button" className={cx(CHIP, "border-warn text-warn")} onClick={() => openRule(data.name, i)}>choose a condition</button></span>
             ) : data.editable ? (
-              <button type="button" className="nodrag nopan min-w-0 flex-1 rounded-md px-1 py-1 text-left leading-snug hover:bg-muted" title="click to change this line's conditions" onClick={() => setOpen(i)}>{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</button>
+              <button type="button" className="nodrag nopan min-h-6 min-w-0 flex-1 rounded-md px-1 py-1 text-left leading-snug hover:bg-muted" title="click to edit this line" onClick={() => openRule(data.name, i)}>{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</button>
             ) : (
               <span className="min-w-0 flex-1 truncate">{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</span>
             )}
@@ -328,13 +326,13 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                         { label: "also run", head: true },
                         ...(data.actions.length ? data.actions.map((a) => ({ label: a, value: `do:${a}`, mono: true, on: list(s.do).includes(a) })) : [{ label: "no actions yet: + action makes one", off: true }]),
                         { label: "more", head: true },
-                        { label: "Set request fields (params)…", value: "more" },
+                        { label: "Edit this line…", value: "more" },
                         ...(i < last ? [{ label: "Delete this line", value: "delete", danger: true }] : []),
                       ], (v) => {
                         if (v === "up") change((d) => moveStep(d, data.name, i, -1));
                         else if (v === "down") change((d) => moveStep(d, data.name, i, 1));
                         else if (v === "delete") edit(i, () => null);
-                        else if (v === "more") editSelect({ kind: "flow", id: data.name });
+                        else if (v === "more") openRule(data.name, i);
                         else if (v.startsWith("do:")) change((d) => withDo(d, data.name, i, v.slice(3), !list(s.do).includes(v.slice(3))) ?? d);
                         else if (v.startsWith("lane:")) edit(i, ({ lane: _, ...r }) => (v === "lane:" ? r : { ...r, lane: v.slice(5) }));
                       })}>

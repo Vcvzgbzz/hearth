@@ -1,5 +1,6 @@
 /** Small primitives, styled once: cards, pills, switches, stats. */
-import type { ReactNode } from "react";
+import { X } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "accent" | "dim";
 
@@ -14,6 +15,43 @@ export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Bool
 
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cx("rounded-xl border border-line bg-panel", className)}>{children}</div>;
+}
+
+const DIALOG = { sm: "max-w-sm", md: "max-w-lg", lg: "max-h-[85vh] max-w-3xl", full: "h-[calc(100vh-3rem)] max-w-6xl" };
+
+/**
+ * The console's one dialog: a titled panel over the page, closed by Escape, its × or a click outside it.
+ * `head` sits beside the title; the body and any row of buttons are the caller's. It stands under the
+ * menus, so a choice offered from inside one opens over it.
+ */
+export function Dialog({ title, label, head, size = "md", onClose, children }: {
+  title: ReactNode; /** Its name to a screen reader, where the title is not plain text. */ label?: string; head?: ReactNode; size?: keyof typeof DIALOG; onClose: () => void; children: ReactNode;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    // A field inside that asked for the keys keeps them.
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
+    // A menu open over the dialog takes its own Escape.
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && (e.target === document.body || panel.current?.contains(e.target as Node))) close.current(); };
+    window.addEventListener("keydown", key);
+    return () => { window.removeEventListener("keydown", key); before?.focus(); };
+  }, []);
+  return (
+    <div className="fixed inset-0 z-30 grid place-items-center bg-black/40 p-6 max-sm:p-2" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={panel} role="dialog" aria-modal="true" aria-label={label ?? (typeof title === "string" ? title : undefined)} tabIndex={-1}
+           className={cx("flex max-h-full w-full flex-col rounded-xl border border-line bg-panel text-fg shadow-2xl outline-none", DIALOG[size])}>
+        <div className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-3">
+          <div className="min-w-0 font-semibold">{title}</div>
+          {head}
+          <button type="button" className="ml-auto shrink-0 text-dim hover:text-fg" aria-label="close" onClick={onClose}><X size={16} /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function Dot({ tone, pulse }: { tone: Tone; pulse?: boolean }) {

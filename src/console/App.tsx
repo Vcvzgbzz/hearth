@@ -12,7 +12,7 @@ import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./edito
 import { changed, useEdit } from "./editStore.js";
 import { Routing } from "./Routing.js";
 import { Topology } from "./Topology.js";
-import { Button, Card, cx, Pill } from "./ui.js";
+import { Button, Card, cx, Dialog, Pill } from "./ui.js";
 
 const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
@@ -239,11 +239,9 @@ function KeyDialog() {
   if (!ask) return null;
   const done = (k: string | null) => { ask(k); setKey(""); };
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => done(null)}>
-      <Card className="w-full max-w-sm p-5 shadow-2xl">
-        <form onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); done(key); }}>
-          <div className="text-base font-semibold">This node needs a key</div>
-          <p className="mt-1 text-dim">Reading is open; changing something needs one of the node's apiKeys. It is kept in this browser only.</p>
+    <Dialog title="This node needs a key" size="sm" onClose={() => done(null)}>
+        <form className="p-4" onSubmit={(e) => { e.preventDefault(); done(key); }}>
+          <p className="text-dim">Reading is open; changing something needs one of the node's apiKeys. It is kept in this browser only.</p>
           <input autoFocus type="password" value={key} onChange={(e) => setKey(e.target.value)}
                  className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 font-mono focus:border-accent focus:outline-none" />
           <div className="mt-4 flex justify-end gap-2">
@@ -251,8 +249,7 @@ function KeyDialog() {
             <Button tone="primary" type="submit">use key</Button>
           </div>
         </form>
-      </Card>
-    </div>
+    </Dialog>
   );
 }
 

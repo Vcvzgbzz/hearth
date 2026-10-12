@@ -25,6 +25,8 @@ interface EditState {
   file: File | null;
   draft: Doc | null;
   sel: EditSel;
+  /** The selected rule is open in its dialog, at this line where one was asked for. */
+  opened: { line: number | null } | null;
   err: Err | null;
   plan: Plan | null;
   trial: Trial | null;
@@ -52,7 +54,7 @@ interface EditState {
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
+  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -162,7 +164,11 @@ export function redo(): void {
   set({ ...show(on.full, on.router), future: now.future.slice(0, -1), past: [...now.past, { full: whole(now)!, router: now.router }], err: null });
   stepping = false;
 }
-export const editSelect = (sel: EditSel) => set({ sel });
+/** Select it. A rule's dialog stays open only while that rule stays the one selected. */
+export const editSelect = (sel: EditSel) => set((s) => ({ sel, opened: sel && s.sel?.kind === sel.kind && s.sel.id === sel.id ? s.opened : null }));
+/** Open a rule in its dialog, at one of its lines if given. */
+export const openRule = (id: string, line: number | null = null) => set({ sel: { kind: "flow", id }, opened: { line } });
+export const closeRule = () => set({ opened: null });
 export const pick = (picking: Picking) => set({ picking });
 export const hover = (id: string | null) => { if (useEdit.getState().hover !== id) set({ hover: id }); };
 /** Open a menu under whatever was clicked. */

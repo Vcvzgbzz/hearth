@@ -8,11 +8,11 @@ import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, choose, chooseAt, closeMenu, copy, dirty, duplicate, edits, editSelect, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeRouter, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
+import { addRouter, change, choose, chooseAt, closeMenu, copy, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeRouter, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { useStore } from "./store.js";
-import { Button, cx, mono } from "./ui.js";
+import { Button, cx, Dialog, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
 
@@ -58,13 +58,16 @@ export function finding(draft: Doc): Choice[] {
   ];
 }
 
+/** Open what can be edited: a rule in its dialog, an action in the side panel. */
+const show = (on: NonNullable<EditSel>) => (on.kind === "flow" ? openRule(on.id) : editSelect(on));
+
 /** Go to what a search found: bring it into view, and open it when it has a panel. */
 export function goTo(value: string): void {
   const node = value.startsWith("name:") ? "self" : value;
   focusOn(node);
   const at = nodeOf(node);
   const open = at.kind.opens?.(at.id);
-  if (open) editSelect(open);
+  if (open) show(open);
 }
 
 /** Open the search over the map's nodes, at a point on the page. */
@@ -107,7 +110,7 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
     else if (v === "fit") focusOn("*");
     else if (v === "tidy") change(tidied);
     else if (on && v === "duplicate") duplicate(on);
-    else if (on && v === "edit") { editSelect(on); focusOn(node!); }
+    else if (on && v === "edit") { show(on); focusOn(node!); }
     else if (on && v === "delete") remove(on);
     else if (on && v === "toggle") change((d) => { const { off: _, ...rest } = obj(obj(d.flows)[on.id]); return put(d, "flows", on.id, entry.off === true ? rest : { ...rest, off: true }); });
   });
@@ -264,7 +267,7 @@ export function EditBar() {
                    onCreate={(id) => {
                      // One line that always applies and goes nowhere yet: the rule opens to be filled in.
                      change((d) => put(d, "flows", id, { inputs: [], steps: [{ to: "" }] }));
-                     editSelect({ kind: "flow", id });
+                     openRule(id);
                      setAdding(null);
                    }} />
       )}
@@ -539,8 +542,9 @@ export function TryStrip() {
 const PICK = "inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border border-line bg-bg px-2 text-[12px] hover:border-accent focus:border-accent focus:outline-none";
 
 /** One rule, line by line, at a size that is comfortable to work in: the same parts the node shows, with room to breathe. */
-function Lines({ name, flow }: { name: string; flow: Doc }) {
+function Lines({ name, flow, at }: { name: string; flow: Doc; /** The line it was opened for, brought into view. */ at: number | null }) {
   const refs = useContext(Refs);
+  useEffect(() => { if (at !== null) document.getElementById(`rule-line-${at}`)?.scrollIntoView({ block: "center" }); }, []);
   const err = useEdit((s) => s.err);
   const steps = (Array.isArray(flow.steps) ? flow.steps : []).map(obj);
   const last = steps.length - 1;
@@ -552,7 +556,7 @@ function Lines({ name, flow }: { name: string; flow: Doc }) {
       {steps.map((r, i) => {
         const to = toOf(r.to);
         return (
-          <div key={i} className="rounded-lg border border-line bg-bg/40 p-2.5">
+          <div key={i} id={`rule-line-${i}`} className={cx("rounded-lg border bg-bg/40 p-2.5", i === at ? "border-accent" : "border-line")}>
             <div className="flex items-start gap-2">
               <span className="pt-1 text-[12px] font-medium">{i === last ? "Otherwise" : i === 0 ? "If" : "Else if"}</span>
               {i < last && <div className="min-w-0 flex-1 pt-0.5 text-[12px]"><Conds when={obj(r.when)} models={refs.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (x) => ({ ...x, when: w }))} /></div>}
@@ -668,11 +672,11 @@ function Gone() {
   return null;
 }
 
-/** What is selected on the map, with room to work: a rule line by line, or an action's settings as the Config page shows them. */
+/** What is open to edit, with room to work: a rule line by line in a dialog, or an action's settings beside the map as the Config page shows them. */
 export function EditRail() {
-  const { draft, sel, err, pending } = useEdit();
+  const { draft, sel, err, pending, opened } = useEdit();
   const data = useStore((s) => s.data);
-  if (!draft || !sel) return null;
+  if (!draft || !sel || (sel.kind === "flow" && !opened)) return null;
   const section = SECTION[sel.kind];
   const entry = obj(draft[section])[sel.id];
   const self = data?.net.nodes.find((n) => n.self);
@@ -687,19 +691,17 @@ export function EditRail() {
   const mine = new Set(Object.values(obj(draft.flows)).flatMap((f) => list(obj(f).inputs)));
   const gone = new Set(Object.values(data?.flows ?? {}).flatMap((f) => f.inputs).filter((n) => !mine.has(n)));
   const offered = [...new Set([...pending, ...mine, ...refsOf(draft, catalog).models])].filter((n) => n !== "*" && !gone.has(n));
-  return (
-    <aside className="w-[480px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-10 max-lg:max-w-full">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="min-w-0">
+  const name = (
+        <div className="min-w-0 font-normal">
           <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "flow" ? "routing rule" : "action"}</div>
           {isObj(entry)
             ? <input key={sel.id} aria-label="name" title="click to rename" defaultValue={sel.id} className={cx("w-full truncate rounded border border-transparent bg-transparent text-base font-semibold hover:border-line focus:border-accent focus:outline-none", mono)}
-                     onBlur={(e) => { rename(sel, e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
+                     onBlur={(e) => { rename(sel, e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.stopPropagation(); e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
             : <div className={cx("truncate text-base font-semibold", mono)}>{sel.id}</div>}
         </div>
-        {isObj(entry) && <button className="ml-auto text-dim hover:text-bad" aria-label={`delete ${sel.id}`} onClick={() => remove(sel)}><Trash2 size={15} /></button>}
-        <button className={cx("text-dim hover:text-fg", !isObj(entry) && "ml-auto")} aria-label="close" onClick={() => editSelect(null)}><X size={16} /></button>
-      </div>
+  );
+  const bin = isObj(entry) && <button className="text-dim hover:text-bad" aria-label={`delete ${sel.id}`} onClick={() => remove(sel)}><Trash2 size={15} /></button>;
+  const body = (
       <Refs.Provider value={refsOf(draft, catalog)}>
         {!isObj(entry) ? <Gone />
           : sel.kind === "flow" ? (
@@ -741,7 +743,7 @@ export function EditRail() {
               <Names flow={sel.id} names={list(entry.inputs)} options={offered} />
               {list(entry.inputs).length === 0 && <div className="mt-1 text-[11px] text-warn">Nothing reaches this rule yet. Add a model name here, or drag a name's blue dot from the node onto the rule.</div>}
               <div className="mb-1 mt-4 text-[12px] font-medium">decide where it goes</div>
-              <Lines name={sel.id} flow={entry} />
+              <Lines name={sel.id} flow={entry} at={opened?.line ?? null} />
             </>
           )
           : (
@@ -759,6 +761,22 @@ export function EditRail() {
             </>
           )}
       </Refs.Provider>
+  );
+  if (sel.kind === "flow") return (
+    <Dialog title={name} label={`routing rule ${sel.id}`} head={bin} size="full" onClose={closeRule}>
+      <div className="min-h-0 flex-1 overflow-auto p-4"><div className="mx-auto max-w-4xl">{body}</div></div>
+    </Dialog>
+  );
+  return (
+    <aside className="w-[480px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-10 max-lg:max-w-full">
+      <div className="mb-3 flex items-center gap-2">
+        {name}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {bin}
+          <button className="text-dim hover:text-fg" aria-label="close" onClick={() => editSelect(null)}><X size={16} /></button>
+        </span>
+      </div>
+      {body}
     </aside>
   );
 }
