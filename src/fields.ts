@@ -72,6 +72,8 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     resident: { type: "bool", desc: "Stays loaded beside the card's swapping model and is asked to yield when it needs the memory.", def: false },
     hold: { type: "raw", desc: "`{ lanes, idleMs, seat? }`: while this backend's app has work (read off `activity`), keep these lanes off its hardware until it has been idle this long. `seat` is the id a model swapper loads the app under, so the hold starts as the seat loads." },
     routes: { type: "raw", desc: "Paths this backend answers besides chat, each with its lane and model." },
+    key: { type: "secret", desc: "Sent to this backend as its bearer key on every call. env:NAME keeps it out of the file." },
+    cloud: { type: "bool", desc: "A provider's server on the internet: no hardware here, and only the models under serves. Requests sent to it leave this network.", def: false },
   },
   activity: {
     path: { type: "text", desc: "The backend path to read." },

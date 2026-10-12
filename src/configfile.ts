@@ -54,7 +54,7 @@ export interface ConfigOp {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
- * A secret (an apiKeys entry, a peer token) never reaches a console — not in a form, not in the
+ * A secret (an apiKeys entry, a peer token, a backend's key) never reaches a console — not in a form, not in the
  * YAML tab. Each one is read back as a stand-in; the stand-in then travels with an edit: left
  * standing, it is written back as the original, replaced, and the new value takes its place.
  */
@@ -76,6 +76,7 @@ function secretTable(doc: unknown): Map<string, string> {
   if (isObj(d.peers)) for (const p of Object.values(d.peers)) if (isObj(p)) { grab(p.token); grab(p.accept); }
   // Only a hash, but one that can be attacked offline, and nothing on the page needs it.
   if (isObj(d.operator)) grab(d.operator.passHash);
+  if (isObj(d.backends)) for (const b of Object.values(d.backends)) if (isObj(b)) grab(b.key);
   return table;
 }
 
@@ -102,6 +103,7 @@ function maskSecrets(text: string, doc: unknown): { text: string; doc: unknown }
     }
   }
   if (isObj(d.operator)) d.operator.passHash = swap(d.operator.passHash);
+  if (isObj(d.backends)) for (const b of Object.values(d.backends)) if (isObj(b) && b.key !== undefined) b.key = swap(b.key);
   let masked = text;
   for (const [m, s] of table) masked = masked.split(s).join(m);
   return { text: masked, doc: d };

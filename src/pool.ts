@@ -86,7 +86,7 @@ export class BackendPool {
   ) {
     this.arbiter.onRelease(() => this.scheduleResume());
     for (const b of cfg.backends) {
-      const state = new BackendState(b.url, b.kind, log, this.mineOn(b));
+      const state = new BackendState(b.url, b.kind, log, this.mineOn(b), b.key ? { Authorization: `Bearer ${b.key}` } : {});
       const slot: BackendSlot = {
         name: b.name,
         cfg: b,

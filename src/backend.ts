@@ -88,6 +88,8 @@ export class BackendState {
      * what it serves, so a sidecar pinned beside a swapping model is nobody's resident but its own.
      */
     private readonly mine: (id: string) => boolean = () => true,
+    /** Sent with the catalogue read, for a backend that wants a key before it answers anything. */
+    private readonly headers: Record<string, string> = {},
   ) {
     this.k = KINDS[kind];
     this.useEvents = this.k.events;
@@ -289,6 +291,7 @@ export class BackendState {
     // serves. Warm state depends on who we are talking to, so that half is
     // asked differently per kind, or not at all.
     const catalogRead = getJson<{ data?: { id?: string }[] }>(`${this.url}/v1/models`, {
+      headers: this.headers,
       headersTimeoutMs: 3_000,
     }).then((c) => (c.data ?? []).map((m) => m.id ?? "").filter((m) => m !== ""));
     // A kind may answer warm state from the catalogue, so it is handed the fresh one when it arrives.

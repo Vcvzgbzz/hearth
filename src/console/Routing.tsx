@@ -90,7 +90,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       data: {
         hardware: (where?.resources ?? []).map((name) => ({ name, cpu: (d.net.resources ?? []).find((r) => r.name === name)?.kind === "cpu" })),
         title: model, kind: "model", on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
-        sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.server ? ` · ${where.server}` : ""}`,
+        sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.cloud ? " · cloud" : where?.server ? ` · ${where.server}` : ""}`,
       } satisfies Dest,
     });
     y += 56;

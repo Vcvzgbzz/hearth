@@ -32,6 +32,8 @@ export interface Backend {
   /** The declared machine it runs on; null or absent is the one hearth is on. */
   server?: string | null;
   kind?: string;
+  /** A provider's server on the internet: it uses no hardware here. */
+  cloud?: boolean;
   loaded?: string[];
   /** Models being read off the disk right now; drawn only when the backend reports it. */
   loading?: string[];

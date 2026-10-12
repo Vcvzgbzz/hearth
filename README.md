@@ -115,6 +115,8 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.resources` | none | hardware this backend uses. Backends on one exclusive card take turns. See [Backends that share a card](#backends-that-share-a-card) |
 | `backends.<name>.hold` | none | `{ lanes, idleMs, seat? }`: while this backend's app has work (read off `activity`), keep these lanes off its hardware until it has been idle this long. See [Keeping background work off the card](#keeping-background-work-off-the-card-while-the-app-is-in-use) |
 | `backends.<name>.resident` | `false` | stays loaded beside the card's swapping model and is asked to yield when it needs the memory. See [Something small that lives on a card](#something-small-that-lives-on-a-card) |
+| `backends.<name>.key` | none | sent to this backend as `Authorization: Bearer` on every call, in place of anything the client sent. `env:NAME` keeps it out of the file |
+| `backends.<name>.cloud` | `false` | a provider's server on the internet: no hardware here, no warm state, and only the models under `serves`. See [A provider's models](#a-providers-models) |
 | `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. See [Backends that don't speak the OpenAI API](#backends-that-dont-speak-the-openai-api) |
 | `resources.<name>.kind` | `gpu` | `gpu`, `cpu` or `other`. Picks the icon; `gpu` and `other` are exclusive unless shared |
 | `servers.<name>.host` | — | a machine on your network that backends run on: an IP or hostname, no scheme or port |
@@ -1004,9 +1006,53 @@ the same exclusive resource is refused: give each machine's card its own name.
 
 Use a server for a machine on a network you control, where hearth can call the
 backend directly; requests go to it as plain HTTP unless its `url` says
-otherwise. Use a [peer](#sharing-capacity) for anything across the internet or
-run by someone else: a peer is another hearth with its own queue, tokens and
-limits.
+otherwise. Use a [peer](#sharing-capacity) for another hearth across the
+internet or run by someone else: it has its own queue, tokens and limits. Use a
+[cloud backend](#a-providers-models) for a provider's API.
+
+### A provider's models
+
+A backend can be a provider's OpenAI-compatible API instead of a server of
+yours. Mark it `cloud` and give it the key the provider issued:
+
+```yaml
+backends:
+  provider:
+    url: https://api.example.com      # what comes before /v1
+    cloud: true
+    key: env:PROVIDER_KEY
+    serves: [their-large-model]
+
+models:
+  big: { backend: provider, as: their-large-model }
+
+flows:
+  chat:
+    inputs: [chat]
+    steps:
+      - { when: { tokensOver: 60000 }, to: { model: big } }
+      - { to: { model: my-model } }
+```
+
+- `key` goes out as `Authorization: Bearer` on every call to that backend: chat,
+  any path under its `routes`, and the read of its model list. A key the client
+  sent for this node is never passed on. `key` works on any backend, cloud or
+  not, for a server of your own that wants one.
+- `cloud` says it is not yours: it takes no `resources` and no `server`, its
+  `kind` is `none`, and `serves` is required, so the node offers the models you
+  name and not the provider's whole list.
+- It is queued like any backend. `concurrency` is how many requests you let it
+  have at once, and per-key usage and limits count what goes there.
+- The console draws these backends in a Cloud group on the topology, and marks
+  a model that runs on one on the routing map.
+
+**A request sent to a cloud backend leaves this machine and this network**, with
+the whole prompt. Nothing sends one there unless a flow or a model's `backend`
+says so. A flow line can keep some requests home the same way it keeps them
+off a peer, by a header, a caller or a lane.
+
+The API has to be OpenAI-shaped. One with a format of its own is not reached
+this way.
 
 ### Backends that share a card
 
@@ -2197,6 +2243,9 @@ The defaults assume a private network: Tailscale, WireGuard, a LAN you trust.
   else, or one carrying a credential that isn't valid here, gets refused rather
   than waved through as "local".
 - Lending is opt-in per model, and peers are rate-limited by request count.
+- A `cloud` backend is the one place a prompt leaves your network for a party
+  that is not a hearth you chose to trust. It is used only where your config
+  names it, and its `key` never reaches the console or a client.
 - Peer tokens are separate from api keys, so peer traffic is attributable.
 
 ### Writes refuse a cross-origin browser

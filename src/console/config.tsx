@@ -529,7 +529,7 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
   useEffect(() => first.current?.focus(), []);
   const name = id.trim();
   const problem = !name ? null : taken.includes(name) ? `a ${spec.noun} named ${name} already exists`
-    : typeof vals.url === "string" && vals.url !== "" && !/^https?:\/\/[^/:]+(:\d+)?$/.test(vals.url.replace(/\/$/, "")) ? "the url needs a host and port, like http://127.0.0.1:8080"
+    : typeof vals.url === "string" && vals.url !== "" && !/^https?:\/\/[^/:]+(:\d+)?(\/[^?#]*)?$/.test(vals.url.replace(/\/$/, "")) ? "the url needs a host and port, like http://127.0.0.1:8080"
     : spec.scope === "server" && !String(vals.host ?? "").trim() ? "a server needs its address: an IP or hostname on your network"
     : spec.scope === "peer" && !vals.url && !vals.accept ? "a peer needs a url (to borrow from it) or accept (to lend to it)"
     : spec.scope === "peer" && vals.url && !vals.token ? "borrowing needs the token you present to them" : null;

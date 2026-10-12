@@ -201,6 +201,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
             url: b.cfg.url,
             server: b.cfg.server,
             kind: b.cfg.kind,
+            ...(b.cfg.cloud ? { cloud: true } : {}),
             // Whether it CAN report warm state. An empty loaded list from a
             // backend that cannot see is not the same claim as one from a
             // backend that looked, and the page must not render it as such.

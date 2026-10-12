@@ -8,7 +8,7 @@ import {
   applyNodeChanges, Background, BaseEdge, Controls, getBezierPath, Handle, Position, ReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
-import { CircuitBoard, Cpu, Flame, Globe, KeyRound, Monitor, Plus, Redo2, RotateCcw, Save, Server, Split, Undo2, Users, Waypoints } from "lucide-react";
+import { CircuitBoard, Cloud, Cpu, Flame, Globe, KeyRound, Monitor, Plus, Redo2, RotateCcw, Save, Server, Split, Undo2, Users, Waypoints } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
@@ -368,7 +368,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
   // Hardware nothing uses yet is drawn on this machine while there is a draft, so a backend can be dragged onto it.
   const loose = who ? order.filter((r) => !(self.backends ?? []).some((b) => homeOf(b) === r)) : [];
   for (const machine of machines) {
-    const members = (self.backends ?? []).filter((b) => (b.server ?? "") === machine);
+    const members = (self.backends ?? []).filter((b) => !b.cloud && (b.server ?? "") === machine);
     const spare = machine === "" ? loose : [];
     if (members.length === 0 && spare.length === 0 && (machine === "" || !framed)) continue;
     const frame = framed ? `machine:${machine}` : undefined;
@@ -437,6 +437,26 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
     }
     nodes.push(...inside);
     y += height + 24;
+  }
+  // A provider's servers are no machine and no hardware of ours: they stand together below what is, and are not moved between frames.
+  const away = (self.backends ?? []).filter((b) => b.cloud);
+  if (away.length > 0) {
+    const all = away.flatMap((b) => runningIds.get(b.name) ?? []);
+    nodes.push({
+      id: "cloud", type: "hardware", position: { x: X.group, y }, style: { width: W + PAD * 2, height: HEAD + PAD + away.length * H + (away.length - 1) * GAP },
+      data: { title: "Cloud", icon: <Cloud size={13} />, hot: all.length > 0, sub: "· leaves this network", tip: "Providers' servers on the internet. A request sent to one leaves this machine and this network." } satisfies Group,
+    });
+    away.forEach((b, n) => {
+      const run = runningIds.get(b.name) ?? [];
+      nodes.push({
+        id: `backend:${b.name}`, type: "card", parentId: "cloud", extent: "parent", position: { x: PAD, y: HEAD + n * (H + GAP) },
+        data: { title: b.name, icon: <Cloud size={14} />, tone: run.length > 0 ? "accent" : backendTone(b), tip: backendTip(b, run.length),
+          // Nothing is loaded or unloaded there: what it offers says more than "idle".
+          sub: run.length === 0 && b.answering !== false && (b.serves ?? []).length ? b.serves!.join(", ") : backendSub(b, run.length), meter: [run.length, b.slots ?? 0], busy: run.length > 0, selected: is("backend", b.name) } satisfies Card,
+      });
+      edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run) } });
+    });
+    y += HEAD + PAD + away.length * H + (away.length - 1) * GAP + 24;
   }
   const mid = Math.max(y - 24, H) / 2;
   const local = d.q.jobs.filter((j) => j.state === "running").map((j) => j.id);

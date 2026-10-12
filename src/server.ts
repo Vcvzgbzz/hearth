@@ -106,6 +106,9 @@ const HOP_BY_HOP = new Set([
   "host",
 ]);
 
+/** A backend's own key as the header it is sent in; `name` matches the case of the headers it joins. */
+const keyed = (key: string, name = "Authorization"): Record<string, string> => ({ [name]: `Bearer ${key}` });
+
 function forwardable(
   headers: IncomingMessage["headers"] | UpstreamResponse["headers"],
 ): Record<string, string | string[]> {
@@ -445,7 +448,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /** Sends a chat completion to a local backend, emulating another server's answers if the route asks. */
-  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal } & ReturnType<typeof backendDeadline>, spare = false): Promise<number> {
+  async function sendLocal(url: string, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal; headers?: Record<string, string> } & ReturnType<typeof backendDeadline>, spare = false): Promise<number> {
     const emulate = cfg.models[model]?.emulate ?? null;
     const body = pool.outboundBody(model, payload);
     const sentAt = Date.now();
@@ -823,7 +826,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       ranOn = local.name;
       await local.state.ensureFresh();
     // Our id and the route's params on the way to the backend; untouched when neither is set.
-      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg) }, spare);
+      localStatus = await sendLocal(local.cfg.url, model, payload, res, { signal, ...backendDeadline(local.cfg), ...(local.cfg.key ? { headers: keyed(local.cfg.key) } : {}) }, spare);
     };
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (need?.tokens ?? 0) - (need?.output ?? 0)) };
@@ -2263,7 +2266,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         method: req.method ?? "GET",
         ...(sendBody && sendBody.length > 0 ? { raw: sendBody } : {}),
         // Client headers minus hop-by-hop, and minus our own key if that is what it carries.
-        headers: stripOurKey(req) as Record<string, string>,
+        // A backend with a key of its own is sent that, whatever the client carried.
+        headers: { ...stripOurKey(req), ...(to.cfg.key ? keyed(to.cfg.key, "authorization") : {}) } as Record<string, string>,
         signal: ctrl.signal,
         ...backendDeadline(to.cfg),
       });
