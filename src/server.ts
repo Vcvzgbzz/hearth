@@ -4,6 +4,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
@@ -375,6 +376,30 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     return token ? sessions.check(token) : null;
   }
 
+  /** The request being handled: the id it was answered with, and what it carried. */
+  const asking = new AsyncLocalStorage<{ id: string; req: IncomingMessage }>();
+  /** An upstream's answer headers for relaying: its own request id gives way to the one this node gave the request. */
+  const relayable = (up: UpstreamResponse): Record<string, string | string[]> => {
+    const { "x-request-id": _theirs, ...rest } = forwardable(up.headers);
+    return rest;
+  };
+  /** The headers of this request that some rule tests, as sent: what a routing decision turned on. Credentials are never among them. */
+  function testedHeaders(): Record<string, string> | undefined {
+    const req = asking.getStore()?.req;
+    if (!req) return undefined;
+    const sent = headersOf(req);
+    const out: Record<string, string> = {};
+    for (const flows of [cfg.flows, ...Object.values(cfg.routers).map((r) => r.flows)]) {
+      for (const step of Object.values(flows).flatMap((f) => f.steps)) {
+        for (const name of [...Object.keys(step.when?.header ?? {}), ...Object.keys(step.when?.headerNot ?? {})]) {
+          if (name === "authorization" || name === "cookie" || sent[name] === undefined) continue;
+          out[name] = sent[name]!.slice(0, 200);
+        }
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
   /** Per-request timing for the one-line request log; `waitedMs` shows whether admission queued it. */
   interface Timing {
     enqueuedAt: number;
@@ -406,9 +431,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const who = typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : typeof fields.forPeer === "string" ? `peer:${fields.forPeer}` : "local";
       usage.add(who, fields.model, ok, used);
     }
+    const headers = testedHeaders();
     log.info("request", {
+      ...(asking.getStore() ? { id: asking.getStore()!.id } : {}),
       ...fields,
       ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.est ? { tokensEstimated: true } : {}) } : {}),
+      ...(headers ? { headers } : {}),
       waitedMs: started - t.enqueuedAt,
       runMs: Date.now() - started,
       ok,
@@ -424,7 +452,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     const up = await send(`${url}/v1/chat/completions`, { json: emulate ? emulatedRequest(body) : body, ...opts });
     // With somewhere else to run it, a backend's own failure is not relayed: the request moves on.
     if (spare && up.status >= 500 && !res.headersSent) throw new BackendFailed(up.status, (await up.text()).slice(0, 200));
-    if (emulate) return relayEmulated(up, res, forwardable(up.headers), sentAt);
+    if (emulate) return relayEmulated(up, res, relayable(up), sentAt);
     // Observed as it is relayed, never held back: see RelayWatch.
     return pipeThrough(up, res, canary?.watchRelay(model, pool.for(model).name, up.headers["content-type"]));
   }
@@ -470,7 +498,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       return up.status;
     }
     res.writeHead(up.status, {
-      ...forwardable(up.headers),
+      ...relayable(up),
       // Ours, not a peer's own id for it: the name this node knows the model by.
       ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}),
       "Content-Type": up.headers["content-type"] ?? "application/json",
@@ -968,8 +996,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       if (parked.has(res)) return;
       if (--inFlight === 0) drained?.();
     });
-    void handle(req, res).catch((e) => {
-      log.error("request.failed", { error: e instanceof Error ? e.message : String(e) });
+    // Sent back on every answer, and on this request's line in the log, so the two can be matched.
+    const id = "req_" + randomBytes(8).toString("hex");
+    res.setHeader("X-Request-Id", id);
+    void asking.run({ id, req }, () => handle(req, res)).catch((e) => {
+      log.error("request.failed", { id, error: e instanceof Error ? e.message : String(e) });
       if (!res.headersSent) apiError(res, 500, "internal error", "server_error");
       else res.end();
     });
