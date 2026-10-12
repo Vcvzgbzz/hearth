@@ -11,7 +11,7 @@
  */
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,10 +27,10 @@ const dir = mkdtempSync(join(tmpdir(), "hearth-sec-"));
 const cfgPath = join(dir, "hearth.yaml");
 
 const backend = createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "application/json" });
+  res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": "hearth_op=theirs" });
   res.end(req.url === "/v1/models"
     ? JSON.stringify({ data: [{ id: "mine" }] })
-    : JSON.stringify({ ok: true, sawAuth: req.headers.authorization ?? null }));
+    : JSON.stringify({ ok: true, sawAuth: req.headers.authorization ?? null, sawCookie: req.headers.cookie ?? null }));
 });
 await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
 const beUrl = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
@@ -102,6 +102,34 @@ const host = url.slice("http://".length);
   // Reads are not the hole and blocking them would break the page.
   assert.equal((await fetch(`${url}/network`, {
     headers: { Origin: "https://evil.example", Authorization: "Bearer my-key" } })).status, 200);
+}
+
+/* ------------------------------------------- the browser's other doors */
+
+{
+  // A sandboxed frame's writes arrive with `Origin: null`, and are no more this page than any other.
+  assert.equal((await fetch(`${url}/control`, { method: "POST",
+    headers: { Origin: "null", "Content-Type": "text/plain", Authorization: "Bearer my-key" },
+    body: JSON.stringify({ lending: false }) })).status, 403);
+
+  // A name re-pointed at 127.0.0.1 makes a foreign page same-origin with this node: reads included.
+  const as = (hostHeader: string) => new Promise<number>((done, fail) => {
+    request(`${url}/ui/data`, { headers: { Host: hostHeader } }, (r) => { r.resume(); done(r.statusCode ?? 0); })
+      .on("error", fail).end();
+  });
+  assert.equal(await as("rebound.example:8080"), 403, "loopback is not reached by a name");
+  assert.equal(await as(host), 200, "an address is");
+  assert.equal(await as("localhost:8080"), 200, "and so is localhost");
+  assert.equal(await as("[::1]:8080"), 200);
+
+  // The session cookie is this node's: a backend neither reads it nor writes one.
+  const through = await fetch(`${url}/anything`, { headers: { Authorization: "Bearer my-key", Cookie: "hearth_op=mine" } });
+  assert.equal(((await through.json()) as { sawCookie: unknown }).sawCookie, null);
+  assert.equal(through.headers.get("Set-Cookie"), null);
+
+  const page = await fetch(`${url}/ui`);
+  assert.match(page.headers.get("Content-Security-Policy") ?? "", /script-src 'sha256-[^;]+; .*frame-ancestors 'none'/, "the page runs its own scripts and sits in no frame");
+  assert.equal(page.headers.get("X-Content-Type-Options"), "nosniff");
 }
 
 /* ------------------------------------------------ our key stays with us */

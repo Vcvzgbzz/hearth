@@ -24,7 +24,19 @@ tunnelling its port to it, puts hearth on that browser's loopback.
 So any write carrying an `Origin` that is not this node's is refused. curl, the
 peer protocol and a server-side app all send no `Origin` and are unaffected, and
 there is no legitimate browser client on another origin to break: without CORS
-headers it could never read a reply anyway.
+headers it could never read a reply anyway. `Origin: null`, which a sandboxed
+frame sends, is refused like any other.
+
+A page can also make itself this node's own origin, by re-pointing its name at
+`127.0.0.1` after it has loaded. So a request from loopback has to ask for the
+node by an address or by `localhost`; one that asks by any other name is
+refused with a 403. A name you gave `127.0.0.1` in your hosts file is refused
+too: use `localhost`.
+
+The console page is sent with a content security policy that runs only the two
+scripts it ships with and lets no other page frame it. Cookies never cross the
+passthrough in either direction: a backend is not shown the operator's session
+and cannot set one.
 
 ## Do not put a proxy in front of it
 
