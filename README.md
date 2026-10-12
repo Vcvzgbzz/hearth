@@ -17,6 +17,13 @@ hearth serve
 Point any client at `http://127.0.0.1:4141/v1` instead of your backend. That's
 the whole migration.
 
+![The routing map: a rule's lines, and the models, providers and peers they send to](docs/img/routing.jpg)
+
+No GPU to hand? Clone the repo and run `npm install && npm run demo`: a node
+with one of everything and stand-ins behind it, at
+<http://127.0.0.1:4300/ui>. The pictures here are of it. See
+[`demo/`](demo/README.md).
+
 ## What it does
 
 Three things, and only the first one is mandatory.
@@ -43,6 +50,8 @@ Each of these is off until you ask for it in `hearth.yaml`.
 - **A console.** `/ui` draws the node, its hardware, its callers and its rules,
   shows the queue and recent requests, and edits the config with a review before
   anything is written. See [The console](docs/console.md).
+
+  ![The topology: callers, routers, hardware, a peer and cloud providers](docs/img/topology.jpg)
 - **Keys.** Each caller can have a key with its own models, expiry, rate and
   daily limits, and its usage in tokens and dollars. See
   [Configuration](docs/configuration.md).
