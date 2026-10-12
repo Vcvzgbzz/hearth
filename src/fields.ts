@@ -195,6 +195,7 @@ export function scopeOf(path: (string | number)[]): Scope | null {
   if (a === "models" && n === 2) return "model";
   if (a === "models" && c === "stats" && d === undefined) return "stats";
   if (a === "models" && c === "pool" && d === undefined) return "pool";
+  if (a === "models" && c === "price" && d === undefined) return "price";
   if (a === "peers" && n === 2) return "peer";
   return null;
 }
