@@ -73,6 +73,8 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     hold: { type: "raw", desc: "`{ lanes, idleMs, seat? }`: while this backend's app has work (read off `activity`), keep these lanes off its hardware until it has been idle this long. `seat` is the id a model swapper loads the app under, so the hold starts as the seat loads." },
     routes: { type: "raw", desc: "Paths this backend answers besides chat, each with its lane and model." },
     key: { type: "secret", desc: "Sent to this backend as its bearer key on every call. env:NAME keeps it out of the file." },
+    format: { type: "enum", options: ["openai", "anthropic"], desc: "The API it speaks. anthropic is the Messages API: requests and answers are rewritten, so callers still see chat completions.", def: "openai" },
+    promptCache: { type: "bool", desc: "With format anthropic: mark each request's system prompt, tools and conversation so far for the provider's prompt cache.", def: true },
     cloud: { type: "bool", desc: "A provider's server on the internet: no hardware here, and only the models under serves. Requests sent to it leave this network.", def: false },
   },
   activity: {

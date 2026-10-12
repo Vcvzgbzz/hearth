@@ -116,6 +116,8 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.hold` | none | `{ lanes, idleMs, seat? }`: while this backend's app has work (read off `activity`), keep these lanes off its hardware until it has been idle this long. See [Keeping background work off the card](#keeping-background-work-off-the-card-while-the-app-is-in-use) |
 | `backends.<name>.resident` | `false` | stays loaded beside the card's swapping model and is asked to yield when it needs the memory. See [Something small that lives on a card](#something-small-that-lives-on-a-card) |
 | `backends.<name>.key` | none | sent to this backend as `Authorization: Bearer` on every call, in place of anything the client sent. `env:NAME` keeps it out of the file |
+| `backends.<name>.format` | `openai` | the API it speaks: `openai` (chat completions) or `anthropic` (Messages). See [Anthropic's API](#anthropics-api) |
+| `backends.<name>.promptCache` | `true` | with `format: anthropic`: mark each request's system prompt, tools and conversation so far for the provider's prompt cache |
 | `backends.<name>.cloud` | `false` | a provider's server on the internet: no hardware here, no warm state, and only the models under `serves`. See [A provider's models](#a-providers-models) |
 | `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. See [Backends that don't speak the OpenAI API](#backends-that-dont-speak-the-openai-api) |
 | `resources.<name>.kind` | `gpu` | `gpu`, `cpu` or `other`. Picks the icon; `gpu` and `other` are exclusive unless shared |
@@ -258,7 +260,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
 | `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
-| `/backends/probe` | local | `POST { url, key? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
+| `/backends/probe` | local | `POST { url, key?, format? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
 | `/keys/mint`, `/keys/revoke` | local | `POST { label, models?, expires?, limits? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label. Both take effect at once |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
 | `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
@@ -1065,12 +1067,45 @@ off a peer, by a header, a caller or a lane.
   backend, and keeps the extra event from a caller who did not ask for it. Per-key
   usage and `tokensPerDay` then count what the provider billed, not an estimate.
 
-The API has to be OpenAI-shaped. One with a format of its own is not reached
-this way. Where a provider offers an OpenAI-compatible layer beside a native
+The API has to be OpenAI-shaped, or Anthropic's (below). One with another
+format of its own is not reached this way. Where a provider offers an OpenAI-compatible layer beside a native
 API, the layer is what this talks to, and it usually leaves things out: prompt
 caching, strict tool schemas and reasoning text are common ones, and a field it
 does not know is often dropped without an error. Check the provider's notes on
 its compatibility layer before relying on one of those.
+
+#### Anthropic's API
+
+`format: anthropic` on a backend makes the node speak the Messages API to it.
+Callers still send and receive chat completions; the request and the answer
+are rewritten on the way through, streams included.
+
+```yaml
+backends:
+  provider:
+    url: https://api.anthropic.com
+    cloud: true
+    format: anthropic
+    key: env:PROVIDER_KEY
+    serves: [their-model-id]
+```
+
+- The key goes out as `x-api-key` with the API's version header.
+- **Prompt caching is on.** Each request's system prompt, its tools and the
+  conversation so far are marked as cached prefixes, so the next turn of the
+  same conversation pays for them as a cache read. A cache write costs more
+  than plain input, so for one-off requests with long prompts that are never
+  repeated, set `promptCache: false`.
+- `usage.prompt_tokens` counts all input, cached or not, and
+  `usage.prompt_tokens_details.cached_tokens` says how much was read from the
+  cache. Per-key usage counts the same totals.
+- What is carried across: system and developer messages, text and images,
+  tools, tool calls and their results, `tool_choice`, `max_tokens`
+  (4096 when the request names none: this API requires one), `temperature`,
+  `top_p`, `stop`, and streaming. Reasoning text comes back as
+  `reasoning_content`. Other request fields are not sent.
+- The [canary](#canary) probes with a chat completion and so cannot probe a
+  model on such a backend.
 
 ### Backends that share a card
 

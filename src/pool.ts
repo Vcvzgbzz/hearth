@@ -3,7 +3,7 @@
  * concurrency, warm state), so an embedder never waits behind a GPU generation. Nothing
  * schedules across backends; shared hardware only makes one wait for another.
  */
-import { ANY, type BackendConfig, type HearthConfig, type ModelRoute, type RouteRule } from "./config.js";
+import { ANY, backendAuth, type BackendConfig, type HearthConfig, type ModelRoute, type RouteRule } from "./config.js";
 import { BackendState } from "./backend.js";
 import { KINDS } from "./kinds.js";
 import type { Logger } from "./log.js";
@@ -86,7 +86,7 @@ export class BackendPool {
   ) {
     this.arbiter.onRelease(() => this.scheduleResume());
     for (const b of cfg.backends) {
-      const state = new BackendState(b.url, b.kind, log, this.mineOn(b), b.key ? { Authorization: `Bearer ${b.key}` } : {});
+      const state = new BackendState(b.url, b.kind, log, this.mineOn(b), backendAuth(b.format, b.key));
       const slot: BackendSlot = {
         name: b.name,
         cfg: b,
