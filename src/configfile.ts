@@ -22,7 +22,7 @@ import type { Logger } from "./log.js";
 const LIVE_KEYS = [
   "models", "share", "notes", "apiKeys", "apiKeyLabels", "apiKeyModels", "apiKeyRules", "peerTokens",
   "peerRateLimit", "peerLane", "peerMaxConcurrent", "maxBodyBytes", "peerFreshMs", "peerDownMs",
-  "peerStaleMs", "peerFirstByteMs", "backendFirstByteMs", "backendIdleMs", "coldPenalty", "shutdownGraceMs",
+  "peerStaleMs", "peerFirstByteMs", "backendFirstByteMs", "backendIdleMs", "backendRestMs", "coldPenalty", "shutdownGraceMs",
   "operator", "layout", "flows", "routers", "callers", "actions", "modelHeader",
 ] as const satisfies readonly (keyof HearthConfig)[];
 

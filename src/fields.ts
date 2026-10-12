@@ -57,6 +57,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     concurrency: { type: "number", min: 1, desc: "Jobs at once on a backend.", def: 1 },
     firstByteMs: ms("How long a backend may take to start answering. 0 waits forever.", 900000),
     idleMs: ms("How long a backend may go silent mid-answer. 0 waits forever.", 600000),
+    restMs: ms("After three failures in a row, how long a backend is passed over where a flow has another line that fits. 0 never passes one over.", 30000),
   },
   backend: {
     url: { type: "text", desc: "The OpenAI-compatible server hearth fronts. Or set server and port." },

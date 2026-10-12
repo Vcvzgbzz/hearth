@@ -885,6 +885,18 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         const spare = (): ReturnType<typeof resolve> => (routerOf(caller)?.strict
           ? { ...decision, target: "unavailable" as const, reason: "its router never falls back" }
           : resolve(asked, { ...world, noPeers: true, skip: new Set([...failed, model]) }));
+        // A backend that keeps failing is not made to fail once more for each request, while another line fits.
+        if (local.state.restingMs() > 0 && !res.headersSent) {
+          const next = spare();
+          if (next.target === "local" && !failed.has(next.model) && next.model !== model) {
+            log.debug("route.resting_trying_next", { asked, model, backend: local.name, next: next.model, restingMs: local.state.restingMs() });
+            failed.add(model);
+            land(next);
+            fire(next);
+            why = next.reason;
+            continue;
+          }
+        }
         // Refused here only on reported limits, before queueing or evicting; the backend stays the authority.
         const fitted = fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
         const tooMuch = unfit(pool.statsFor(model), fitted);
@@ -904,6 +916,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           );
         } catch (e) {
           logRequest(t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e);
+          // Its own fault, not the caller's or a full queue's: counted towards resting it.
+          if (!signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal))) local.state.struck(cfg.backendRestMs);
           const mayMove = !res.headersSent && !signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal));
           const next = mayMove ? spare() : null;
           if (!next || next.target !== "local" || failed.has(next.model) || next.model === model) throw e;
@@ -914,6 +928,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           why = next.reason;
           continue;
         }
+        // An answer of its own making that says it cannot serve (overloaded, rate limited) counts as a failure too.
+        if (localStatus >= 500 || localStatus === 429) local.state.struck(cfg.backendRestMs);
+        else local.state.answered();
         logRequest(
           t,
           { model, lane, caller, backend: local.name, target: "local", reason: why,

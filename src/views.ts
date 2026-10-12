@@ -204,6 +204,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
             kind: b.cfg.kind,
             // A provider's model list is the one thing asked of it between requests, so how that went is its state.
             ...(b.cfg.cloud ? { cloud: true, ...(b.state.catalogTrouble() !== null ? { trouble: troubleSays(b.state.catalogTrouble()!) } : {}) } : {}),
+            ...(b.state.restingMs() > 0 ? { restingMs: b.state.restingMs() } : {}),
             // Whether it CAN report warm state. An empty loaded list from a
             // backend that cannot see is not the same claim as one from a
             // backend that looked, and the page must not render it as such.

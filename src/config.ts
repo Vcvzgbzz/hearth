@@ -491,6 +491,8 @@ export interface HearthConfig {
    * Catches a generation that hangs mid-stream, which would otherwise hold its slot and card.
    */
   backendIdleMs: number;
+  /** How long a backend is passed over, where a flow has another line that fits, after three failures in a row. 0 never passes one over. */
+  backendRestMs: number;
   /**
    * How long shutdown waits for in-flight requests, in ms; 0 kills them at once. Keep the
    * service manager's stop timeout above it.
@@ -1686,6 +1688,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     peerFirstByteMs: atLeast(borrowing.firstByteMs, "borrowing.firstByteMs", 180_000),
     backendFirstByteMs: atLeast(defaults.firstByteMs, "backendDefaults.firstByteMs", 900_000),
     backendIdleMs: atLeast(defaults.idleMs, "backendDefaults.idleMs", 600_000),
+    backendRestMs: atLeast(defaults.restMs, "backendDefaults.restMs", 30_000),
     coldPenalty: atLeast(borrowing.coldPenalty, "borrowing.coldPenalty", 2),
     // 30s covers a sidecar call, an embedding and most chat turns. A box whose
     // routes are minutes-long renders wants more, and its TimeoutStopSec too.

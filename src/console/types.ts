@@ -53,6 +53,8 @@ export interface Backend {
     cpuOnly: boolean;
   }[];
   serves?: string[];
+  /** How much longer it is passed over after failing three times in a row; absent when it is not. */
+  restingMs?: number;
   /** Only llama-swap. An ollama backend keeps its set resident, so it cannot thrash. */
   evicts?: boolean;
   /** False when it cannot report warm state at all, which is not the same as cold. */

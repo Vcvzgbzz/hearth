@@ -25,6 +25,7 @@ const MOVED: Record<string, string[]> = {
   coldPenalty: ["borrowing", "coldPenalty"],
   backendFirstByteMs: ["backendDefaults", "firstByteMs"],
   backendIdleMs: ["backendDefaults", "idleMs"],
+  backendRestMs: ["backendDefaults", "restMs"],
 };
 
 /** The first v1-only thing in a parsed config, named for the error, or null for a v2 file. */

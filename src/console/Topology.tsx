@@ -392,6 +392,7 @@ const HEAD = 34;
 /** A machine's frame: its padding, its header, and the space between the hardware inside. */
 const FRAME = { pad: 14, head: 40, gap: 14 };
 function backendTone(b: Backend): Tone {
+  if (b.restingMs) return "warn";
   if (b.answering === false) return "bad";
   if ((b.loaded ?? []).length > 0) return "ok";
   if ((b.loading ?? []).length > 0) return "warn";
@@ -408,6 +409,7 @@ function backendTip(b: Backend, run: number): string {
 }
 
 function backendSub(b: Backend, run: number): string {
+  if (b.restingMs) return `resting ${Math.ceil(b.restingMs / 1000)}s after failing`;
   if (b.answering === false) return "not answering";
   if (run > 0 || (b.queued ?? 0) > 0) return `${run} running · ${b.queued ?? 0} queued`;
   if ((b.loading ?? []).length) return `loading ${b.loading![0]}`;
@@ -541,9 +543,9 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
       const run = runningIds.get(b.name) ?? [];
       nodes.push({
         id: `backend:${b.name}`, type: "card", parentId: "cloud", extent: "parent", position: { x: PAD, y: HEAD + n * (H + GAP) },
-        data: { title: b.name, icon: <Cloud size={14} />, tone: run.length > 0 ? "accent" : b.trouble ? "bad" : "ok", tip: b.trouble ? `Its model list could not be read: ${b.trouble}. Requests sent to it are likely to fail the same way.` : backendTip(b, run.length),
+        data: { title: b.name, icon: <Cloud size={14} />, tone: run.length > 0 ? "accent" : b.restingMs ? "warn" : b.trouble ? "bad" : "ok", tip: b.trouble ? `Its model list could not be read: ${b.trouble}. Requests sent to it are likely to fail the same way.` : backendTip(b, run.length),
           // Nothing is loaded or unloaded there: what is wrong with it, else what it offers, says more than "idle".
-          sub: run.length > 0 ? backendSub(b, run.length) : b.trouble ?? ((b.serves ?? []).length ? b.serves!.join(", ") : backendSub(b, 0)), meter: [run.length, b.slots ?? 0], busy: run.length > 0, selected: is("backend", b.name) } satisfies Card,
+          sub: run.length > 0 || b.restingMs ? backendSub(b, run.length) : b.trouble ?? ((b.serves ?? []).length ? b.serves!.join(", ") : backendSub(b, 0)), meter: [run.length, b.slots ?? 0], busy: run.length > 0, selected: is("backend", b.name) } satisfies Card,
       });
       edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run) } });
     });

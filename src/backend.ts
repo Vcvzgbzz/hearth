@@ -14,6 +14,8 @@ import { getJson, send, UpstreamError } from "./upstream.js";
 export const troubleSays = (status: number): string =>
   status === 401 || status === 403 ? "key refused" : status === 429 ? "rate limited" : status === 0 ? "not reachable" : `answered ${status}`;
 
+/** Failures in a row before a backend is rested. */
+const STRIKES = 3;
 const ACTIVITY_POLL_MS = 2_000;
 const ACTIVITY_TIMEOUT_MS = 2_000;
 
@@ -50,6 +52,9 @@ export class BackendState {
   private placementFor: string = "";
   private catalogIds: string[] = [];
   private catalogFault: number | null = null;
+  /** Requests that failed here in a row, and until when it is passed over for that. */
+  private strikes = 0;
+  private restUntil = 0;
   /** False for `kind: none`, where an empty warm set means "we cannot see",
    *  not "nothing is warm". Callers must not turn one into the other. */
   private warmIsKnown = true;
@@ -218,6 +223,22 @@ export class BackendState {
    *  whether we re-ask, not transport. */
   streamingNow(): boolean {
     return this.streaming;
+  }
+
+  /** A request failed here through the backend's own fault. The third in a row rests it for `restMs`, and so does each one after. */
+  struck(restMs: number): void {
+    if (++this.strikes >= STRIKES && restMs > 0) this.restUntil = Date.now() + restMs;
+  }
+
+  /** A request was answered here: whatever was counted against it is forgotten. */
+  answered(): void {
+    this.strikes = 0;
+    this.restUntil = 0;
+  }
+
+  /** How much longer it is passed over, in ms; 0 when it is not. Once that runs out the next request tries it. */
+  restingMs(): number {
+    return Math.max(0, this.restUntil - Date.now());
   }
 
   /** How the last read of the model list failed: the status it answered with, 0 for no answer at all, null when it worked or has not been tried. */

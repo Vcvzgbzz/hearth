@@ -125,6 +125,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `resources.<name>.shared` | `false` | many backends at once, never arbitrated: CPUs, mostly. See [Hardware that is not a card](#hardware-that-is-not-a-card) |
 | `backendDefaults.concurrency` | `1` | jobs at once per backend, unless it sets its own |
 | `backendDefaults.firstByteMs` | `900000` | how long a backend may take to start answering. Catches one that accepts the connection and then never answers, which would otherwise hold its slot — and its card — until a restart. `0` waits forever |
+| `backendDefaults.restMs` | `30000` | after three failures in a row (no answer, a 5xx, a 429, its key refused), how long a backend is passed over. Only a request whose flow has another line that fits is moved; one with nowhere else to go still tries it. The first request after the rest tries it again, and one more failure rests it again. `0` never passes one over. Chat only |
 | `backendDefaults.idleMs` | `600000` | how long a backend may go silent once its answer has started. Catches a generation that hangs mid-stream. `0` waits forever |
 | `scheduler.lanes` | `chat`, `batch` | named lanes and their base priority |
 | `scheduler.lanes.<lane>.priority` | `0` | base priority. Lower goes first |
