@@ -1633,6 +1633,16 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
   }
 
+  // A provider answers for its own models, and every probe of one would be billed.
+  const canary = canaryDecl(root.canary, backends);
+  for (const name of Object.keys(canary?.backends ?? {})) {
+    if (backends.find((b) => b.name === name)?.cloud) throw bad(`canary.backends.${name}`, "is a cloud backend: the canary does not probe a provider's models");
+  }
+  for (const id of Object.keys(canary?.models ?? {})) {
+    const on = backends.find((b) => b.name === models[id]?.backend) ?? backends.find((b) => b.serves.includes(id));
+    if (on?.cloud) throw bad(`canary.models.${id}`, `runs on the cloud backend "${on.name}": the canary does not probe a provider's models`);
+  }
+
   // A provider's model is not ours to lend: a peer's requests would be paid for with this node's key.
   const lent = strList(lending.models, "lending.models");
   for (const id of lent) {
@@ -1721,7 +1731,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     maxBodyBytes: count(root.maxBodyBytes, "maxBodyBytes", 32 * 1024 * 1024, 1024),
     peers,
     models,
-    canary: canaryDecl(root.canary, backends),
+    canary,
     peerFreshMs: count(borrowing.freshMs, "borrowing.freshMs", 4_000, 100),
     peerDownMs: count(borrowing.downMs, "borrowing.downMs", 30_000, 1000),
     // Slower than it used to be, since on-demand probing does the real work.

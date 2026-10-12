@@ -29,6 +29,9 @@ flows:
 - `cloud` says it is not yours: it takes no `resources` and no `server`, its
   `kind` is `none`, and `serves` is required, so the node offers the models you
   name and not the provider's whole list.
+- The [canary](canary.md) does not probe its models, and naming one under
+  `canary:` is refused: the provider answers for them, and every probe would be
+  billed.
 - Its models cannot be lent to a peer: a peer's requests would be paid for
   with your key.
 - It is queued like any backend. `concurrency` is how many requests you let it
@@ -91,5 +94,3 @@ backends:
   (4096 when the request names none: this API requires one), `temperature`,
   `top_p`, `stop`, and streaming. Reasoning text comes back as
   `reasoning_content`. Other request fields are not sent.
-- The [canary](canary.md#canary) probes with a chat completion and so cannot probe a
-  model on such a backend.
