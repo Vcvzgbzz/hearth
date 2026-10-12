@@ -242,7 +242,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     let cost = 0;
     for (const [model, row] of Object.entries(usage.byModel(caller, days))) {
       const p = cfg.models[model]?.price;
-      if (p) cost += (row.in * p.in + row.out * p.out) / 1_000_000;
+      const cached = Math.min(row.cached ?? 0, row.in);
+      if (p) cost += ((row.in - cached) * p.in + cached * (p.cached ?? p.in) + row.out * p.out) / 1_000_000;
     }
     return { ...usage.total(caller, days), cost };
   }
@@ -461,7 +462,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     log.info("request", {
       ...(asking.getStore() ? { id: asking.getStore()!.id } : {}),
       ...fields,
-      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.est ? { tokensEstimated: true } : {}) } : {}),
+      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.cached ? { tokensCached: used.cached } : {}), ...(used.est ? { tokensEstimated: true } : {}) } : {}),
       ...(headers ? { headers } : {}),
       waitedMs: started - t.enqueuedAt,
       runMs: Date.now() - started,

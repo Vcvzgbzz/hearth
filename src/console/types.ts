@@ -267,7 +267,7 @@ export interface Canary {
 }
 
 /** Requests and tokens over some days. */
-export interface Used { requests: number; failed: number; in: number; out: number; /** Dollars, at the prices the models carry now. */ cost?: number }
+export interface Used { requests: number; failed: number; in: number; out: number; /** How much of `in` was read from a prompt cache. */ cached?: number; /** Dollars, at the prices the models carry now. */ cost?: number }
 
 export interface UiData {
   /** The operator logged in on this request, or null for loopback and key callers. */

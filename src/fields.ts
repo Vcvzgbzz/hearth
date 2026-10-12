@@ -147,6 +147,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
   price: {
     in: { type: "number", min: 0, desc: "Dollars per million tokens sent to it." },
     out: { type: "number", min: 0, desc: "Dollars per million tokens it answers with." },
+    cached: { type: "number", min: 0, desc: "Dollars per million input tokens read from the provider's prompt cache. Unset prices them as any input." },
   },
   pool: {
     tokens: { type: "number", min: 1, desc: "Tokens shared by this model's running turns." },
