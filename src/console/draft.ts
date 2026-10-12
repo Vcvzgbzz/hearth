@@ -723,3 +723,31 @@ export function opsOf(from: Doc, to: Doc): Op[] {
   }
   return ops;
 }
+
+/**
+ * Neighbouring lines whose conditions share one, read as a single "if" with the lines under it.
+ * `foot` is a group a request can leave without a line taking it. The file keeps the condition on each line.
+ */
+export type Group = { key: string; from: number; to: number; foot: boolean };
+export function groupsOf(steps: { when?: unknown }[]): Group[] {
+  const out: Group[] = [];
+  const last = steps.length - 1;
+  for (let i = 0; i < last;) {
+    const when = obj(steps[i]!.when);
+    let best: Group | null = null;
+    for (const key of Object.keys(when)) {
+      const v = JSON.stringify(when[key]);
+      let j = i;
+      while (j + 1 < last && JSON.stringify(obj(steps[j + 1]!.when)[key]) === v) j++;
+      if (j > i && (best === null || j > best.to)) best = { key, from: i, to: j, foot: Object.keys(obj(steps[j]!.when)).length > 1 };
+    }
+    if (best) out.push(best);
+    i = best ? best.to + 1 : i + 1;
+  }
+  return out;
+}
+/** The heights of a group's heading and foot, which the map's layout counts as the box draws them. */
+export const GROUP = { head: 26, foot: 20 };
+/** What the headings and feet above line `i` add to a rule box's height; with no `i`, all of them. */
+export const groupRows = (steps: { when?: unknown }[], i = steps.length): number =>
+  groupsOf(steps).reduce((px, g) => px + (g.from <= i ? GROUP.head : 0) + (g.foot && g.to < i ? GROUP.foot : 0), 0);

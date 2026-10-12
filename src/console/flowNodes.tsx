@@ -6,9 +6,9 @@
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronDown, CircuitBoard, Cpu, MoreHorizontal, Plus, Split, Trash2, X, Zap } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useRef, useState } from "react";
 
-import { ACTIONS, ANY, editStep, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
+import { ACTIONS, ANY, editStep, GROUP, groupsOf, list, movedName, moveStep, NODES, obj, put, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
 import { addName, change, choose, dropName, editSelect, hover, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { cx } from "./ui.js";
 
@@ -250,6 +250,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
   const own = (to: ReturnType<typeof toOf>) => to.kind === "asked" || (to.kind === "model" && (data.inputs ?? []).includes(to.model));
   // One line is open to edit at a time; the rest read as a sentence, so a long rule stays short.
   const [open, setOpen] = useState<number | null>(null);
+  const groups = groupsOf(data.steps);
   return (
     <div className={cx(
       "w-[640px] rounded-xl border bg-panel shadow-sm transition-colors",
@@ -268,25 +269,38 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
       {data.steps.map((s, i) => {
         const to = toOf(s.to);
         const when = obj(s.when);
+        const group = groups.find((g) => g.from <= i && i <= g.to);
+        // Under a heading a line says only what is its own; opened, it shows all it tests.
+        const { [group?.key ?? ""]: _shared, ...mine } = when;
+        const word = i === last ? "Otherwise" : group ? (Object.keys(mine).length === 0 && i === group.to ? "Else" : i === group.from ? "If" : "Else if") : i === 0 ? "If" : "Else if";
         return (
-          <div key={i} className={cx("relative flex min-h-[32px] items-center gap-1.5 px-3 py-1 text-[11px]", i > 0 && "border-t border-line/50", data.lit === i && "bg-accent/15")}
+          <Fragment key={i}>
+          {group?.from === i && (
+            <div className={cx("flex items-center gap-1.5 px-3 text-[11px]", i > 0 && "border-t border-line/50")} style={{ height: GROUP.head }} title="the lines under this all test it; the file keeps it on each of them">
+              <span className="w-4 shrink-0" />
+              <span className="w-14 shrink-0 font-medium">{i === 0 ? "If" : "Else if"}</span>
+              <span className="min-w-0 flex-1 truncate font-medium">{sentence({ [group.key]: when[group.key] })}</span>
+            </div>
+          )}
+          <div className={cx("relative flex min-h-[32px] items-center gap-1.5 px-3 py-1 text-[11px]", i > 0 && group?.from !== i && "border-t border-line/50", data.lit === i && "bg-accent/15")}
                onMouseEnter={() => hover(`e:${id}:${i}`)} onMouseLeave={() => hover(null)}>
+            {group && <span className="absolute inset-y-0 left-[42px] w-px bg-dim/45" />}
             {/* Work sent to a peer leaves on the peers' side. */}
             <Handle type="source" id={`step-${i}-back`} position={Position.Left} className="!opacity-0" style={{ left: -6 }} />
             {/* Every line is the same three columns, so the where-it-goes and the counts read in line:
                 the word, the conditions, and the fixed-width place the line ends at. */}
             <span className="w-4 shrink-0 text-right text-[10px] tabular text-dim/70" title={`step ${i + 1}`}>{i + 1}</span>
             {/* The word closes a line that is open. */}
-            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate", open === i && "cursor-pointer")} onClick={() => { if (open === i) setOpen(null); }}>{i === last ? "Otherwise" : i === 0 ? "If" : "Else if"}</span>
+            <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate", group && "ml-4", open === i && "cursor-pointer")} onClick={() => { if (open === i) setOpen(null); }}>{word}</span>
             {i === last ? (
               <span className="min-w-0 flex-1" />
             ) : data.editable && (open === i || (Object.keys(when).length === 0 && to.kind !== "peer")) ? (
               // A peer can be down, so a line that sends to one may stand with no condition of its own.
               <Conds when={when} models={data.models} optional={to.kind === "peer"} onChange={(w) => edit(i, (r) => ({ ...r, when: w }))} />
             ) : data.editable ? (
-              <button type="button" className="nodrag nopan min-w-0 flex-1 rounded-md px-1 py-1 text-left leading-snug hover:bg-muted" title="click to change this line's conditions" onClick={() => setOpen(i)}>{sentence(when) || "it can take it"}</button>
+              <button type="button" className="nodrag nopan min-w-0 flex-1 rounded-md px-1 py-1 text-left leading-snug hover:bg-muted" title="click to change this line's conditions" onClick={() => setOpen(i)}>{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</button>
             ) : (
-              <span className="min-w-0 flex-1 truncate">{sentence(when) || "it can take it"}</span>
+              <span className="min-w-0 flex-1 truncate">{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</span>
             )}
             <span className="flex w-[200px] min-w-0 shrink-0 items-center gap-1.5">
               <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", hue(to.kind === "asked" ? "model" : to.kind).dot)} title={hue(to.kind === "asked" ? "model" : to.kind).says} />
@@ -329,6 +343,13 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
             )}
             <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : hue(to.kind).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
           </div>
+          {group?.to === i && group.foot && (
+            <div className="relative flex items-center px-3 text-[10px] italic text-dim" style={{ height: GROUP.foot }}>
+              <span className="absolute left-[42px] top-0 h-1/2 w-px bg-dim/45" />
+              <span className="ml-[46px]">none of these: on to step {i + 2}</span>
+            </div>
+          )}
+          </Fragment>
         );
       })}
       {data.editable && (

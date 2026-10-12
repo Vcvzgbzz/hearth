@@ -6,7 +6,7 @@
 import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, beside as besideLines, directTo, draftView, factsOf, list, nodeOf, ordered, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, list, nodeOf, ordered, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried } from "./editStore.js";
 import { contextMenu } from "./editor.js";
 import { HUE, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type RefuseBox, type SwitchBox } from "./flowNodes.js";
@@ -168,15 +168,15 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       const tops = f.steps.map((s, i) => {
         const h = sideOf(toOf(s.to));
         if (h === 0) return 0;
-        const top = Math.max(at, RULE.head + i * RULE.row - 16);
+        const top = Math.max(at, RULE.head + i * RULE.row + groupRows(f.steps, i) - 16);
         at = top + h;
         return top;
       });
       // Actions sit below the rule's last line, clear of the lines that leave it for where requests go.
-      const actions = Math.max(at, RULE.head + f.steps.length * RULE.row + 12);
+      const actions = Math.max(at, RULE.head + f.steps.length * RULE.row + groupRows(f.steps) + 12);
       return { tops, actions, bottom: homed(name).length ? actions + homed(name).length * SIDE.action : at };
     };
-    const tall = (entry: (typeof here)[number]) => Math.max(RULE.head + entry[1].steps.length * RULE.row + (edit ? RULE.row : 0), sides(entry).bottom);
+    const tall = (entry: (typeof here)[number]) => Math.max(RULE.head + entry[1].steps.length * RULE.row + groupRows(entry[1].steps) + (edit ? RULE.row : 0), sides(entry).bottom);
     let fy = 0;
     for (const entry of here) {
       const [name, f] = entry;
