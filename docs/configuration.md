@@ -141,7 +141,13 @@ key gets `POST /v1/chat/completions` for exactly the ids it names and a
 apiKeys:
   - { key: env:HEARTH_APP_KEY, label: app }              # full
   - { key: env:VOICE_KEY, label: voice, models: [voice] }      # chat on one id, nothing else
+  - { key: env:GUEST_KEY, label: guest, models: [chat] }       # a name a flow takes, in any of its variants
 ```
+
+A scope names models, or names a [flow](routing.md#flows) takes. Held to a
+name a flow takes, a key may ask for it and for its variants (`chat`,
+`chat:fast`), and goes wherever the flow sends it: the models behind the flow
+need not be in its scope, and cannot be asked for by their own names.
 
 A key can **expire** and be **limited**. `expires` is a day, and the key works
 through the end of it (UTC); after that it is refused like any unknown key.

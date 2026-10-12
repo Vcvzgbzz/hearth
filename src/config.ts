@@ -958,6 +958,17 @@ export interface KeyRule {
 }
 const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0, dollarsPerDay: 0 };
 
+/** Every name a flow takes, in `flows:` and in each router's: what a client may ask for besides a model. Read off the file as written. */
+function typeNames(root: Record<string, unknown>): string[] {
+  const inputsOf = (flows: unknown): string[] =>
+    Object.values(typeof flows === "object" && flows !== null ? flows : {}).flatMap((f) => {
+      const inputs = (f as { inputs?: unknown } | null)?.inputs;
+      return Array.isArray(inputs) ? inputs.filter((n): n is string => typeof n === "string" && n !== ANY) : [];
+    });
+  const routers = typeof root.routers === "object" && root.routers !== null ? Object.values(root.routers) : [];
+  return [...inputsOf(root.flows), ...routers.flatMap((r) => inputsOf((r as { flows?: unknown } | null)?.flows))];
+}
+
 /** `apiKeys:` entries: a bare secret, or `{ key, label }`. Labels are shown wherever caller ids are. */
 function apiKeyList(
   v: unknown, where: string, routeIds: Set<string>,
@@ -1019,7 +1030,7 @@ function apiKeyList(
       if (scope.length === 0) throw bad(`${at}.models`, "must name at least one model");
       for (const id of scope) {
         if (!routeIds.has(id)) {
-          throw bad(`${at}.models`, `names "${id}", which is not a route in models:`);
+          throw bad(`${at}.models`, `names "${id}", which is not a route in models: or a name a flow takes`);
         }
       }
     }
@@ -1623,7 +1634,7 @@ export function parseConfig(raw: unknown): HearthConfig {
   }
 
   const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels, rules: apiKeyRules } =
-    apiKeyList(root.apiKeys, "apiKeys", new Set(Object.keys(models)));
+    apiKeyList(root.apiKeys, "apiKeys", new Set([...Object.keys(models), ...typeNames(root)]));
 
   const mainListen = {
     // Loopback by default. Anyone who wants it on the network says so, and

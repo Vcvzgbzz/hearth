@@ -10,7 +10,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
-import { admitModel, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
+import { admitModel, inScope, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
 import { ANY, backendAuth, backendBase, ConfigError, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
 import { Controls } from "./controls.js";
@@ -212,11 +212,16 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   const peerOverLimit = (name: string) => overBudget(peerHits, name, cfg.peerRateLimit);
   const controlOverLimit = (name: string) => overBudget(controlHits, name, CONTROL_LIMIT_PER_HOUR);
 
+  /** Is this a name some flow takes, here or in a router's rulebook? */
+  const isType = (name: string): boolean =>
+    [cfg.flows, ...Object.values(cfg.routers).map((r) => r.flows)].some((flows) => Object.values(flows).some((f) => f.inputs.includes(name)));
+
   /** The gates every model request passes before it is queued; throws the Refusal. */
   function admit(c: Call, model: string): void {
     const refused = admitModel({ model, peer: c.peer, scope: c.models }, {
       name: cfg.name,
       shared,
+      type: isType,
       // A peer may map an id nothing here serves.
       unknown: (m) => pool.certainlyUnknown(m) && peersMapping(m, [], cfg.peers).length === 0
         ? pool.catalog().join(", ") || "nothing"
@@ -1972,7 +1977,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       }
       // Same for a scoped key: its picker shows what it may pick.
       if (c.models !== null) {
-        upstream.data = (upstream.data ?? []).filter((m) => c.models!.includes(m.id));
+        upstream.data = (upstream.data ?? []).filter((m) => inScope(c.models!, m.id, isType));
       }
       // /v1/models/<id>: one entry from the same list, so a peer model answers
       // here too instead of falling through to the passthrough and asking a

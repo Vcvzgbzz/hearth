@@ -178,7 +178,8 @@ apiKeys:
   - { key: demo-app, label: app }
   - { key: demo-laptop, label: laptop, limits: { tokensPerDay: 2000000, dollarsPerDay: 5 } }
   - { key: demo-agent, label: agent, limits: { requestsPerMinute: 240 } }
-  - { key: demo-guest, label: guest, expires: 2030-12-31, limits: { requestsPerMinute: 30, tokensPerDay: 200000 } }
+  # Held to one type: it may ask for chat in any variant, and for nothing else.
+  - { key: demo-guest, label: guest, models: [chat], expires: 2030-12-31, limits: { requestsPerMinute: 30, tokensPerDay: 200000 } }
   # Held to one model: it can ask for nothing else, on any route.
   - { key: demo-sensor, label: sensor, models: [classify] }
 
