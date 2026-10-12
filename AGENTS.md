@@ -44,11 +44,15 @@ comment is read by strangers. Write for them.
   the console editor both read, or the parser rejects it. If it applies without
   a restart, add it to `LIVE_KEYS` in `src/configfile.ts`.
 - Update every doc your change makes wrong, in the same PR. Search for the
-  names you touched (`grep -rn <name> README.md src/`) rather than trusting
+  names you touched (`grep -rn <name> README.md docs/ src/`) rather than trusting
   memory. The places that describe behaviour:
-  - `README.md`: the config table (one row per setting in `src/fields.ts`),
-    the endpoint table (one row per route in `src/server.ts`), and any section
-    or example that shows what you changed
+  - `docs/configuration.md`: the config table, one row per setting in
+    `src/fields.ts`
+  - `docs/endpoints.md`: the endpoint table, one row per route in
+    `src/server.ts`
+  - the other pages under `docs/`, and `README.md`, which is the pitch, the
+    quick start and the index to them: any section or example that shows what
+    you changed
   - `src/fields.ts`: each setting's one-line `desc`, which the console shows
   - `src/cli.ts`: the `hearth init` starter config and the command usage lines
   - `AGENTS.md`: the file map and these rules, if you move or add files
@@ -91,7 +95,7 @@ comment is read by strangers. Write for them.
 
 ## Keep it generic
 
-Nothing from anyone's own setup goes in `src/`, `test/` or `README.md`:
+Nothing from anyone's own setup goes in `src/`, `test/`, `docs/` or `README.md`:
 
 - no hostnames, IPs, ports of a real box, people's names or handles
 - no hardware model names (use `gpu0`, `gpu1`, `cpu`)

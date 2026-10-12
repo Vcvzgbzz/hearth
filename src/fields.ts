@@ -50,7 +50,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     canary: { type: "raw", desc: "Ask named models a question with one right answer, on a schedule; a seat that answers 200 with nothing is taken out of rotation. Off unless set; restart-only." },
   },
   listen: {
-    host: { type: "text", desc: "Widening the host is deliberate: see Security in the README.", def: "127.0.0.1" },
+    host: { type: "text", desc: "Widening the host is deliberate: see docs/security.md.", def: "127.0.0.1" },
     port: { type: "number", min: 1, desc: "Port for the API, peers and the console.", def: 4141 },
   },
   backendDefaults: {
