@@ -47,8 +47,10 @@ async function probeBackend(): Promise<string | null> {
 function starterConfig(backendUrl: string, found: boolean): string {
   return `# hearth: a queue in front of your inference server.
 #
-# Everything runs locally until you add a peer AND point a model at it. Nothing
-# leaves this machine by default.
+# Everything runs locally until you add a peer or a cloud backend AND a flow
+# sends something to it. Nothing leaves this machine by default.
+#
+# Every setting: https://github.com/Vcvzgbzz/hearth/blob/main/docs/configuration.md
 name: ${JSON.stringify(hostnameGuess())}
 
 listen:
@@ -64,6 +66,13 @@ backends:
     # llama-swap reports what is loaded, which lets the scheduler prefer it.
     # Use none for a server that cannot say.
     kind: llama-swap
+  # A provider's API can be a backend too. A request sent to it leaves this
+  # machine and this network, so nothing goes there unless a flow says so.
+  # provider:
+  #   url: https://api.example.com/v1
+  #   cloud: true
+  #   key: env:PROVIDER_KEY
+  #   serves: [their-model]
 
 backendDefaults:
   # One GPU fits one model at a time. Only raise this if your backend really
@@ -92,6 +101,9 @@ scheduler:
 # reasonable while this is bound to loopback. Setting it means loopback needs a
 # key too, including any local tool you point at this.
 apiKeys: []
+#   - { key: env:APP_KEY, label: app }
+#   # A key can have a last day and limits, and \`models: [name]\` holds it to the names listed.
+#   - { key: env:GUEST_KEY, label: guest, expires: 2030-12-31, limits: { requestsPerMinute: 20, tokensPerDay: 200000 } }
 
 # --- lending and borrowing (both optional) ---------------------------------
 #
@@ -117,6 +129,8 @@ peers: {}
 models: {}
 #   my-big-model:
 #     note: the 70B, for long documents
+#   their-model:
+#     price: { in: 3, out: 15 }   # dollars per million tokens: usage is then shown as spend
 #
 # flows: what can be asked for, and where each request goes. Only a name a flow
 # takes is offered; the flow with "*" says what becomes of every other name.
