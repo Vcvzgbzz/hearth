@@ -6,7 +6,7 @@
  */
 import { Document, isMap, isScalar, isSeq, YAMLMap, type Node } from "yaml";
 
-import { ANY, MOVED_TO_FLOWS, rawFlow, type Flow } from "./config.js";
+import { ANY, CONFIG_VERSION, MOVED_TO_FLOWS, rawFlow, type Flow } from "./config.js";
 import { routedFlow } from "./route.js";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -184,6 +184,18 @@ export function migrateDoc(doc: Document): string[] {
       return i === -1 ? ORDER.length : i;
     };
     top.items.sort((a, b) => rank(a.key) - rank(b.key));
+  }
+  // The file says which layout it is now in, first, so the next rewrite does not have to work it out.
+  if (done.length > 0 && isMap(top)) {
+    top.delete("version");
+    const stamp = doc.createPair("version", CONFIG_VERSION);
+    // What the file opens with stays what it opens with.
+    const first = top.items[0]?.key;
+    if (isScalar(first) && isScalar(stamp.key)) {
+      stamp.key.commentBefore = first.commentBefore;
+      first.commentBefore = undefined;
+    }
+    top.items.unshift(stamp);
   }
   return done;
 }

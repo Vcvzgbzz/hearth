@@ -12,6 +12,13 @@ node.server.listen(cfg.listen.port, cfg.listen.host);
 // later: await node.close();
 ```
 
+The package exports `loadConfig`, `parseConfig`, `ConfigError`, `createNode`,
+`createLogger` and `silentLogger`, with the types `HearthConfig`, `HearthNode`,
+`Logger` and `Level`. Those are kept working across a major version. What a
+node carries besides (`node.pool`, `node.peers`, `node.history`) and anything
+imported from a file inside the package is its own machinery and can change in
+any release.
+
 `start()` isn't optional. Skip it and the node still answers requests, but it
 never learns what's loaded and never marks a peer up, so it routes everything
 locally. Which looks exactly like working.

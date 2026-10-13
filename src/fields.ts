@@ -32,6 +32,7 @@ export const SECTION_KEYS = ["backends", "resources", "servers", "models", "flow
 
 export const FIELDS: Record<Scope, Record<string, Field>> = {
   node: {
+    version: { type: "number", min: 1, desc: "The layout this file is written in. `hearth init` and `hearth migrate` write it; a file newer than the node reading it is refused.", def: 3 },
     name: { type: "text", desc: "How this node identifies itself to peers.", def: "hostname" },
     listen: { type: "object", scope: "listen", desc: "Address and port hearth serves on.", seed: { host: "127.0.0.1", port: 4141 } },
     lending: { type: "object", scope: "lending", desc: "What peers may run here, and how much of it.", seed: { models: [] } },
@@ -147,6 +148,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
   price: {
     in: { type: "number", min: 0, desc: "Dollars per million tokens sent to it." },
     out: { type: "number", min: 0, desc: "Dollars per million tokens it answers with." },
+    cached: { type: "number", min: 0, desc: "Dollars per million input tokens read from the provider's prompt cache. Unset prices them as any input." },
   },
   pool: {
     tokens: { type: "number", min: 1, desc: "Tokens shared by this model's running turns." },
@@ -194,6 +196,7 @@ export function scopeOf(path: (string | number)[]): Scope | null {
   if (a === "models" && n === 2) return "model";
   if (a === "models" && c === "stats" && d === undefined) return "stats";
   if (a === "models" && c === "pool" && d === undefined) return "pool";
+  if (a === "models" && c === "price" && d === undefined) return "price";
   if (a === "peers" && n === 2) return "peer";
   return null;
 }

@@ -193,6 +193,8 @@ const base = await new Promise<string>((ready) =>
   const later = (await (await fetch(`${base}/ui/data`)).json()) as typeof d;
   assert.deepEqual(later.hist.at(-1)!.residents, ["m1"],
     "once the backend has been read, the lane chart has something to draw");
+  // The page compares this with the one it was loaded under, and reloads when a restart changed it.
+  assert.match((later as unknown as { build: string }).build, /^[0-9a-f]{12}$/);
 }
 
 // --- the hardware the page draws ------------------------------------------

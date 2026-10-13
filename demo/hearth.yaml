@@ -100,8 +100,8 @@ models:
     params: { temperature: 0 }
   hosted-large:   { price: { in: 2.5, out: 10 } }
   hosted-fast:    { price: { in: 0.15, out: 0.6 } }
-  messages-large: { price: { in: 3, out: 15 } }
-  messages-fast:  { price: { in: 0.8, out: 4 } }
+  messages-large: { price: { in: 3, out: 15, cached: 0.3 } }
+  messages-fast:  { price: { in: 0.8, out: 4, cached: 0.08 } }
 
 # What can be asked for, and where each request goes. Lines are tried top to bottom.
 flows:

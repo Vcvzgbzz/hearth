@@ -72,6 +72,10 @@ const friend = (models: Record<string, string> = {}) => ({ url: "http://10.0.0.2
 // --- a v1 file is named as one, with the way out --------------------------
 {
   assert.throws(() => parseConfig({ backend: { url: "http://x:1" } }), /v1 layout \(it has backend\).*hearth migrate/);
+  // A file may say its layout: the current one loads, a later one is refused by name, an earlier one is sent to migrate.
+  assert.doesNotThrow(() => parseConfig({ ...minimal, version: 3 }));
+  assert.throws(() => parseConfig({ ...minimal, version: 4 }), /version is 4, a layout newer than this hearth reads \(3\)/);
+  assert.throws(() => parseConfig({ ...minimal, version: 2 }), /version is 2, an older layout.*hearth migrate/);
   assert.throws(() => parseConfig({ ...minimal, share: [] }), /v1 layout \(it has share\)/);
   assert.throws(() => parseConfig({ backends: [{ name: "a", url: "http://x:1" }] }), /v1 layout \(it has backends as a list\)/);
 }

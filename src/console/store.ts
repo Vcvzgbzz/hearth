@@ -89,6 +89,13 @@ document.addEventListener("visibilitychange", () => {
   else if (es === null) connect();
 });
 
+/** A node restarted into another build serves another page: take it, rather than draw new data with old code. */
+function take(next: UiData): void {
+  const was = useStore.getState().data?.build;
+  if (was !== undefined && next.build !== undefined && was !== next.build) { location.reload(); return; }
+  useStore.setState({ data: next, dead: false });
+}
+
 export function connect(): void {
   disconnect();
   wanted = true;
@@ -103,7 +110,8 @@ export function connect(): void {
         return;
       }
       if (!r.ok) throw new Error(String(r.status));
-      useStore.setState({ data: (await r.json()) as UiData, dead: false, loginRequired: false });
+      take((await r.json()) as UiData);
+      useStore.setState({ loginRequired: false });
     } catch {
       useStore.setState({ dead: true });
     }
@@ -117,7 +125,8 @@ export function connect(): void {
     gotSnapshot = true;
     if (poll !== null) clearInterval(poll);
     poll = null;
-    useStore.setState({ data: JSON.parse((e as MessageEvent).data) as UiData, live: true, dead: false });
+    take(JSON.parse((e as MessageEvent).data) as UiData);
+    useStore.setState({ live: true });
   });
   es.addEventListener("patch", (e) => {
     const cur = useStore.getState().data;
