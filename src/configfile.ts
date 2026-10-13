@@ -21,7 +21,7 @@ import type { Logger } from "./log.js";
 /** Keys the running node reads per call, so a new value takes effect on the next request. */
 const LIVE_KEYS = [
   "models", "share", "notes", "apiKeys", "apiKeyLabels", "apiKeyModels", "apiKeyRules", "peerTokens",
-  "peerRateLimit", "peerLane", "peerMaxConcurrent", "maxBodyBytes", "peerFreshMs", "peerDownMs",
+  "peerRateLimit", "peerLane", "peerMaxConcurrent", "lendTokensPerDay", "peerTerms", "maxBodyBytes", "peerFreshMs", "peerDownMs",
   "peerStaleMs", "peerFirstByteMs", "backendFirstByteMs", "backendIdleMs", "backendRestMs", "coldPenalty", "shutdownGraceMs",
   "operator", "layout", "flows", "routers", "callers", "actions", "modelHeader",
 ] as const satisfies readonly (keyof HearthConfig)[];

@@ -22,13 +22,21 @@ export type Field =
 
 export type Scope =
   | "node" | "listen" | "backendDefaults" | "backend" | "activity" | "resource" | "server" | "flow" | "action" | "scheduler" | "lane"
-  | "model" | "stats" | "pool" | "price" | "peer" | "lending" | "borrowing" | "operator";
+  | "model" | "stats" | "pool" | "price" | "peer" | "lend" | "lending" | "borrowing" | "operator";
 
 const ms = (desc: string, def?: number | string, min?: number): Field =>
   ({ type: "ms", desc, ...(def !== undefined ? { def } : {}), ...(min !== undefined ? { min } : {}) });
 
 /** The top-level keys that are sections of their own rather than node settings. */
 export const SECTION_KEYS = ["backends", "resources", "servers", "models", "flows", "actions", "scheduler", "peers"] as const;
+
+/** The lending limits a peer's own `lend:` may restate; `lending:` sets them for everyone else. */
+const TERMS: Record<string, Field> = {
+  models: { type: "refs", ref: "models", desc: "Models peers may run here. Empty lends nothing." },
+  tokensPerDay: { type: "number", min: 0, desc: "Tokens one peer may run here in a UTC day. 0 is no limit.", def: 0 },
+  maxConcurrent: { type: "number", min: 1, desc: "Jobs one peer may have in flight.", def: 2 },
+  rateLimit: { type: "number", min: 1, desc: "Peer inference requests per hour. Capacity polling has its own budget.", def: 600 },
+};
 
 export const FIELDS: Record<Scope, Record<string, Field>> = {
   node: {
@@ -159,12 +167,15 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     token: { type: "secret", desc: "What you present when borrowing from it. env:NAME keeps it out of the file." },
     accept: { type: "secret", desc: "What it presents when borrowing from you. Without one it cannot borrow." },
     models: { type: "object", desc: "your id: their id, for each model you borrow.", seed: {} },
+    lend: { type: "object", scope: "lend", desc: "This peer's own lending terms. Each one set here replaces the `lending` setting of the same name, for this peer.", seed: {} },
+  },
+  lend: {
+    ...TERMS,
+    off: { type: "bool", desc: "Lend this peer nothing, and keep the rest of its limits for when it is turned back on.", def: false },
   },
   lending: {
-    models: { type: "refs", ref: "models", desc: "Models peers may run here. Empty lends nothing." },
+    ...TERMS,
     lane: { type: "ref", ref: "lanes", desc: "Which lane borrowed work enters.", def: "lowest-priority lane" },
-    maxConcurrent: { type: "number", min: 1, desc: "Jobs one peer may have in flight.", def: 2 },
-    rateLimit: { type: "number", min: 1, desc: "Peer inference requests per hour. Capacity polling has its own budget.", def: 600 },
   },
   borrowing: {
     firstByteMs: ms("How long to wait for a peer to start answering before falling back. 0 waits forever.", 180000),
@@ -198,6 +209,7 @@ export function scopeOf(path: (string | number)[]): Scope | null {
   if (a === "models" && c === "pool" && d === undefined) return "pool";
   if (a === "models" && c === "price" && d === undefined) return "price";
   if (a === "peers" && n === 2) return "peer";
+  if (a === "peers" && c === "lend" && n === 3) return "lend";
   return null;
 }
 

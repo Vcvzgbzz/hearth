@@ -86,10 +86,12 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `peers.<name>.token` | — | what you present when borrowing from them |
 | `peers.<name>.accept` | — | what they present when borrowing from you. Without it they cannot |
 | `peers.<name>.models` | `{}` | `your id: their id` for each model you borrow. Also the allowlist |
+| `peers.<name>.lend` | unset | this peer's own lending limits: any of `models`, `tokensPerDay`, `maxConcurrent`, `rateLimit`. Each one set replaces the `lending.*` setting of the same name for this peer. `off: true` lends it nothing and keeps the rest. Needs `accept`. See [Limits per peer](sharing.md#limits-per-peer) |
 | `lending.models` | `[]` | models peers may run here. Empty lends nothing. A model on a `cloud` backend is refused: a peer would be spending that provider's key |
 | `lending.lane` | lowest-priority lane | which lane borrowed work enters |
 | `lending.maxConcurrent` | `2` | jobs one peer may have in flight |
 | `lending.rateLimit` | `600` | peer inference requests per hour. Capacity polling has its own budget |
+| `lending.tokensPerDay` | `0` | tokens one peer may run here in a UTC day. `0` is no limit |
 | `borrowing.firstByteMs` | `180000` | how long to wait for a peer to start answering before falling back. `0` waits forever |
 | `borrowing.freshMs` | `4000` | how long a good peer reading is reused before a routing decision asks again |
 | `borrowing.downMs` | `30000` | how long a failed probe is remembered, so an outage doesn't make every local request pay the timeout |

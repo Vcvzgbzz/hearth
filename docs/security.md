@@ -7,10 +7,12 @@ The defaults assume a private network: Tailscale, WireGuard, a LAN you trust.
 - With no `apiKeys`, loopback is the only thing trusted. A request from anywhere
   else, or one carrying a credential that isn't valid here, gets refused rather
   than waved through as "local".
-- The console's own data (`/ui/data`, `/ui/events`, `/ui/history`, `/ui/logs`)
+- The console's own data (`/ui/data`, `/ui/events`, `/ui/history`, `/ui/lending`, `/ui/logs`)
   answers loopback without a key even when `apiKeys` is set, so any process on
   the machine can read the status page's view of the node. It holds no secret.
-- Lending is opt-in per model, and peers are rate-limited by request count.
+- Lending is opt-in per model, and peers are rate-limited by request count. A
+  peer can also be held to its own models and tokens a day: see
+  [Limits per peer](sharing.md#limits-per-peer).
 - A `cloud` backend is the one place a prompt leaves your network for a party
   that is not a hearth you chose to trust. It is used only where your config
   names it, and its `key` never reaches the console or a client.

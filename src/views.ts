@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import type { Row } from "./usage.js";
 import { CONSOLE_HTML } from "./ui.js";
-import type { HearthConfig, KeyRule } from "./config.js";
+import type { HearthConfig, KeyRule, LendTerms } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
@@ -65,6 +65,17 @@ export interface CallerUse {
   month: Spent;
 }
 
+/** One peer in the ledger: what it ran here and what this node ran there. */
+export interface LedgerRow {
+  peer: string;
+  lent: { today: Row; month: Row };
+  borrowed: { today: Row; month: Row };
+  /** What it is held to, for a peer that may borrow at all. */
+  terms?: LendTerms;
+  /** Why it is turned away right now; null when it is not. */
+  closed?: string | null;
+}
+
 export interface ViewDeps {
   cfg: HearthConfig;
   pool: BackendPool;
@@ -86,12 +97,16 @@ export interface ViewDeps {
   keys: () => KeyInfo[];
   /** Callers that are not keys, with what they used. */
   others: () => CallerUse[];
+  /** Lent and borrowed, per peer. */
+  ledger: () => LedgerRow[];
+  /** The limits a peer is held to unless it has its own. */
+  lendDefaults: () => { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
 }
 
 /** Which console this node serves. A page that was loaded from another one reloads itself when it sees this change. */
 const build = createHash("sha256").update(CONSOLE_HTML).digest("hex").slice(0, 12);
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -150,6 +165,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       // Every api key, by label and scope, with when it last authenticated here.
       keys: keys(),
       others: others(),
+      ledger: ledger(),
+      lendDefaults: lendDefaults(),
       // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
       actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
       // Where the operator placed topology nodes; the page lays out the rest.

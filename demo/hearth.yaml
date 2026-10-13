@@ -210,5 +210,9 @@ peers:
     accept: demo-from-friend
     models:
       borrowed-big: their-big-model
+    # Their own limit: more tokens a day than any other peer would get.
+    lend:
+      tokensPerDay: 2000000
 lending:
   models: [small-model]
+  tokensPerDay: 500000

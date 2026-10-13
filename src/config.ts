@@ -27,6 +27,16 @@ export interface PeerConfig {
   models: Record<string, string>;
 }
 
+/** What a peer may take from this node, and how much of it. */
+export interface LendTerms {
+  models: readonly string[];
+  tokensPerDay: number;
+  maxConcurrent: number;
+  rateLimit: number;
+  /** Nothing is lent to this peer while set; only a peer's own `lend:` carries it. */
+  off?: boolean;
+}
+
 /** A backend's `kind`, one of the entries in kinds.ts. */
 export type WarmSource = KindName;
 
@@ -466,6 +476,10 @@ export interface HearthConfig {
   peerLane: string;
   /** Jobs one peer may have queued or running at once (`lending.maxConcurrent`). */
   peerMaxConcurrent: number;
+  /** Tokens one peer may run here in a UTC day (`lending.tokensPerDay`); 0 is no limit. */
+  lendTokensPerDay: number;
+  /** One peer's own terms (`peers.<name>.lend`), each laid over the `lending.*` setting it names. */
+  peerTerms: Record<string, Partial<LendTerms>>;
   /** Biggest request body we'll take. Multi-image vision payloads get close to
    *  the old hardcoded 32MB, so it's a knob now instead of a constant. */
   maxBodyBytes: number;
@@ -941,6 +955,16 @@ function bool(v: unknown, where: string, fallback: boolean): boolean {
   if (v === undefined) return fallback;
   if (typeof v !== "boolean") throw bad(where, "must be true or false");
   return v;
+}
+
+/** The lending terms a block states, and only those: `lending:` for every peer, `peers.<name>.lend` for one. */
+function lendTerms(rec: Record<string, unknown>, at: string): Partial<LendTerms> {
+  const out: Partial<LendTerms> = {};
+  if (rec.models !== undefined) out.models = strList(rec.models, `${at}.models`);
+  if (rec.tokensPerDay !== undefined) out.tokensPerDay = count(rec.tokensPerDay, `${at}.tokensPerDay`, 0, 0);
+  if (rec.maxConcurrent !== undefined) out.maxConcurrent = count(rec.maxConcurrent, `${at}.maxConcurrent`, 2, 1);
+  if (rec.rateLimit !== undefined) out.rateLimit = count(rec.rateLimit, `${at}.rateLimit`, 600, 1);
+  return out;
 }
 
 function strList(v: unknown, where: string): string[] {
@@ -1555,11 +1579,22 @@ export function parseConfig(raw: unknown): HearthConfig {
   // One entry per friend: url and token to borrow from it, accept to lend to it, either or both.
   const peers: PeerConfig[] = [];
   const peerTokens: Record<string, string> = {};
+  const peerTerms: Record<string, Partial<LendTerms>> = {};
   for (const [name, p] of Object.entries(asRecord(root.peers ?? {}, "peers"))) {
     const at = `peers.${name}`;
     const entry = asRecord(p, at);
     only(entry, "peer", at);
     if (entry.accept !== undefined) peerTokens[name] = resolveSecret(str(entry.accept, `${at}.accept`), `${at}.accept`);
+    if (entry.lend !== undefined) {
+      if (entry.accept === undefined) throw bad(`${at}.lend`, `is what ${name} may take from you, which needs its accept`);
+      const lend = asRecord(entry.lend, `${at}.lend`);
+      only(lend, "lend", `${at}.lend`);
+      peerTerms[name] = lendTerms(lend, `${at}.lend`);
+      if (lend.off !== undefined) {
+        if (typeof lend.off !== "boolean") throw bad(`${at}.lend.off`, "must be true or false");
+        if (lend.off) peerTerms[name].off = true;
+      }
+    }
     if (entry.url === undefined) {
       if (entry.accept === undefined) throw bad(at, "needs url (to borrow from it) or accept (to lend to it)");
       for (const k of ["token", "models"]) {
@@ -1658,9 +1693,11 @@ export function parseConfig(raw: unknown): HearthConfig {
 
   // A provider's model is not ours to lend: a peer's requests would be paid for with this node's key.
   const lent = strList(lending.models, "lending.models");
-  for (const id of lent) {
-    const on = backends.find((b) => b.name === models[id]?.backend) ?? backends.find((b) => b.serves.includes(id));
-    if (on?.cloud) throw bad("lending.models", `names "${id}", which runs on the cloud backend "${on.name}": lending it would spend that provider's key on a peer's requests`);
+  for (const [at, ids] of [["lending.models", lent], ...Object.entries(peerTerms).map(([name, t]) => [`peers.${name}.lend.models`, t.models ?? []])] as [string, readonly string[]][]) {
+    for (const id of ids) {
+      const on = backends.find((b) => b.name === models[id]?.backend) ?? backends.find((b) => b.serves.includes(id));
+      if (on?.cloud) throw bad(at, `names "${id}", which runs on the cloud backend "${on.name}": lending it would spend that provider's key on a peer's requests`);
+    }
   }
 
   const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels, rules: apiKeyRules } =
@@ -1741,6 +1778,8 @@ export function parseConfig(raw: unknown): HearthConfig {
       return pick.sort((a, b) => b[1].priority - a[1].priority)[0]![0];
     })(),
     peerMaxConcurrent: count(lending.maxConcurrent, "lending.maxConcurrent", 2, 1),
+    lendTokensPerDay: count(lending.tokensPerDay, "lending.tokensPerDay", 0, 0),
+    peerTerms,
     maxBodyBytes: count(root.maxBodyBytes, "maxBodyBytes", 32 * 1024 * 1024, 1024),
     peers,
     models,

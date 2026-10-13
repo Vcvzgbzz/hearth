@@ -60,6 +60,43 @@ curl -X POST localhost:4141/control -H 'content-type: application/json' \
 **peer** is an edit to `peers:` and applies on restart: a token and a URL are a
 trust decision, and the map is only what you do with one you already have.
 
+## Limits per peer
+
+`lending:` says what every peer may take. A peer's own `lend:` restates any of it
+for that peer alone:
+
+```yaml
+lending:
+  models: [small-model]     # what any peer may run
+  tokensPerDay: 500000      # each, in a UTC day; 0 is no limit
+  maxConcurrent: 2          # jobs in flight
+  rateLimit: 600            # requests an hour
+
+peers:
+  friend:
+    accept: env:HEARTH_PEER_FRIEND
+    lend:
+      models: [small-model, big-model]   # this one may run the big one too
+      tokensPerDay: 2000000
+  acquaintance:
+    accept: env:HEARTH_PEER_ACQUAINTANCE   # the node's limits, as they are
+```
+
+`lend: { off: true }` lends one peer nothing and leaves its limits in the file
+for when it is turned back on.
+
+A peer that has used its tokens for the day, or is turned off, is shown a node that lends it
+nothing, on the same poll that reports capacity, so its flows stop choosing you
+instead of sending work to be refused. One that asks anyway gets a `429` that
+says so.
+
+Every node also counts, per peer, what that peer ran here and what this node
+ran there. `GET /lending` reports both, and the console shows them on each
+peer. Tokens are counted as on `/usage`: the backend's own `usage` where the
+answer carries one, an estimate where it does not. Only chat is counted, which
+is the only work a peer is sent. Without `historyFile` the counts start again
+at every restart.
+
 Peers exchange capacity **per model** rather than per node, because a node with
 several backends can be flat out on its GPU and completely idle on the queue that
 would actually serve you. That is protocol 2. Nodes still send the old node-level

@@ -112,6 +112,7 @@ apiKeys: []
 # lowest-priority lane and is capped, so a guest can't queue ahead of you.
 lending:
   models: []
+#   tokensPerDay: 500000   # per peer, in a UTC day
 #
 # One entry per friend. url + token to borrow from them, accept to lend to
 # them, or both. Generate a token with
@@ -121,6 +122,7 @@ peers: {}
 #     url: http://100.x.y.z:4141
 #     token: env:HEARTH_TO_FRIEND      # you present this to them
 #     accept: env:HEARTH_FROM_FRIEND   # they present this to you
+#     lend: { models: [my-big-model] } # their own limits, over lending: above
 #     models:
 #       # my id: their id. Also the allowlist: a model that isn't mapped can
 #       # never be sent to them, whatever a flow below says.

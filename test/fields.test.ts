@@ -20,7 +20,7 @@ const base = () => ({
   backends: { card: { url: "http://127.0.0.1:1", kind: "none", resources: ["gpu0"] } },
   scheduler: { lanes: { chat: { priority: 0 } } },
   models: { m: { concurrency: 1 } },
-  peers: { p: { url: "http://127.0.0.1:2", token: "t", models: { m: "m" } } },
+  peers: { p: { url: "http://127.0.0.1:2", token: "t", accept: "a", models: { m: "m" } } },
 });
 
 /** Where each scope lives in `base()`. */
@@ -29,7 +29,7 @@ const AT: Record<Scope, (string | number)[]> = {
   activity: ["backends", "card", "activity"], resource: ["resources", "gpu0"], server: ["servers", "box"], flow: ["flows", "pick"], action: ["actions", "tell"],
   scheduler: ["scheduler"],
   lane: ["scheduler", "lanes", "chat"], model: ["models", "m"], stats: ["models", "m", "stats"],
-  pool: ["models", "m", "pool"], price: ["models", "m", "price"], peer: ["peers", "p"], lending: ["lending"], borrowing: ["borrowing"],
+  pool: ["models", "m", "pool"], price: ["models", "m", "price"], peer: ["peers", "p"], lend: ["peers", "p", "lend"], lending: ["lending"], borrowing: ["borrowing"],
   operator: ["operator"],
 };
 
@@ -83,6 +83,7 @@ assert.equal(scopeOf(["servers", "box"]), "server");
 assert.equal(scopeOf(["lending"]), "lending");
 assert.equal(scopeOf(["models", "m", "params"]), null, "params is a free map");
 assert.equal(scopeOf(["peers", "p", "models"]), null, "and so is a peer's model map");
+assert.equal(scopeOf(["peers", "p", "lend"]), "lend");
 
 // --- units -------------------------------------------------------------------------------------
 assert.equal(humanMs(900_000), "15 min");
