@@ -92,8 +92,8 @@ scheduler:
     chat: { priority: 0 }     # a person is watching this
     batch: { priority: 100 }  # a render nobody is waiting on
 
-# The console is on /ui. Off this machine it asks for a login: the first visit
-# creates one, or set it with \`hearth set-operator <user> <pass>\`.
+# The console is on /ui. Off this machine it asks for a login: create one in the
+# console on this machine, or with \`hearth set-operator <user> <pass>\`.
 #
 # Keep the console's day of history and recent logs across restarts.
 # historyFile: /var/lib/hearth/history.json

@@ -1,5 +1,5 @@
 /**
- * First run: a node with no operator lets the first visitor off loopback create one, signs
+ * First run: a node with no operator lets a caller who already holds all of it create one, signs
  * them in, writes it to the file, and then closes the door. A bare address redirects to /ui.
  */
 import assert from "node:assert/strict";
@@ -22,13 +22,13 @@ if (!iface) {
 }
 
 const path = join(mkdtempSync(join(tmpdir(), "hearth-setup-")), "hearth.yaml");
-writeFileSync(path, `backends:\n  main:\n    url: http://127.0.0.1:9292\nflows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }\n`);
+writeFileSync(path, `apiKeys: [full-key, { key: narrow-key, label: narrow, models: [m] }]\nbackends:\n  main:\n    url: http://127.0.0.1:9292\n    serves: [m]\nflows: { m: { inputs: [m], steps: [{ to: m }] }, rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } }\n`);
 const node = createNode(loadConfig(path), silentLogger);
 await new Promise<void>((r) => node.server.listen(0, iface.address, r));
 const url = `http://${iface.address}:${(node.server.address() as AddressInfo).port}`;
-const post = (route: string, body: unknown, cookie = "") => fetch(`${url}${route}`, {
+const post = (route: string, body: unknown, cookie = "", key = "full-key") => fetch(`${url}${route}`, {
   method: "POST",
-  headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+  headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : { Authorization: `Bearer ${key}` }) },
   body: JSON.stringify(body),
 });
 
@@ -38,7 +38,12 @@ const post = (route: string, body: unknown, cookie = "") => fetch(`${url}${route
   assert.equal(r.headers.get("Location"), "/ui");
 }
 
-assert.deepEqual(await (await fetch(`${url}/setup`)).json(), { needed: true });
+// Off this machine, a stranger and a scoped key are neither offered the door nor let through it.
+assert.deepEqual(await (await fetch(`${url}/setup`)).json(), { needed: false });
+assert.equal((await post("/setup", { user: "mallory", pass: "long-enough" }, "", "")).status, 403, "a stranger does not take the node");
+assert.equal((await post("/setup", { user: "mallory", pass: "long-enough" }, "", "narrow-key")).status, 403, "nor does a scoped key");
+assert.doesNotMatch(readFileSync(path, "utf8"), /operator/);
+assert.deepEqual(await (await fetch(`${url}/setup`, { headers: { Authorization: "Bearer full-key" } })).json(), { needed: true });
 assert.equal((await post("/setup", { user: "admin", pass: "short" })).status, 400, "a password under 8 is refused");
 
 const ok = await post("/setup", { user: "admin", pass: "right-horse" });

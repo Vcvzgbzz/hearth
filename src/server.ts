@@ -2,6 +2,7 @@
  * The HTTP surface: OpenAI-compatible `/v1/*` (clients change only a base url) and the `/peer/*`
  * protocol. Bodies stream through untouched; only the model id and stream flag are read.
  */
+import { isIP } from "node:net";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pipeline as pipeline_ } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -26,7 +27,7 @@ import { DAY_MS, History } from "./history.js";
 import { KEEP_DAYS, meter, Usage, withoutUsage, type Meter } from "./usage.js";
 import { Answers } from "./answers.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
-import { CONSOLE_HTML } from "./ui.js";
+import { CONSOLE_CSP, CONSOLE_HTML } from "./ui.js";
 import { createViews, type CallerUse, type KeyInfo, type Spent } from "./views.js";
 import { multipartField, replaceMultipartField } from "./multipart.js";
 import { relayAnthropic, toAnthropic } from "./anthropic.js";
@@ -109,6 +110,8 @@ const HOP_BY_HOP = new Set([
   "host",
 ]);
 
+const NO_OPERATOR = "this node has no operator yet: open the console on the machine itself, or run `hearth set-operator <user> <pass>` there";
+
 /** The shape of the history file this build writes, and the latest it reads. */
 const HISTORY_VERSION = 1;
 
@@ -121,7 +124,9 @@ function forwardable(
 ): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   for (const [k, v] of Object.entries(headers)) {
-    if (v === undefined || HOP_BY_HOP.has(k.toLowerCase())) continue;
+    const name = k.toLowerCase();
+    // Cookies belong to this node's own origin: a backend is neither shown the operator's session nor able to set one.
+    if (v === undefined || HOP_BY_HOP.has(name) || name === "cookie" || name === "set-cookie") continue;
     out[k] = v;
   }
   return out;
@@ -1076,18 +1081,36 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /**
    * Refuse a write carrying a foreign `Origin`: any web page can POST to loopback, and loopback is
-   * trusted. curl, peers and apps send no Origin and are unaffected.
+   * trusted. curl, peers and apps send no Origin and are unaffected. `null` is what a sandboxed
+   * frame or a redirected form sends, and is as foreign as any other.
    */
   function crossOriginWrite(req: IncomingMessage): boolean {
     if (req.method === "GET" || req.method === "HEAD") return false;
     const origin = req.headers.origin;
-    if (origin === undefined || origin === "null") return false;
+    if (origin === undefined) return false;
     try {
       return new URL(origin).host !== req.headers.host;
     } catch {
       // An Origin we cannot parse is not one we can vouch for.
       return true;
     }
+  }
+
+  /**
+   * A loopback caller that asked for this node by a name: a page elsewhere whose name was
+   * re-pointed at 127.0.0.1, which the address gate would take for this machine. An address
+   * cannot be re-pointed, and `localhost` never leaves the machine.
+   */
+  function reboundHost(req: IncomingMessage): boolean {
+    const host = req.headers.host;
+    if (host === undefined || !isLoopback(req)) return false;
+    let name: string;
+    try {
+      name = new URL(`http://${host}`).hostname;
+    } catch {
+      return true;
+    }
+    return !(name.startsWith("[") || isIP(name) !== 0 || name === "localhost" || name.endsWith(".localhost"));
   }
 
   /** Forwardable headers, minus an Authorization that is our own api key. */
@@ -1228,7 +1251,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // Login and logout take no credential by definition; cross-origin POSTs are refused above.
     { path: "/login", methods: ["POST"], auth: "open", handler: routeLogin },
     { path: "/logout", methods: ["POST"], auth: "open", handler: routeLogout },
-    // First run: whoever reaches the console before an operator exists creates one. Closed after.
+    // First run: the console creates the first operator, from this machine or with a full key. Closed after.
     { path: "/setup", methods: ["GET", "POST"], auth: "open", handler: routeSetup },
 
     // A bare address typed into a browser lands on the console instead of a 401.
@@ -1266,6 +1289,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // Before anything is routed, because it is a fact about the REQUEST rather
     // than about any one path: a browser on some other site's page must not be
     // able to POST here just because loopback is trusted.
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (reboundHost(req)) {
+      log.warn("request.rebound_host", { path, method: req.method, host: req.headers.host });
+      apiError(res, 403, "on this machine, this node answers at localhost or an IP address, not at a name", "permission_error");
+      return;
+    }
     if (crossOriginWrite(req)) {
       log.warn("request.cross_origin", { path, method: req.method, origin: req.headers.origin });
       apiError(res, 403, "cross-origin writes are refused", "permission_error");
@@ -2102,7 +2131,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   /** The operator login: verify against the config's hash, mint a session, set the cookie. */
   async function routeLogin(c: Call): Promise<void> {
     if (!cfg.operator) {
-      json(c.res, 404, { error: "no operator login is configured on this node" });
+      json(c.res, 404, { error: NO_OPERATOR });
       return;
     }
     let body: Record<string, unknown>;
@@ -2148,12 +2177,18 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /** GET says whether the node still needs its first operator; POST creates it and signs it in. */
   async function routeSetup(c: Call): Promise<void> {
+    // Creating the operator is taking the node: only a caller who already holds all of it may.
+    const may = isLoopback(c.req) || localCaller(c.req)?.models === null;
     if (c.req.method === "GET") {
-      json(c.res, 200, { needed: cfg.operator === null });
+      json(c.res, 200, { needed: cfg.operator === null && may });
       return;
     }
     if (cfg.operator) {
       json(c.res, 409, { error: "this node already has an operator — log in instead" });
+      return;
+    }
+    if (!may) {
+      json(c.res, 403, { error: NO_OPERATOR });
       return;
     }
     let body: unknown;
@@ -2629,6 +2664,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       "Content-Length": Buffer.byteLength(html),
       // It is a live status page; a cached copy is a lie.
       "Cache-Control": "no-store",
+      "Content-Security-Policy": CONSOLE_CSP,
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer",
     });
     res.end(html);
   }

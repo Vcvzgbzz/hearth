@@ -284,10 +284,11 @@ or a signed-in operator. **An api key does not open them.** A browser cannot
 send a bearer token on an `EventSource`, and the alternatives are worse: a key
 in the query string ends up in logs and history.
 
-From loopback the console needs nothing. From anywhere else, the first visit
-to a node with no login asks you to create one, and the address alone is enough:
-`http://<host>:4141` redirects to `/ui`. Until that happens, anyone who can reach
-the port can claim it, so create it before binding wide, or from the shell:
+From loopback the console needs nothing, and on a node with no login it offers
+to create one. From anywhere else the address alone is enough to reach the page
+(`http://<host>:4141` redirects to `/ui`), but creating the first login is taking
+the node, so it is done on the machine itself: in the console there, or from the
+shell:
 
 ```bash
 hearth set-operator admin 'a long passphrase'   # writes operator: {user, passHash}
