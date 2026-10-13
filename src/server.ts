@@ -8,7 +8,7 @@ import { pipeline as pipeline_ } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, inScope, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
@@ -112,6 +112,9 @@ const HOP_BY_HOP = new Set([
 
 const NO_OPERATOR = "this node has no operator yet: open the console on the machine itself, or run `hearth set-operator <user> <pass>` there";
 
+/** The shape of the history file this build writes, and the latest it reads. */
+const HISTORY_VERSION = 1;
+
 /** Said to a caller whose own key was fine: a 401 passed on from the backend would read as this node refusing them. */
 const KEY_REFUSED = "the backend refused the key this node sends it; the key you sent this node was accepted";
 const refusedKey = (status: number): boolean => status === 401 || status === 403;
@@ -131,7 +134,7 @@ function forwardable(
 
 export interface HearthNode {
   server: Server;
-  /** The local backends and their queues. One entry unless `backends:` is used. */
+  /** The local backends and their queues. One entry unless `backends:` is used. The node's own machinery, as are the next two: not held steady between releases. */
   pool: BackendPool;
   peers: PeerRegistry;
   history: History;
@@ -247,7 +250,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     let cost = 0;
     for (const [model, row] of Object.entries(usage.byModel(caller, days))) {
       const p = cfg.models[model]?.price;
-      if (p) cost += (row.in * p.in + row.out * p.out) / 1_000_000;
+      const cached = Math.min(row.cached ?? 0, row.in);
+      if (p) cost += ((row.in - cached) * p.in + cached * (p.cached ?? p.in) + row.out * p.out) / 1_000_000;
     }
     return { ...usage.total(caller, days), cost };
   }
@@ -466,7 +470,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     log.info("request", {
       ...(asking.getStore() ? { id: asking.getStore()!.id } : {}),
       ...fields,
-      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.est ? { tokensEstimated: true } : {}) } : {}),
+      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.cached ? { tokensCached: used.cached } : {}), ...(used.est ? { tokensEstimated: true } : {}) } : {}),
       ...(headers ? { headers } : {}),
       waitedMs: started - t.enqueuedAt,
       runMs: Date.now() - started,
@@ -1937,6 +1941,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     return;
   }
 
+  /** A model as the OpenAI API lists one: clients that check an answer's shape look for `object`. */
+  const asModel = <T extends { id: string }>(m: T) => ({ object: "model" as const, owned_by: cfg.name, ...m });
+
   async function routeModels(c: Call): Promise<void> {
     const { res } = c;
     const modelsPeer = c.peer;
@@ -2022,10 +2029,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           apiError(res, 404, `no model "${want}"`, "invalid_request_error");
           return;
         }
-        json(res, 200, one);
+        json(res, 200, asModel(one));
         return;
       }
-      json(res, 200, upstream);
+      json(res, 200, { object: "list", data: upstream.data!.map(asModel) });
     } catch (e) {
       apiError(res, 502, `backend unreachable: ${String(e)}`, "server_error");
     }
@@ -2678,7 +2685,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function loadHistory(): void {
     if (!cfg.historyFile || !existsSync(cfg.historyFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown; lastUse?: unknown; usage?: unknown };
+      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { v?: unknown; history?: unknown; logs?: unknown; lastUse?: unknown; usage?: unknown };
+      // A later hearth's file is set aside whole rather than half-read and then written over.
+      if (typeof saved.v === "number" && saved.v > HISTORY_VERSION) {
+        renameSync(cfg.historyFile, `${cfg.historyFile}.v${saved.v}`);
+        log.warn("history.newer", { path: cfg.historyFile, version: saved.v, reads: HISTORY_VERSION, keptAs: `${cfg.historyFile}.v${saved.v}` });
+        return;
+      }
       history.restore(saved.history);
       usage.restore(saved.usage);
       logs.restore(saved.logs);
@@ -2692,7 +2705,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function saveHistory(): void {
     if (!cfg.historyFile) return;
     try {
-      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse), usage: usage.snapshot() }));
+      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: HISTORY_VERSION, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse), usage: usage.snapshot() }));
       historyWarned = false;
     } catch (e) {
       // Once per failure streak: a read-only path must not fill the journal every minute.

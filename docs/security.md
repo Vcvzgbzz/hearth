@@ -13,6 +13,19 @@ The defaults assume a private network: Tailscale, WireGuard, a LAN you trust.
   names it, and its `key` never reaches the console or a client.
 - Peer tokens are separate from api keys, so peer traffic is attributable.
 
+## Secrets stay in the file
+
+An api key, a peer's `token` and `accept`, a backend's `key`, the operator's
+password hash and the headers an action or the canary sends a webhook are never
+sent to the console. The page gets a stand-in (`hearth-secret3`) in each one's
+place, and a save that leaves the stand-in standing writes the original back.
+A stand-in is only honoured where a secret is kept: typed into any other
+setting, the save is refused, so it cannot be used to read a secret out.
+
+This keeps secrets off the screen. It is not a wall against the operator, who
+can point a backend somewhere else and so send its key there: whoever can edit
+the config holds the node.
+
 ## Writes refuse a cross-origin browser
 
 Loopback is this node's whole notion of local trust, and a browser tab is on

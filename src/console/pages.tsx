@@ -297,7 +297,7 @@ const money = (n: number): string => `$${n < 10 ? n.toFixed(2) : n < 1000 ? n.to
 function UsedCell({ used }: { used?: Used }) {
   if (!used || used.requests === 0) return <span className="text-dim">—</span>;
   return (
-    <span title={`${used.requests} requests, ${used.failed} failed · ${used.in} tokens in, ${used.out} out`}>
+    <span title={`${used.requests} requests, ${used.failed} failed · ${used.in} tokens in${used.cached ? ` (${used.cached} read from cache)` : ""}, ${used.out} out`}>
       {short(used.requests)} <span className="text-dim">req ·</span> {short(used.in)} <span className="text-dim">in /</span> {short(used.out)} <span className="text-dim">out</span>
       {(used.cost ?? 0) > 0 && <span title="at the prices the models carry now"> <span className="text-dim">·</span> {money(used.cost!)}</span>}
       {used.failed > 0 && <span className="text-bad"> · {short(used.failed)} failed</span>}

@@ -2,7 +2,9 @@
  * The read model: what /network, /control and the status page show, derived from live state
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
+import { createHash } from "node:crypto";
 import type { Row } from "./usage.js";
+import { CONSOLE_HTML } from "./ui.js";
 import type { HearthConfig, KeyRule } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
@@ -86,6 +88,9 @@ export interface ViewDeps {
   others: () => CallerUse[];
 }
 
+/** Which console this node serves. A page that was loaded from another one reloads itself when it sees this change. */
+const build = createHash("sha256").update(CONSOLE_HTML).digest("hex").slice(0, 12);
+
 export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
@@ -95,6 +100,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
     // Declared activity paths are read only while a page is building data, never on a timer.
     for (const b of pool.all()) void pool.sampleActivity(b);
     return {
+      build,
       // Who this request signed in as, so the page can show it and offer a sign-out;
       // loopback and key callers are nobody in particular.
       operator,

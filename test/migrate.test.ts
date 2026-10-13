@@ -48,7 +48,7 @@ const out = doc.toString();
 const v2 = parseDocument(out).toJS() as Record<string, unknown>;
 assert.equal(v1Marker(v2), null, "nothing v1 is left");
 assert.ok(moved.length >= 10, "each move is reported");
-assert.match(out, /^# my box\nname: box\n/, "the file still opens the way it did");
+assert.match(out, /^# my box\nversion: 3\nname: box\n/, "the file still opens the way it did, and says its layout");
 assert.match(out, /url: http:\/\/127\.0\.0\.1:8080 # llama-swap/, "a comment stays on its value");
 assert.match(out, /# the friend's box\n\s+friend:/, "and on its peer");
 assert.match(out, /models: \[ ?chat ?\] # lend this/, "and on a moved key");

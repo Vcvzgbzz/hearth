@@ -307,7 +307,7 @@ export interface ModelRoute {
   /** Tokens the model's running requests share (vLLM's KV cache, llama.cpp `--kv-unified`); `output` caps each request's counted `max_tokens`, null counts it whole. */
   pool: { tokens: number; output: number | null } | null;
   /** What a million tokens in and out cost, in dollars, where using this model is paid for. null is not priced. */
-  price: { in: number; out: number } | null;
+  price: { in: number; out: number; cached?: number } | null;
   /** A turn shares the backend with this model's running turns only once each has run this long; unset never waits. */
   shareAfterMs?: number;
   /** How long an answer is kept for an identical request; unset or 0 keeps none. */
@@ -895,12 +895,15 @@ function modelConcurrency(entry: Record<string, unknown>, id: string): number | 
   return count(entry.concurrency, `models.${id}.concurrency`, 1, 1);
 }
 
-/** `price: { in: 3, out: 15 }`: dollars per million tokens. */
+/** `price: { in: 3, out: 15, cached: 0.3 }`: dollars per million tokens; `cached` is for input read from the provider's prompt cache. */
 function modelPrice(v: unknown, id: string): ModelRoute["price"] {
   if (v === undefined || v === null) return null;
   const p = asRecord(v, `models.${id}.price`);
   only(p, "price", `models.${id}.price`);
-  return { in: atLeast(p.in, `models.${id}.price.in`, 0), out: atLeast(p.out, `models.${id}.price.out`, 0) };
+  return {
+    in: atLeast(p.in, `models.${id}.price.in`, 0), out: atLeast(p.out, `models.${id}.price.out`, 0),
+    ...(p.cached !== undefined ? { cached: atLeast(p.cached, `models.${id}.price.cached`, 0) } : {}),
+  };
 }
 
 /** `pool: 144000`, or `pool: { tokens: 144000, output: 8192 }`. */
@@ -1310,8 +1313,18 @@ function canaryDecl(v: unknown, backends: readonly BackendConfig[]): CanaryConfi
   };
 }
 
+/** The layout of hearth.yaml this build reads and writes. A file that names a later one is refused, never half-read. */
+export const CONFIG_VERSION = 3;
+
 export function parseConfig(raw: unknown): HearthConfig {
   const root = asRecord(raw, "config");
+  if (root.version !== undefined) {
+    const version = count(root.version, "version", CONFIG_VERSION, 1);
+    if (version > CONFIG_VERSION) {
+      throw bad("version", `is ${version}, a layout newer than this hearth reads (${CONFIG_VERSION}) — upgrade hearth, or restore the file an older one wrote`);
+    }
+    if (version < CONFIG_VERSION) throw bad("version", `is ${version}, an older layout — run \`hearth migrate\` to rewrite it; the original is kept beside it`);
+  }
   const v1 = v1Marker(root);
   if (v1 !== null) {
     throw new ConfigError(null, `this hearth.yaml is in the v1 layout (it has ${v1}) — run \`hearth migrate\` to rewrite it; the original is kept beside it`);
@@ -1633,6 +1646,16 @@ export function parseConfig(raw: unknown): HearthConfig {
     }
   }
 
+  // A provider answers for its own models, and every probe of one would be billed.
+  const canary = canaryDecl(root.canary, backends);
+  for (const name of Object.keys(canary?.backends ?? {})) {
+    if (backends.find((b) => b.name === name)?.cloud) throw bad(`canary.backends.${name}`, "is a cloud backend: the canary does not probe a provider's models");
+  }
+  for (const id of Object.keys(canary?.models ?? {})) {
+    const on = backends.find((b) => b.name === models[id]?.backend) ?? backends.find((b) => b.serves.includes(id));
+    if (on?.cloud) throw bad(`canary.models.${id}`, `runs on the cloud backend "${on.name}": the canary does not probe a provider's models`);
+  }
+
   // A provider's model is not ours to lend: a peer's requests would be paid for with this node's key.
   const lent = strList(lending.models, "lending.models");
   for (const id of lent) {
@@ -1721,7 +1744,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     maxBodyBytes: count(root.maxBodyBytes, "maxBodyBytes", 32 * 1024 * 1024, 1024),
     peers,
     models,
-    canary: canaryDecl(root.canary, backends),
+    canary,
     peerFreshMs: count(borrowing.freshMs, "borrowing.freshMs", 4_000, 100),
     peerDownMs: count(borrowing.downMs, "borrowing.downMs", 30_000, 1000),
     // Slower than it used to be, since on-demand probing does the real work.
