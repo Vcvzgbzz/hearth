@@ -11,6 +11,8 @@ export interface Counted {
   in: number;
   out: number;
   est: boolean;
+  /** How much of `in` the backend read from its prompt cache, where it says. */
+  cached?: number;
 }
 
 /** How much of an answer's end is kept to find its `usage` in. */
@@ -53,7 +55,8 @@ export class Meter {
       return m ? Number(m[1]) : null;
     };
     const [i, o] = [num("prompt_tokens"), num("completion_tokens")];
-    if (i !== null && o !== null) return { in: i, out: o, est: false };
+    const cached = num("cached_tokens");
+    if (i !== null && o !== null) return { in: i, out: o, est: false, ...(cached ? { cached } : {}) };
     // The first event names the role and the last says it is done; what is between is the answer.
     return { in: fallbackIn, out: Math.max(0, this.events - 2), est: true };
   }
@@ -107,10 +110,15 @@ export interface Row {
   failed: number;
   in: number;
   out: number;
+  /** How much of `in` was read from a backend's prompt cache; absent where none was. */
+  cached?: number;
 }
 
 const blank = (): Row => ({ requests: 0, failed: 0, in: 0, out: 0 });
-const plus = (a: Row, b: Row): Row => ({ requests: a.requests + b.requests, failed: a.failed + b.failed, in: a.in + b.in, out: a.out + b.out });
+const plus = (a: Row, b: Row): Row => {
+  const cached = (a.cached ?? 0) + (b.cached ?? 0);
+  return { requests: a.requests + b.requests, failed: a.failed + b.failed, in: a.in + b.in, out: a.out + b.out, ...(cached > 0 ? { cached } : {}) };
+};
 
 /** How many days are kept. */
 export const KEEP_DAYS = 31;
@@ -133,6 +141,7 @@ export class Usage {
     if (!ok) row.failed++;
     row.in += used?.in ?? 0;
     row.out += used?.out ?? 0;
+    if (used?.cached) row.cached = (row.cached ?? 0) + used.cached;
     this.prune();
   }
 
@@ -192,7 +201,7 @@ export class Usage {
           if (typeof row !== "object" || row === null) continue;
           const r = row as Partial<Row>;
           const into = (((this.days[day] ??= {})[caller] ??= {})[model] ??= blank());
-          Object.assign(into, plus(into, { requests: n(r.requests), failed: n(r.failed), in: n(r.in), out: n(r.out) }));
+          Object.assign(into, plus(into, { requests: n(r.requests), failed: n(r.failed), in: n(r.in), out: n(r.out), cached: n(r.cached) }));
         }
       }
     }

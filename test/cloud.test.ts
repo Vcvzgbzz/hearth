@@ -67,6 +67,8 @@ const refused = (backend: string, path: string) => assert.throws(() => parseConf
 refused(`${good}\n    resources: [gpu0]`, "backends.away.resources");
 refused(`${good}\n    kind: llama-swap`, "backends.away.kind");
 refused(`    url: ${there}\n    cloud: true\n    key: provider-secret`, "backends.away.serves");
+assert.throws(() => parseConfig(parse(`${file(good)}canary:\n  models: {large: {}}\n`)), (e) => e instanceof ConfigError && e.path === "canary.models.large", "nor probed");
+assert.throws(() => parseConfig(parse(`${file(good)}canary:\n  backends: {away: {}}\n`)), (e) => e instanceof ConfigError && e.path === "canary.backends.away");
 assert.throws(() => parseConfig(parse(`${file(good)}lending:\n  models: [large]\n`)), (e) => e instanceof ConfigError && e.path === "lending.models", "a provider's model is not lent");
 const parsed = parseConfig(parse(file(good))).backends[0]!;
 assert.deepEqual([parsed.cloud, parsed.kind, parsed.key], [true, "none", "provider-secret"], "a cloud backend reads no warm state unless told to");

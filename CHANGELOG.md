@@ -54,8 +54,8 @@ they were, and every answer now also carries `X-Request-Id`.
   [A provider's models](docs/providers.md).
 - **Anthropic's Messages API**, with prompt caching on by default. Callers still
   send and receive chat completions.
-- **Prices.** A model can carry a price per million tokens; usage is then shown
-  as spend.
+- **Prices.** A model can carry a price per million tokens, with one of its own
+  for input read from a prompt cache; usage is then shown as spend.
 
 ### Keys
 

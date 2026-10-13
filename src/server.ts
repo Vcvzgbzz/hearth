@@ -129,7 +129,7 @@ function forwardable(
 
 export interface HearthNode {
   server: Server;
-  /** The local backends and their queues. One entry unless `backends:` is used. */
+  /** The local backends and their queues. One entry unless `backends:` is used. The node's own machinery, as are the next two: not held steady between releases. */
   pool: BackendPool;
   peers: PeerRegistry;
   history: History;
@@ -245,7 +245,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     let cost = 0;
     for (const [model, row] of Object.entries(usage.byModel(caller, days))) {
       const p = cfg.models[model]?.price;
-      if (p) cost += (row.in * p.in + row.out * p.out) / 1_000_000;
+      const cached = Math.min(row.cached ?? 0, row.in);
+      if (p) cost += ((row.in - cached) * p.in + cached * (p.cached ?? p.in) + row.out * p.out) / 1_000_000;
     }
     return { ...usage.total(caller, days), cost };
   }
@@ -464,7 +465,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     log.info("request", {
       ...(asking.getStore() ? { id: asking.getStore()!.id } : {}),
       ...fields,
-      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.est ? { tokensEstimated: true } : {}) } : {}),
+      ...(used ? { tokensIn: used.in, tokensOut: used.out, ...(used.cached ? { tokensCached: used.cached } : {}), ...(used.est ? { tokensEstimated: true } : {}) } : {}),
       ...(headers ? { headers } : {}),
       waitedMs: started - t.enqueuedAt,
       runMs: Date.now() - started,
@@ -1911,6 +1912,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     return;
   }
 
+  /** A model as the OpenAI API lists one: clients that check an answer's shape look for `object`. */
+  const asModel = <T extends { id: string }>(m: T) => ({ object: "model" as const, owned_by: cfg.name, ...m });
+
   async function routeModels(c: Call): Promise<void> {
     const { res } = c;
     const modelsPeer = c.peer;
@@ -1996,10 +2000,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           apiError(res, 404, `no model "${want}"`, "invalid_request_error");
           return;
         }
-        json(res, 200, one);
+        json(res, 200, asModel(one));
         return;
       }
-      json(res, 200, upstream);
+      json(res, 200, { object: "list", data: upstream.data!.map(asModel) });
     } catch (e) {
       apiError(res, 502, `backend unreachable: ${String(e)}`, "server_error");
     }

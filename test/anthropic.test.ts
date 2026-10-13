@@ -96,7 +96,7 @@ backends:
     key: provider-secret
     serves: [their-model]
 models:
-  big: {backend: away, as: their-model}
+  big: {backend: away, as: their-model, price: {in: 1000000, out: 0, cached: 100000}}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 apiKeys:
@@ -135,7 +135,11 @@ try {
 
   await new Promise((r) => setTimeout(r, 50));
   const used = ((await (await fetch(`${url}/usage?days=1`, { headers: ours })).json()) as { usage: Record<string, Record<string, Record<string, { requests: number; in: number; out: number }>>> }).usage;
-  assert.deepEqual(Object.values(used)[0]!["key:app"]!["big"], { requests: 3, failed: 0, in: 129, out: 18 }, "all three counted from what the provider said, the stream nobody asked usage of included");
+  assert.deepEqual(Object.values(used)[0]!["key:app"]!["big"], { requests: 3, failed: 0, in: 129, out: 18, cached: 120 }, "all three counted from what the provider said, the stream nobody asked usage of included, and how much was a cache read");
+
+  // Priced at a dollar a token in and a tenth of that for a cache read: 9 fresh and 120 read.
+  const page = (await (await fetch(`${url}/ui/data`, { headers: ours })).json()) as { keys: { label: string; today: { cost: number } }[] };
+  assert.equal(page.keys.find((k) => k.label === "app")!.today.cost, 21, "input read from the cache is priced as such");
 
   const small = await chat({ max_tokens: 1 });
   assert.equal(small.status, 400);

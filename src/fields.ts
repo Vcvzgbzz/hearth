@@ -148,6 +148,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
   price: {
     in: { type: "number", min: 0, desc: "Dollars per million tokens sent to it." },
     out: { type: "number", min: 0, desc: "Dollars per million tokens it answers with." },
+    cached: { type: "number", min: 0, desc: "Dollars per million input tokens read from the provider's prompt cache. Unset prices them as any input." },
   },
   pool: {
     tokens: { type: "number", min: 1, desc: "Tokens shared by this model's running turns." },
@@ -195,6 +196,7 @@ export function scopeOf(path: (string | number)[]): Scope | null {
   if (a === "models" && n === 2) return "model";
   if (a === "models" && c === "stats" && d === undefined) return "stats";
   if (a === "models" && c === "pool" && d === undefined) return "pool";
+  if (a === "models" && c === "price" && d === undefined) return "price";
   if (a === "peers" && n === 2) return "peer";
   return null;
 }

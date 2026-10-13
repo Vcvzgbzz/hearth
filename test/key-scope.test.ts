@@ -53,7 +53,9 @@ const ask = async (model: string) => (await fetch(`${url}/v1/chat/completions`, 
 try {
   assert.deepEqual([await ask("chat"), await ask("chat:fast")], [200, 200], "the type and its variants");
   assert.deepEqual([await ask("big"), await ask("small")], [403, 403], "not the models behind it by their own names");
-  const listed = ((await (await fetch(`${url}/v1/models`, { headers: { Authorization: "Bearer chat-secret" } })).json()) as { data: { id: string }[] }).data.map((m) => m.id).sort();
+  const models = (await (await fetch(`${url}/v1/models`, { headers: { Authorization: "Bearer chat-secret" } })).json()) as { object: string; data: { id: string; object: string; owned_by: string }[] };
+  assert.deepEqual([models.object, models.data[0]!.object, models.data[0]!.owned_by], ["list", "model", "node-under-test"], "in the shape a client that checks it expects");
+  const listed = models.data.map((m) => m.id).sort();
   assert.deepEqual(listed, ["chat", "chat:fast"], "and its list of models is what it may ask for");
   console.log("key-scope.test.ts ok");
 } finally {

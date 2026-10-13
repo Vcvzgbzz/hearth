@@ -267,9 +267,11 @@ export interface Canary {
 }
 
 /** Requests and tokens over some days. */
-export interface Used { requests: number; failed: number; in: number; out: number; /** Dollars, at the prices the models carry now. */ cost?: number }
+export interface Used { requests: number; failed: number; in: number; out: number; /** How much of `in` was read from a prompt cache. */ cached?: number; /** Dollars, at the prices the models carry now. */ cost?: number }
 
 export interface UiData {
+  /** Which console the node serves now; the page reloads when it stops being the one it was loaded from. */
+  build?: string;
   /** The operator logged in on this request, or null for loopback and key callers. */
   operator: string | null;
   /** How to authenticate a write here: "open" on a keyless node, else a key or a session. */
