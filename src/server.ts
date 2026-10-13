@@ -126,7 +126,7 @@ function forwardable(
 
 export interface HearthNode {
   server: Server;
-  /** The local backends and their queues. One entry unless `backends:` is used. */
+  /** The local backends and their queues. One entry unless `backends:` is used. The node's own machinery, as are the next two: not held steady between releases. */
   pool: BackendPool;
   peers: PeerRegistry;
   history: History;
