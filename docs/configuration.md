@@ -16,6 +16,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 
 | key | default | what it does |
 |---|---|---|
+| `version` | `3` | the layout this file is written in. `hearth init` and `hearth migrate` write it. A file that names a later layout than the node reads is refused; one with no `version` is read as the current layout |
 | `name` | hostname | how this node identifies itself to peers |
 | `listen.host` / `.port` | `127.0.0.1` / `4141` | widening the host is deliberate, see Security |
 | `backends.<name>` | — | a server hearth fronts, with its own queue. At least one. See [Backends](backends.md) |
@@ -102,7 +103,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `callers.<who>` | none | Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default`. |
 | `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](console.md#editing-on-the-graph); nodes without one are laid out |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](routing.md#flows) |
-| `historyFile` | unset | a file that keeps the console's day of history, its recent log lines and the month of usage per caller across restarts, written every minute and at shutdown. Unset keeps them in memory |
+| `historyFile` | unset | a file that keeps the console's day of history, its recent log lines and the month of usage per caller across restarts, written every minute and at shutdown. Unset keeps them in memory. A file written by a later hearth is set aside as `<file>.v<n>` and a fresh one started |
 | `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
 
 Tokens accept `env:NAME`, so the config stays committable.

@@ -1310,8 +1310,18 @@ function canaryDecl(v: unknown, backends: readonly BackendConfig[]): CanaryConfi
   };
 }
 
+/** The layout of hearth.yaml this build reads and writes. A file that names a later one is refused, never half-read. */
+export const CONFIG_VERSION = 3;
+
 export function parseConfig(raw: unknown): HearthConfig {
   const root = asRecord(raw, "config");
+  if (root.version !== undefined) {
+    const version = count(root.version, "version", CONFIG_VERSION, 1);
+    if (version > CONFIG_VERSION) {
+      throw bad("version", `is ${version}, a layout newer than this hearth reads (${CONFIG_VERSION}) — upgrade hearth, or restore the file an older one wrote`);
+    }
+    if (version < CONFIG_VERSION) throw bad("version", `is ${version}, an older layout — run \`hearth migrate\` to rewrite it; the original is kept beside it`);
+  }
   const v1 = v1Marker(root);
   if (v1 !== null) {
     throw new ConfigError(null, `this hearth.yaml is in the v1 layout (it has ${v1}) — run \`hearth migrate\` to rewrite it; the original is kept beside it`);

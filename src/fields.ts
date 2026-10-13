@@ -32,6 +32,7 @@ export const SECTION_KEYS = ["backends", "resources", "servers", "models", "flow
 
 export const FIELDS: Record<Scope, Record<string, Field>> = {
   node: {
+    version: { type: "number", min: 1, desc: "The layout this file is written in. `hearth init` and `hearth migrate` write it; a file newer than the node reading it is refused.", def: 3 },
     name: { type: "text", desc: "How this node identifies itself to peers.", def: "hostname" },
     listen: { type: "object", scope: "listen", desc: "Address and port hearth serves on.", seed: { host: "127.0.0.1", port: 4141 } },
     lending: { type: "object", scope: "lending", desc: "What peers may run here, and how much of it.", seed: { models: [] } },

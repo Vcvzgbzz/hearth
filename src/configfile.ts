@@ -379,10 +379,14 @@ export class ConfigFile {
     else writeFileAtomic(`${this.path}.draft.json`, JSON.stringify(draft));
   }
 
-  private kept(): (Version & { text: string })[] {
+  /** The list as kept: a bare list, or `{v: 1, versions}`. Null for a file a later hearth wrote, which is left as it is. */
+  private kept(): (Version & { text: string })[] | null {
     try {
       const all = JSON.parse(readFileSync(`${this.path}.versions.json`, "utf8")) as unknown;
-      return Array.isArray(all) ? all as (Version & { text: string })[] : [];
+      if (Array.isArray(all)) return all as (Version & { text: string })[];
+      if (!isObj(all)) return [];
+      if (all.v !== 1) return null;
+      return Array.isArray(all.versions) ? all.versions as (Version & { text: string })[] : [];
     } catch {
       return [];
     }
@@ -390,13 +394,17 @@ export class ConfigFile {
 
   /** What has been written through here, oldest first: when, and the name it was given. */
   versions(): Version[] {
-    return this.path ? this.kept().map(({ text: _, ...v }) => v) : [];
+    return this.path ? (this.kept() ?? []).map(({ text: _, ...v }) => v) : [];
   }
 
   /** Remember what was just written. A save never fails for want of its place in the list. */
   private remember(was: string, text: string, name: string): void {
     try {
       const all = this.kept();
+      if (all === null) {
+        this.log.warn("config.version_not_kept", { error: "the list of versions was written by a later hearth" });
+        return;
+      }
       // The file as it stood before the first change made here is somewhere to go back to as well.
       if (all.length === 0 && was) all.push({ at: new Date().toISOString(), name: "before the first change made here", hash: hashOf(was), text: was });
       all.push({ at: new Date().toISOString(), name, hash: hashOf(text), text });
@@ -409,7 +417,7 @@ export class ConfigFile {
   /** Write an earlier version back as the file, through the same checks as any other save. */
   restore(hash: string, dryRun: boolean): CommitResult {
     if (!this.path) throw new ConfigRefusal(409, "this node was not loaded from a config file, so there is no file to edit", null);
-    const v = this.kept().findLast((x) => x.hash === hash);
+    const v = (this.kept() ?? []).findLast((x) => x.hash === hash);
     if (!v) throw new ConfigRefusal(404, "no version by that hash is kept", null);
     this.syncFromDisk();
     return this.commit(v.text, dryRun, `back to ${v.name || v.at}`);

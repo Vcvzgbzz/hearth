@@ -7,7 +7,7 @@ import { pipeline as pipeline_ } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, inScope, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
@@ -108,6 +108,9 @@ const HOP_BY_HOP = new Set([
   "content-length",
   "host",
 ]);
+
+/** The shape of the history file this build writes, and the latest it reads. */
+const HISTORY_VERSION = 1;
 
 /** Said to a caller whose own key was fine: a 401 passed on from the backend would read as this node refusing them. */
 const KEY_REFUSED = "the backend refused the key this node sends it; the key you sent this node was accepted";
@@ -2640,7 +2643,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function loadHistory(): void {
     if (!cfg.historyFile || !existsSync(cfg.historyFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { history?: unknown; logs?: unknown; lastUse?: unknown; usage?: unknown };
+      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { v?: unknown; history?: unknown; logs?: unknown; lastUse?: unknown; usage?: unknown };
+      // A later hearth's file is set aside whole rather than half-read and then written over.
+      if (typeof saved.v === "number" && saved.v > HISTORY_VERSION) {
+        renameSync(cfg.historyFile, `${cfg.historyFile}.v${saved.v}`);
+        log.warn("history.newer", { path: cfg.historyFile, version: saved.v, reads: HISTORY_VERSION, keptAs: `${cfg.historyFile}.v${saved.v}` });
+        return;
+      }
       history.restore(saved.history);
       usage.restore(saved.usage);
       logs.restore(saved.logs);
@@ -2654,7 +2663,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   function saveHistory(): void {
     if (!cfg.historyFile) return;
     try {
-      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: 1, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse), usage: usage.snapshot() }));
+      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: HISTORY_VERSION, history: history.snapshot(), logs: logs.all(), lastUse: Object.fromEntries(lastUse), usage: usage.snapshot() }));
       historyWarned = false;
     } catch (e) {
       // Once per failure streak: a read-only path must not fill the journal every minute.

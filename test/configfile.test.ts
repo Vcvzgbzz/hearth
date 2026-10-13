@@ -421,6 +421,17 @@ operator:
   assert.deepEqual([(await h.file()).hash, readFileSync(path, "utf8")], [before.hash, ORIGINAL]);
   assert.equal(((await at("/config/versions")).body.versions as { name: string }[]).at(-1)!.name, "back to before the first change made here");
   assert.equal((await at("/config/versions", "POST", { hash: "nope" })).status, 404);
+
+  // The list may come wrapped with its shape's number; one from a later hearth is neither read nor written over.
+  const listFile = `${path}.versions.json`;
+  const bare = JSON.parse(readFileSync(listFile, "utf8")) as unknown[];
+  writeFileSync(listFile, JSON.stringify({ v: 1, versions: bare }));
+  assert.equal(((await at("/config/versions")).body.versions as unknown[]).length, bare.length);
+  const later = JSON.stringify({ v: 2, versions: { later: "shape" } });
+  writeFileSync(listFile, later);
+  assert.deepEqual((await at("/config/versions")).body.versions, []);
+  assert.equal((await at("/config", "PATCH", { ops: [{ path: ["name"], value: "renamed" }] })).status, 200, "a save still lands");
+  assert.equal(readFileSync(listFile, "utf8"), later);
   await h.node.close();
 }
 

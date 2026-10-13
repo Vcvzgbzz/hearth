@@ -1,6 +1,6 @@
 /** historyFile: a day of calls and the recent log lines survive a restart; nothing older than a day comes back. */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +68,16 @@ type Logs = { entries: { msg: string }[]; persisted: boolean };
   const logs = (await d.get("/ui/logs")) as unknown as Logs;
   assert.equal(logs.persisted, false, "without historyFile the page says the lines are in memory only");
   await d.node.close();
+}
+
+// A file a later hearth wrote is set aside, not half-read and then written over.
+{
+  const newer = join(mkdtempSync(join(tmpdir(), "hearth-hist-")), "history.json");
+  writeFileSync(newer, JSON.stringify({ v: 2, history: { later: "shape" } }));
+  const a = await boot(newer);
+  await a.node.close();
+  assert.deepEqual(JSON.parse(readFileSync(`${newer}.v2`, "utf8")), { v: 2, history: { later: "shape" } }, "the later file is kept as it was");
+  assert.equal((JSON.parse(readFileSync(newer, "utf8")) as { v: number }).v, 1, "and this node keeps its own");
 }
 
 console.log("history-file.test.ts ok");
