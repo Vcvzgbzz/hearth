@@ -330,14 +330,14 @@ export function KeyOnce() {
   useEffect(() => setCopied(false), [shown]);
   if (shown === null) return null;
   return (
-    <Dialog title={`${shown.rotated ? "New key" : "Key"} for ${shown.label}`} onClose={doneWithKey}>
+    <Dialog firm title={`${shown.rotated ? "New key" : "Key"} for ${shown.label}`} onClose={doneWithKey}>
       <div className="flex flex-col gap-3 p-4">
         <p className="text-[12px] text-dim">Shown once: after this it exists only in hearth.yaml.{shown.rotated ? " The old key has stopped working." : ""}</p>
         <code className={cx("select-all overflow-x-auto whitespace-nowrap rounded-md border border-line bg-bg px-3 py-2", mono)}>{shown.key}</code>
       </div>
       <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
-        {/* The text stays selectable where the clipboard is not allowed. */}
-        <Button onClick={() => void navigator.clipboard.writeText(shown.key).then(() => setCopied(true), () => {})}>{copied ? "copied" : "copy"}</Button>
+        {/* A page served over plain http off this machine has no clipboard; the text is selectable either way. */}
+        {navigator.clipboard && <Button onClick={() => void navigator.clipboard.writeText(shown.key).then(() => setCopied(true), () => {})}>{copied ? "copied" : "copy"}</Button>}
         <Button tone="primary" onClick={doneWithKey}>done</Button>
       </div>
     </Dialog>
@@ -466,7 +466,7 @@ export function Keys() {
           <div className="text-[12px] text-dim">The {shown.rotated ? "new key" : "key"} for <b className="text-fg">{shown.label}</b> — shown once; after this it exists only in hearth.yaml.</div>
           <div className="mt-1.5 flex items-center gap-2">
             <code className={cx("flex-1 select-all overflow-x-auto whitespace-nowrap rounded-md border border-line bg-bg px-3 py-2", mono)}>{shown.key}</code>
-            <button onClick={() => void copy(shown.key)} className="h-8 rounded-md border border-line px-3 text-[12px] hover:bg-muted">{copied ? "copied" : "copy"}</button>
+            {navigator.clipboard && <button onClick={() => void copy(shown.key)} className="h-8 rounded-md border border-line px-3 text-[12px] hover:bg-muted">{copied ? "copied" : "copy"}</button>}
             <button onClick={doneWithKey} className="h-8 rounded-md px-2 text-[12px] text-dim hover:text-fg">done</button>
           </div>
         </div>
