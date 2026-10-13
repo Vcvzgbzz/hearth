@@ -26,9 +26,20 @@ Other things that behave differently:
 - **Only a name a flow takes can be asked for.** The flow with `inputs: ["*"]`
   says what becomes of every other name; `migrate` writes one that runs them as
   themselves. Without it the config is refused.
+- **The first console login is created on the machine itself**, in the console
+  there or with `hearth set-operator`. From another machine it takes an
+  unscoped api key; before, anyone who reached the port could create it.
+- **On the machine itself, the node answers at `localhost` or an IP address.**
+  A request from loopback that asks for it by any other name is refused, which
+  includes a name pointed at `127.0.0.1` in a hosts file.
+- **Cookies do not cross the passthrough**, to a backend or back from one.
+- **The package exports what embedding needs**: `loadConfig`, `parseConfig`,
+  `ConfigError`, `createNode`, `createLogger`, `silentLogger` and their types.
+  The scheduler, pool, peer registry and the rest are no longer exported.
 
-Nothing changed for clients: `/v1/chat/completions` and `/v1/models` are as
-they were, and every answer now also carries `X-Request-Id`.
+Nothing changed for clients: `/v1/chat/completions` is as it was, `/v1/models`
+gains the `object` and `owned_by` fields the OpenAI API has, and every answer
+now also carries `X-Request-Id`.
 
 ### Routing
 
@@ -76,7 +87,26 @@ they were, and every answer now also carries `X-Request-Id`.
 - **Models, Queue and Logs pages**: warm and evict a model, each call behind a
   model's numbers, and the log filtered by model.
 
+### Security
+
+- **A page elsewhere cannot make itself the node's own origin** by re-pointing
+  its name at `127.0.0.1`, and `Origin: null` is refused on writes like any
+  other foreign origin.
+- **The console is sent with a content security policy** and cannot be framed.
+- **A secret's stand-in is honoured only where a secret is kept**, so it cannot
+  be typed into another setting to read the secret out. The headers an action
+  or the canary sends a webhook are masked like the other secrets.
+- **A key held to a type does not reach a separate flow** that happens to share
+  its prefix.
+
+See [Security](docs/security.md).
+
 ### Also
+
+- **`hearth.yaml` can say its layout**: `version: 3`, written by `hearth init`
+  and `hearth migrate`. A file from a later hearth is refused by name instead of
+  being half-read.
+- **An open console reloads itself** when the node restarts into another build.
 
 - **The canary can watch a followed id only while it goes out as one named
   model** (`onlyAs`). See [Canary](docs/canary.md).
