@@ -18,13 +18,18 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export type Page = "topology" | "routing" | "models" | "keys" | "queue" | "logs" | "config";
+export const PAGE_IDS = ["topology", "routing", "models", "keys", "queue", "logs", "config"] as const;
+export type Page = (typeof PAGE_IDS)[number];
+/** The page the address names; anything else is the first one. */
+export const pageOf = (): Page => PAGE_IDS.find((p) => p === location.hash.slice(1)) ?? "topology";
 export type Sel = { kind: "self" | "peer" | "backend" | "resource" | "machine"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 
 interface State {
   data: UiData | null;
   live: boolean;
+  /** The stream is not delivering and /ui/data is being asked instead. */
+  polling: boolean;
   dead: boolean;
   /** The data stream refused this address and this browser holds no session: the login card shows. */
   loginRequired: boolean;
@@ -42,10 +47,11 @@ interface State {
 export const useStore = create<State>(() => ({
   data: null,
   live: false,
+  polling: false,
   dead: false,
   loginRequired: false,
   setupRequired: false,
-  page: (location.hash.slice(1) as Page) || "topology",
+  page: pageOf(),
   sel: null,
   fresh: null,
   toast: null,
@@ -70,13 +76,17 @@ export function toast(tone: "ok" | "bad", text: string): void {
 /** Open the stream, falling back to polling if no snapshot arrives; reconnects are the browser's. */
 let es: EventSource | null = null;
 let poll: number | null = null;
+let fallback: number | null = null;
 
 function disconnect(): void {
   es?.close();
   es = null;
+  if (fallback !== null) clearTimeout(fallback);
+  fallback = null;
   if (poll !== null) {
     clearInterval(poll);
     poll = null;
+    useStore.setState({ polling: false });
   }
 }
 
@@ -126,7 +136,7 @@ export function connect(): void {
     if (poll !== null) clearInterval(poll);
     poll = null;
     take(JSON.parse((e as MessageEvent).data) as UiData);
-    useStore.setState({ live: true });
+    useStore.setState({ live: true, polling: false });
   });
   es.addEventListener("patch", (e) => {
     const cur = useStore.getState().data;
@@ -139,11 +149,23 @@ export function connect(): void {
     }
     useStore.setState({ data: next, live: true });
   });
-  es.onerror = () => useStore.setState({ live: false });
-  setTimeout(() => {
-    if (gotSnapshot || poll !== null) return;
+  const startPoll = (): void => {
+    if (poll !== null) return;
     void load();
     poll = window.setInterval(() => { if (!document.hidden) void load(); }, 3000);
+    useStore.setState({ polling: true });
+  };
+  const stream = es;
+  es.onerror = () => {
+    useStore.setState({ live: false });
+    // A refused stream is closed for good and the browser will not try it again: ask the node
+    // directly, which is also what finds out that this browser has been signed out.
+    if (stream.readyState === EventSource.CLOSED) startPoll();
+    else void load();
+  };
+  fallback = window.setTimeout(() => {
+    fallback = null;
+    if (!gotSnapshot) startPoll();
   }, 4000);
 }
 
@@ -264,6 +286,11 @@ export async function request<T = Record<string, unknown>>(method: string, path:
   }
   const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
   if (r.status === 401) {
+    // With no key in play the session is what was refused: the next look at the node offers the login.
+    if (key === "") {
+      connect();
+      throw new RequestError("this browser is no longer signed in", null);
+    }
     forgetKey();
     throw new RequestError("key rejected — try again to re-enter it", null);
   }

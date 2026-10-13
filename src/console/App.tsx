@@ -7,7 +7,7 @@ import { Logs } from "./logs.js";
 import { CanaryAlert, History, Inspector, KeyOnce, Keys, Models, Queue } from "./pages.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
-import { go, login, logout, restartNode, select, useStore, type Page } from "./store.js";
+import { go, login, logout, pageOf, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
 import { Routing } from "./Routing.js";
@@ -268,12 +268,14 @@ export default function App() {
   const data = useStore((s) => s.data);
   const live = useStore((s) => s.live);
   const dead = useStore((s) => s.dead);
+  const polling = useStore((s) => s.polling);
   const loginRequired = useStore((s) => s.loginRequired);
   const page = useStore((s) => s.page);
   const [dark, toggleTheme] = useTheme();
 
   useEffect(() => {
-    const onHash = () => useStore.setState({ page: (location.hash.slice(1) as Page) || "topology", sel: null });
+    // `go` has already moved the page and may have picked something on it since: only a page change that came from the address clears the selection.
+    const onHash = () => { if (pageOf() !== useStore.getState().page) useStore.setState({ page: pageOf(), sel: null }); };
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
   }, []);
@@ -305,7 +307,9 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-5">
           <span className="shrink-0 font-semibold">{self?.name ?? "…"}</span>
-          {dead ? <Pill tone="bad">unreachable</Pill> : <Pill tone={live ? "ok" : "warn"} pulse={live}>{live ? "live" : "polling"}</Pill>}
+          {dead
+            ? <span title="This node is not answering. The page shows what it last said, and keeps trying."><Pill tone="bad">unreachable</Pill></span>
+            : <span title={live ? "Updates are pushed as they happen." : polling ? "The live stream is not getting through, so the page asks every few seconds." : "Waiting for the live stream."}><Pill tone={live ? "ok" : "warn"} pulse={live}>{live ? "live" : polling ? "polling" : "reconnecting…"}</Pill></span>}
           {data?.operator && <span className="max-sm:hidden"><Pill tone="ok">signed in as {data.operator}</Pill></span>}
           <div className="ml-2 min-w-0 flex-1 overflow-hidden"><Health /></div>
           <div className="flex shrink-0 items-center gap-3">
