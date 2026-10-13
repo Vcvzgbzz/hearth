@@ -10,7 +10,7 @@ single response and still adds **nothing** to what `npm install` pulls down —
 the browser half is bundled from devDependencies and the package keeps its one
 runtime dependency.
 
-Five pages, and ⌘K jumps to anything on them:
+Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
 
 - **Topology**: this node, its backends, the hardware they share, and its peers,
   with requests drawn as they flow, over a strip of the last ten minutes. Click
@@ -101,7 +101,7 @@ The **Routing** page is a map of the routing you have set up, and it is where
 you change it. It shows only that: the names you send somewhere other than
 their own model, the rules they pass through, and the models and peers those
 end at. Every other name goes to its own model, which the node says in one
-line; **route a name** brings one onto the map.
+line; **+ type** brings one onto the map.
 
 - **The Router lists your types**: the names callers may ask for. **+ type**
   adds one of your own (`LLM`, `ImageGen`) or offers a model under its own
@@ -109,8 +109,9 @@ line; **route a name** brings one onto the map.
   changes it between "refuse it" and "run it as itself".
 - **A name's dot** is where its line starts. Drag it onto another model or a
   peer to send requests for that name there, onto a rule to have the rule
-  decide, or back onto its own model to undo. **add a new name** adds one
-  nothing serves yet, such as `auto`; it exists once it has been sent somewhere.
+  decide, or back onto its own model to undo. **A new type…** under **+ type**
+  adds one nothing serves yet, such as `auto`; it exists once it has been sent
+  somewhere.
 - **+ rule** adds a routing rule: a flow drawn as a box whose lines read as
   sentences, `If … send to …`, ending in `Otherwise …`. Start from a common
   one (borrow an idle model, send images or long prompts somewhere else, stay
@@ -206,8 +207,9 @@ config file since they are copies of it. A hand edit to the file is not a
 version.
 
 The **Topology** page is the other picture: the machines, hardware and
-backends, and the requests in flight. It is watched, not edited; backends,
-hardware and servers are changed on the Config page.
+backends, and the requests in flight. The strip over it adds a backend,
+hardware, a machine or a provider, as a draft that is reviewed and published
+like a routing change; the Config page edits the same settings as forms.
 
 ### Where changes go
 
