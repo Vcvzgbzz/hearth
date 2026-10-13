@@ -294,7 +294,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
             <Handle type="source" id={`step-${i}-back`} position={Position.Left} className="!opacity-0" style={{ left: -6 }} />
             {/* Every line is the same three columns, so the where-it-goes and the counts read in line:
                 the word, the conditions, and the fixed-width place the line ends at. */}
-            <span className="w-4 shrink-0 text-right text-[10px] tabular text-dim/70" title={`step ${i + 1}`}>{i + 1}</span>
+            <span className="w-4 shrink-0 text-right text-[10px] tabular text-dim/70" title={`line ${i + 1}`}>{i + 1}</span>
             <span className={cx("w-14 shrink-0 font-medium", i === last && "truncate", group && "ml-4")}>{word}</span>
             {i === last ? (
               <span className="min-w-0 flex-1" />
@@ -352,7 +352,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
           {group?.to === i && group.foot && (
             <div className="relative flex items-center px-3 text-[10px] italic text-dim" style={{ height: GROUP.foot }}>
               <span className="absolute left-[42px] top-0 h-1/2 w-px bg-dim/45" />
-              <span className="ml-[46px]">none of these: on to step {i + 2}</span>
+              <span className="ml-[46px]">none of these: on to line {i + 2}</span>
             </div>
           )}
           </Fragment>

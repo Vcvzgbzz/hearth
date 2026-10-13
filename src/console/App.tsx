@@ -211,14 +211,14 @@ function LoginCard() {
             {setup ? "set up hearth" : "log in to hearth"}
           </div>
           <p className="mt-1 text-dim">{setup
-            ? "This node has no operator yet. Create the login that opens the whole console — dashboard, config, controls — from anywhere on your network."
-            : "This page is loopback-only. A login opens the whole console — dashboard, config, controls — from anywhere on your network."}</p>
-          <input autoFocus value={user} onChange={(e) => setUser(e.target.value)} placeholder="username"
+            ? "This node has no operator yet. Create the login that opens the whole console — status, config, controls — from anywhere on your network."
+            : "From another machine this page needs a login. It opens the whole console — status, config, controls — from anywhere on your network."}</p>
+          <input autoFocus value={user} onChange={(e) => setUser(e.target.value)} placeholder="username" aria-label="username" autoComplete="username"
                  className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
-          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password"
+          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password" aria-label="password"
                  className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           {setup && (
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again"
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again" aria-label="password again"
                    className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           )}
           {err !== null && <div className="mt-2 text-sm text-bad">{err}</div>}
@@ -242,7 +242,7 @@ function KeyDialog() {
     <Dialog title="This node needs a key" size="sm" onClose={() => done(null)}>
         <form className="p-4" onSubmit={(e) => { e.preventDefault(); done(key); }}>
           <p className="text-dim">Reading is open; changing something needs one of the node's apiKeys. It is kept in this browser only.</p>
-          <input autoFocus type="password" value={key} onChange={(e) => setKey(e.target.value)}
+          <input autoFocus type="password" value={key} onChange={(e) => setKey(e.target.value)} aria-label="api key"
                  className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 font-mono focus:border-accent focus:outline-none" />
           <div className="mt-4 flex justify-end gap-2">
             <Button onClick={() => done(null)}>cancel</Button>
@@ -290,7 +290,7 @@ export default function App() {
           <span className="font-semibold tracking-tight max-md:hidden">hearth</span>
         </div>
         {PAGES.map((p) => (
-          <button key={p.id} onClick={() => go(p.id)} aria-current={page === p.id ? "page" : undefined}
+          <button key={p.id} onClick={() => go(p.id)} aria-current={page === p.id ? "page" : undefined} aria-label={p.label} title={p.label}
                   className={cx("mb-0.5 flex h-8 items-center gap-2.5 rounded-lg px-2 text-left transition-colors",
                     page === p.id ? "bg-muted font-medium text-fg" : "text-dim hover:bg-muted/60 hover:text-fg")}>
             <p.icon size={15} />

@@ -154,8 +154,10 @@ line; **route a name** brings one onto the map.
   each model in the list of places to send a line, so two copies of one model
   (one on a card, one on the CPU) are told apart at a glance.
 - **Dots and lines are coloured** by what they are plugged into: green for a
-  model here, violet for a peer, blue for a rule, teal for the fastest of
-  several or several in order, red for a refusal, amber for an action, grey for nowhere yet.
+  model here, violet for a peer, pink for a provider's model, blue for a rule,
+  teal for the fastest of several or several in order, red for a refusal, amber
+  for an action, grey for nowhere yet. The "?" beside the buttons shows each
+  colour beside what it means.
 - **Then try…** in a line's menu gives the line somewhere to go when the place
   it names fails before it answers. The line then ends at an **in order** node:
   the places to try, first to last, each with its own dot. **then try another**

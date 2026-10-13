@@ -21,9 +21,9 @@ type Path = (string | number)[];
 const SECTIONS: { key: string; label: string; hint: string; list?: true }[] = [
   { key: "backends", label: "Backends", hint: "Servers hearth fronts. A backend is its own queue." },
   { key: "resources", label: "Hardware", hint: "Cards and CPUs. Backends on the same exclusive card take turns." },
-  { key: "servers", label: "Servers", hint: "Other machines on your network that backends run on. Across the internet, use a peer." },
+  { key: "servers", label: "Machines", hint: "Other machines on your network that backends run on (`servers:` in the file). Across the internet, use a peer." },
   { key: "models", label: "Models & routes", hint: "Per-model routing, aliases, slots and parameters." },
-  { key: "flows", label: "Flows", hint: "Where requests go: the ids that enter each flow, and its steps in order. The Routing page draws these." },
+  { key: "flows", label: "Rules", hint: "Where requests go: the types each rule takes, and its lines in order (`flows:` in the file). The Routing page draws these." },
   { key: "actions", label: "Actions", hint: "What a flow's step can set off beside routing: a log line, or a call to a URL. A step names them under `do:`." },
   { key: "scheduler", label: "Lanes & queues", hint: "Lane priorities and ceilings, queue limits." },
   { key: "peers", label: "Peers", hint: "One entry per friend: how to reach them, the tokens each side presents, what you borrow." },
@@ -39,7 +39,7 @@ export const NEW: Record<string, { noun: string; scope: Scope; keys: string[]; l
   models: { noun: "model", scope: "model", keys: ["lane", "note"] },
   resources: { noun: "hardware", scope: "resource", keys: ["kind", "shared"] },
   servers: { noun: "machine", scope: "server", keys: ["host"] },
-  flows: { noun: "flow", scope: "flow", keys: ["inputs"] },
+  flows: { noun: "rule", scope: "flow", keys: ["inputs"] },
   actions: { noun: "action", scope: "action", keys: ["log", "call"] },
   "scheduler.lanes": { noun: "lane", scope: "lane", keys: ["priority"] },
 };
@@ -90,7 +90,7 @@ function secretHint(name: string, v: unknown): string | null {
   const vals = Array.isArray(v) ? v.flatMap((x) => (isObj(x) ? [x.key] : [x])) : isObj(v) ? Object.values(v) : [v];
   if (vals.some((x) => typeof x === "string" && STANDIN.test(x))
       && (name === "apiKeys" || name === "peerTokens" || name === "token" || name === "key")) {
-    return "stored in the file in plain text — `env:NAME` keeps it out of hearth.yaml";
+    return "shown as a stand-in, never the value itself; type over it to replace it. It is stored in the file in plain text — `env:NAME` keeps it out of hearth.yaml";
   }
   return null;
 }
@@ -530,7 +530,7 @@ export function NewDialog({ spec, taken, note, onClose, onCreate }: {
   const name = id.trim();
   const problem = !name ? null : taken.includes(name) ? `a ${spec.noun} named ${name} already exists`
     : typeof vals.url === "string" && vals.url !== "" && !/^https?:\/\/[^/:]+(:\d+)?(\/[^?#]*)?$/.test(vals.url.replace(/\/$/, "")) ? "the url needs a host and port, like http://127.0.0.1:8080"
-    : spec.scope === "server" && !String(vals.host ?? "").trim() ? "a server needs its address: an IP or hostname on your network"
+    : spec.scope === "server" && !String(vals.host ?? "").trim() ? "a machine needs its address: an IP or hostname on your network"
     : spec.scope === "peer" && !vals.url && !vals.accept ? "a peer needs a url (to borrow from it) or accept (to lend to it)"
     : spec.scope === "peer" && vals.url && !vals.token ? "borrowing needs the token you present to them" : null;
   // A model's id is usually one the backends already serve; offer those.

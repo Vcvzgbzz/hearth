@@ -57,7 +57,7 @@ export function Palette() {
         <div onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-2 border-b border-line px-3">
             <Search size={15} className="text-dim" />
-            <input autoFocus value={q} placeholder="Jump to a backend, peer, page — or lend, hold, pause…"
+            <input autoFocus value={q} aria-label="jump to, or do" placeholder="Jump to a backend, peer, page — or lend, hold, pause…"
                    onChange={(e) => { setQ(e.target.value); setAt(0); }}
                    onKeyDown={(e) => {
                      if (e.key === "ArrowDown") { e.preventDefault(); setAt((a) => Math.min(a + 1, hits.length - 1)); }

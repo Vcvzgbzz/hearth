@@ -19,7 +19,7 @@ const SECTION = { flow: "flows", action: "actions" } as const;
 /** What each thing on the map means, for the "?" beside the buttons. */
 const LEGEND: [string, string][] = [
   ["Router", "this node deciding where a request runs; the same Router the Topology page draws"],
-  ["A name with a dot", "a model name clients ask for; drag the dot to say where its requests go"],
+  ["Type", "a name clients ask for, drawn with a dot; drag the dot to say where its requests go"],
   ["Routing rule", "lines checked top to bottom; the first that fits decides"],
   ["In order", "places a line tries in turn: the next one when one fails before it answers"],
   ["\"the target\"", "the model that line sends to"],
@@ -28,7 +28,14 @@ const LEGEND: [string, string][] = [
   ["≤2", "the line takes at most that many at once; the rest go on down the list"],
   ["! and ?", "the line cannot work as drawn, or its model has not said whether it can"],
   ["Lane", "a queue with a priority: chat goes ahead of batch"],
-  ["Dot and line colours", Object.values(HUE).map((h) => h.says).join(" · ") + ", in the order green, violet, blue, teal, red, amber, grey: a dot wears the colour of what it is plugged into"],
+  ["In hearth.yaml", "a rule is a flow, its lines are its steps, a type is one of its inputs, and a machine is a server"],
+];
+/** The legend as the menu draws it: a swatch for each colour a dot or line can wear, then what each thing means. */
+const legend = (): Choice[] => [
+  { label: "a dot wears the colour of what it is plugged into", head: true },
+  ...Object.values(HUE).map((h) => ({ label: h.says, swatch: h.stroke, still: true })),
+  { label: "what is on the map", head: true },
+  ...LEGEND.map(([label, hint]) => ({ label, hint, still: true })),
 ];
 
 /** The choices for adding a rule: the common shapes, then a blank one. */
@@ -53,7 +60,7 @@ export function finding(draft: Doc): Choice[] {
   return [
     ...group("routing rules", rules.map((f) => ({ label: f.name, value: `flow:${f.name}`, mono: true, hint: f.inputs.length ? `takes ${f.inputs.join(", ")}` : "nothing reaches it yet" }))),
     ...group("actions", Object.keys(obj(draft.actions)).map((a) => ({ label: a, value: `action:${a}`, mono: true }))),
-    ...group("names that are routed", names.map((n) => ({ label: n, value: `name:${n}`, mono: true, hint: `goes into ${flows.find((f) => f.inputs.includes(n))!.name}` }))),
+    ...group("types that are routed", names.map((n) => ({ label: n, value: `name:${n}`, mono: true, hint: `goes into ${flows.find((f) => f.inputs.includes(n))!.name}` }))),
     ...group("models a line ends at", models.map((m) => ({ label: m, value: `model:${m}`, mono: true }))),
     ...group("peers a line ends at", peers.map((p) => ({ label: p, value: `peer:${p}`, mono: true }))),
   ];
@@ -257,7 +264,7 @@ export function EditBar() {
           <Search size={13} />find<kbd className="rounded border border-line px-1 text-[10px]">/</kbd>
         </button>
         <button type="button" aria-label="what the map shows" title="what the map shows" className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-panel text-dim hover:bg-muted hover:text-fg"
-                onClick={(e) => choose(e, LEGEND.map(([label, hint]) => ({ label, hint })), () => {})}>
+                onClick={(e) => choose(e, legend(), () => {})}>
           <CircleHelp size={14} />
         </button>
         <VersionsButton />
@@ -418,6 +425,15 @@ export function Menu() {
             i.label === "" ? <div key={k} className="mx-1 my-1 border-t border-line" />
               : <div key={k} className="px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-dim">{i.label}</div>
           ) : (
+            i.still ? (
+              <div key={k} className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px]">
+                {i.swatch && <span className="size-2.5 shrink-0 rounded-full" style={{ background: i.swatch }} />}
+                <span className="min-w-0 flex-1">
+                  <span className="block">{i.label}</span>
+                  {i.hint && <span className="block whitespace-normal text-[11px] text-dim">{i.hint}</span>}
+                </span>
+              </div>
+            ) :
             <button key={k} role="menuitem" autoFocus={!long && k === m.items.findIndex((x) => !x.head)} disabled={i.off}
                     className={cx("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-line/60 focus:bg-line/60 focus:outline-none disabled:opacity-40", i.mono && mono, i.danger && "text-bad", i.on && "font-medium")}
                     onClick={() => { closeMenu(); m.onPick(i.value ?? i.label); }}>
@@ -675,7 +691,7 @@ function Names({ flow, names, options }: { flow: string; names: string[]; option
         <button type="button" className={cx(PICK, "h-7 border-dashed text-dim")}
                 onClick={(e) => choose(e, [{ label: "A new name…", value: "\u0000new", hint: "one nothing serves yet, like auto" }, { label: "a name this node already answers to", head: true }, ...options.filter((o) => !names.includes(o)).map((o) => ({ label: o, mono: true }))],
                   (v) => (v === "\u0000new" ? setTyping("") : add(v)), { says: "a new name:", make: add })}>
-          <Plus size={12} />a model name
+          <Plus size={12} />a type
         </button>
       ) : (
         <input autoFocus aria-label="a new model name" placeholder="any name, e.g. auto" value={typing} onChange={(e) => setTyping(e.target.value)}
@@ -761,7 +777,7 @@ export function EditRail() {
               </div>
               <div className="mb-1 text-[12px] font-medium">When a request asks for</div>
               <Names flow={sel.id} names={list(entry.inputs)} options={offered} />
-              {list(entry.inputs).length === 0 && <div className="mt-1 text-[11px] text-warn">Nothing reaches this rule yet. Add a model name here, or drag a name's blue dot from the node onto the rule.</div>}
+              {list(entry.inputs).length === 0 && <div className="mt-1 text-[11px] text-warn">Nothing reaches this rule yet. Add a type here, or drag a type's blue dot from the Router onto the rule.</div>}
               <div className="mb-1 mt-4 text-[12px] font-medium">decide where it goes</div>
               <Lines name={sel.id} flow={entry} at={opened?.line ?? null} />
             </>
