@@ -111,6 +111,8 @@ const host = url.slice("http://".length);
     const r = await fetch(`${url}${path}`, { method: "POST", headers: { Authorization: "Bearer my-key" }, body: "null" });
     assert.equal(r.status, 400, `${path} answers a null body as the caller's mistake`);
   }
+}
+
 /* ------------------------------------------- the browser's other doors */
 
 {
