@@ -18,7 +18,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "models", "keys", "queue", "logs", "config"] as const;
+export const PAGE_IDS = ["topology", "routing", "models", "lending", "keys", "queue", "logs", "config"] as const;
 export type Page = (typeof PAGE_IDS)[number];
 /** The page the address names; anything else is the first one. */
 export const pageOf = (): Page => PAGE_IDS.find((p) => p === location.hash.slice(1)) ?? "topology";
@@ -104,6 +104,16 @@ function take(next: UiData): void {
   const was = useStore.getState().data?.build;
   if (was !== undefined && next.build !== undefined && was !== next.build) { location.reload(); return; }
   useStore.setState({ data: next, dead: false });
+}
+
+/** Ask the node for the page's data now: what a save changed shows at once, stream or no stream. */
+export async function refresh(): Promise<void> {
+  try {
+    const r = await fetch("/ui/data", { cache: "no-store" });
+    if (r.ok) take((await r.json()) as UiData);
+  } catch {
+    // The stream, or the next look at the node, says what became of it.
+  }
 }
 
 export function connect(): void {

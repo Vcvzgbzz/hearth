@@ -1,5 +1,5 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
@@ -11,6 +11,7 @@ import { go, login, logout, pageOf, restartNode, select, useStore, type Page } f
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
 import { Routing } from "./Routing.js";
+import { Lending } from "./Lending.js";
 import { Topology } from "./Topology.js";
 import { Button, Card, cx, Dialog, Pill } from "./ui.js";
 
@@ -18,6 +19,7 @@ const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "routing", label: "Routing", icon: Split },
   { id: "models", label: "Models", icon: Boxes },
+  { id: "lending", label: "Lending", icon: Handshake },
   { id: "keys", label: "Keys", icon: KeyRound },
   { id: "queue", label: "Queue", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
@@ -364,6 +366,7 @@ export default function App() {
         ) : (
           <div className="min-h-0 flex-1 overflow-auto p-5">
             {page === "models" && <Models />}
+            {page === "lending" && <Lending />}
             {page === "keys" && <Keys />}
             {page === "queue" && <><Queue /><History /></>}
             {/* What has been published, and the way back to it, wherever the file is edited. */}

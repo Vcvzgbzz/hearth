@@ -107,6 +107,7 @@ export function Inspector() {
     );
   } else if (sel.kind === "peer") {
     const p = d.net.nodes.find((n) => n.name === sel.id);
+    const owed = (live.ledger ?? []).find((l) => l.peer === sel.id);
     if (p) body = (
       <>
         <Row k="status">{p.up ? <Pill tone="ok">up</Pill> : <Pill tone="bad">down</Pill>}</Row>
@@ -123,6 +124,13 @@ export function Inspector() {
             </div>
           ))}
         </Row>
+        {owed && (
+          <>
+            <Row k="lent"><span className="tabular"><UsedCell used={owed.lent.month} /></span></Row>
+            <Row k="borrowed"><span className="tabular"><UsedCell used={owed.borrowed.month} /></span></Row>
+            {owed.closed !== undefined && <Row k="lending to it">{owed.closed === null ? <Pill tone="ok">open</Pill> : <span className="text-warn">closed: {owed.closed}</span>}</Row>}
+          </>
+        )}
         {(p.unmapped ?? []).length > 0 && (
           <Row k="also serves">
             {p.unmapped!.map((m) => (
@@ -288,7 +296,7 @@ export function Models() {
  * config page does.
  */
 /** A count as a person reads it: 950, 12.4k, 3.1M. */
-const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
+export const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
 
 /** Dollars as a person reads them: cents for small sums, whole dollars for large ones. */
 const money = (n: number): string => `$${n < 10 ? n.toFixed(2) : n < 1000 ? n.toFixed(0) : short(Math.round(n))}`;

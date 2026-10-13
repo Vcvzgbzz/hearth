@@ -269,6 +269,9 @@ export interface Canary {
 /** Requests and tokens over some days. */
 export interface Used { requests: number; failed: number; in: number; out: number; /** How much of `in` was read from a prompt cache. */ cached?: number; /** Dollars, at the prices the models carry now. */ cost?: number }
 
+/** What one peer may take: the models it may run and how much of them. */
+export interface LendTerms { models: string[]; tokensPerDay: number; maxConcurrent: number; rateLimit: number; off?: boolean }
+
 export interface UiData {
   /** Which console the node serves now; the page reloads when it stops being the one it was loaded from. */
   build?: string;
@@ -309,4 +312,8 @@ export interface UiData {
   keys?: { label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used; rule?: { expires: number | null; requestsPerMinute: number; tokensPerDay: number; dollarsPerDay?: number } | null }[];
   /** Callers that are not keys (this machine with none, peers) and what they used. */
   others?: { caller: string; today: Used; month: Used }[];
+  /** Each peer's lines in the ledger: tokens it ran here, tokens this node ran there, and why it is turned away now, if it is. */
+  ledger?: { peer: string; lent: { today: Used; month: Used }; borrowed: { today: Used; month: Used }; closed?: string | null; terms?: LendTerms }[];
+  /** The limits a peer is held to unless it has its own. */
+  lendDefaults?: { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
 }

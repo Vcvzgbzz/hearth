@@ -58,6 +58,19 @@ now also carries `X-Request-Id`.
   request with another line that fits goes straight there for a while.
 - **A flow can take a backend's own path**, not only chat.
 
+### Lending
+
+- **Limits per peer.** `peers.<name>.lend` restates any of `lending.*` for one
+  peer: its own `models`, `maxConcurrent`, `rateLimit` and `tokensPerDay`.
+- **Tokens a day.** `lending.tokensPerDay`, for every peer or for one. A peer
+  that has used them is shown a node that lends it nothing, and a `429` if it
+  asks.
+- **Lent and borrowed.** Requests and tokens per peer, each way, over the
+  month usage is kept: `GET /lending`, and on each peer in the console.
+- **A Lending page** in the console: each peer's limits changed in place, a
+  switch to stop lending to one peer (`lend: { off: true }`), and its use by
+  model and by day.
+
 ### Providers
 
 - **Cloud backends.** A provider's OpenAI-compatible API as a backend, with its
