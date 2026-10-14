@@ -3,6 +3,7 @@
  *
  *   - a call reaching the backend without its key, or with the caller's key for this node
  *   - a literal key in the file reaching the console
+ *   - a backend's own headers left off a call, shown to the console, or standing in for its key
  *   - a cloud backend given hardware, a kind that reads warm state, or no list of models
  */
 import assert from "node:assert/strict";
@@ -19,13 +20,13 @@ import { silentLogger } from "../src/log.js";
 import { createNode } from "../src/server.js";
 
 // A provider: nothing is answered without its key, and it lists more models than this node offers.
-const seen: { url: string; auth: string | undefined; model?: string; wantsUsage?: boolean }[] = [];
+const seen: { url: string; auth: string | undefined; unit: unknown; pass: unknown; model?: string; wantsUsage?: boolean }[] = [];
 const provider = createServer(async (req, res) => {
   let body = "";
   for await (const c of req) body += c;
   const say = (status: number, o: unknown) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(o)); };
   const sent = (body ? JSON.parse(body) : {}) as { model?: string; stream?: boolean; stream_options?: { include_usage?: boolean } };
-  seen.push({ url: req.url ?? "", auth: req.headers.authorization, ...(body ? { model: sent.model, wantsUsage: sent.stream_options?.include_usage === true } : {}) });
+  seen.push({ url: req.url ?? "", auth: req.headers.authorization, unit: req.headers["x-unit"], pass: req.headers["x-pass"], ...(body ? { model: sent.model, wantsUsage: sent.stream_options?.include_usage === true } : {}) });
   if (req.headers.authorization !== "Bearer provider-secret") return say(401, { error: { message: "no key" } });
   if (req.url === "/v1/models") return say(200, { data: [{ id: "their-large" }, { id: "their-small" }, { id: "their-other" }] });
   if (req.url === "/v1/chat/completions" && sent.stream) {
@@ -45,6 +46,7 @@ const provider = createServer(async (req, res) => {
 await new Promise<void>((r) => provider.listen(0, "127.0.0.1", r));
 const there = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
 
+process.env.CLOUD_TEST_UNIT = "unit-7";
 const file = (backend: string) => `name: node-under-test
 backends:
   away:
@@ -59,6 +61,7 @@ apiKeys:
 const good = `    url: ${there}
     cloud: true
     key: provider-secret
+    headers: {X-Unit: "env:CLOUD_TEST_UNIT", x-pass: header-secret, Authorization: Bearer not-the-key}
     serves: [their-large, their-small]
     routes:
       - {path: /v1/embeddings, queue: false}`;
@@ -94,12 +97,13 @@ try {
 
   assert.ok(seen.every((s) => s.auth === "Bearer provider-secret"), "nothing reaches it without its key, the catalogue read included");
   assert.ok(seen.some((s) => s.url === "/v1/models"));
+  assert.ok(seen.every((s) => s.unit === "unit-7" && s.pass === "header-secret"), "its own headers ride on every call, one read from the environment, and none stands in for the key");
 
   // What the console is told: that it is a provider's, and never the key.
   const net = await (await fetch(`${url}/network`, { headers: ours })).text();
   const cfg = await (await fetch(`${url}/config`, { headers: ours })).text();
   assert.match(net, /"cloud":true/);
-  for (const page of [net, cfg]) assert.ok(!page.includes("provider-secret"), "the key stays out of what the console reads");
+  for (const page of [net, cfg]) assert.ok(!page.includes("provider-secret") && !page.includes("header-secret"), "the key and a header's value stay out of what the console reads");
   assert.match(cfg, /hearth-secret/, "a literal key is shown as a stand-in");
   // A stream's cost is asked of the provider whoever is calling, and the report reaches only a caller who asked for it.
   const used = async () => ((await (await fetch(`${url}/usage?days=1`, { headers: ours })).json()) as { usage: Record<string, Record<string, Record<string, { in: number; out: number }>>> }).usage;

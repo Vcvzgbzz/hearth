@@ -26,6 +26,9 @@ flows:
   any path under its `routes`, and the read of its model list. A key the client
   sent for this node is never passed on. `key` works on any backend, cloud or
   not, for a server of your own that wants one.
+- `headers` is for an API that asks for more than the key: each `name: value`
+  under it goes out on the same calls, and a value may be `env:NAME`. The
+  console is shown none of them, as with the key.
 - `cloud` says it is not yours: it takes no `resources` and no `server`, its
   `kind` is `none`, and `serves` is required, so the node offers the models you
   name and not the provider's whole list.
@@ -81,6 +84,14 @@ backends:
 ```
 
 - The key goes out as `x-api-key` with the API's version header.
+- A key that belongs to the whole organisation is refused unless the request
+  says which workspace it is for. `headers` on the backend sends that with
+  every call:
+
+  ```yaml
+      headers:
+        anthropic-workspace-id: env:PROVIDER_WORKSPACE
+  ```
 - **Prompt caching is on.** Each request's system prompt, its tools and the
   conversation so far are marked as cached prefixes, so the next turn of the
   same conversation pays for them as a cache read. A cache write costs more

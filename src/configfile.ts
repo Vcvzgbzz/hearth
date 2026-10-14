@@ -78,7 +78,7 @@ function secretPaths(d: Record<string, unknown>): Path[] {
   each(d.peers, (name) => out.push(["peers", name, "token"], ["peers", name, "accept"]));
   // Only a hash, but one that can be attacked offline, and nothing on the page needs it.
   out.push(["operator", "passHash"]);
-  each(d.backends, (name) => out.push(["backends", name, "key"]));
+  each(d.backends, (name, b) => { out.push(["backends", name, "key"]); headers(b.headers, ["backends", name, "headers"]); });
   // What a webhook is sent to prove who is calling.
   each(d.actions, (name, a) => headers(a.headers, ["actions", name, "headers"]));
   if (isObj(d.canary) && isObj(d.canary.notify)) headers(d.canary.notify.headers, ["canary", "notify", "headers"]);

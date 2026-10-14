@@ -75,7 +75,8 @@ now also carries `X-Request-Id`.
 
 - **Cloud backends.** A provider's OpenAI-compatible API as a backend, with its
   key, so a rule can send some requests out and keep the rest home. See
-  [A provider's models](docs/providers.md).
+  [A provider's models](docs/providers.md). `backends.<name>.headers` sends
+  what an API asks for beside the key.
 - **Anthropic's Messages API**, with prompt caching on by default and
   `promptCacheTtl: 1h` for conversations whose requests come more than five
   minutes apart. Callers still send and receive chat completions.

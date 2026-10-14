@@ -503,7 +503,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     const emulate = cfg.models[model]?.emulate ?? null;
     const { count, ...deadline } = opts;
     const url = to.url;
-    const reach = { ...deadline, headers: backendAuth(to.format, to.key) };
+    const reach = { ...deadline, headers: backendAuth(to.format, to.key, to.headers) };
     const sent = pool.outboundBody(model, payload);
     if (to.format === "anthropic") {
       const up = await send(`${url}/v1/messages`, { json: toAnthropic(sent, to.promptCache, to.promptCacheTtl), ...reach });
@@ -2464,7 +2464,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         ...(sendBody && sendBody.length > 0 ? { raw: sendBody } : {}),
         // Client headers minus hop-by-hop, and minus our own key if that is what it carries.
         // A backend with a key of its own is sent that, whatever the client carried.
-        headers: { ...stripOurKey(req), ...backendAuth(to.cfg.format, to.cfg.key) } as Record<string, string>,
+        headers: { ...stripOurKey(req), ...backendAuth(to.cfg.format, to.cfg.key, to.cfg.headers) } as Record<string, string>,
         signal: ctrl.signal,
         ...backendDeadline(to.cfg),
       });

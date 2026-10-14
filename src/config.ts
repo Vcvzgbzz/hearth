@@ -133,6 +133,8 @@ export interface BackendConfig {
   hold: HoldDecl | null;
   /** Sent to this backend as `Authorization: Bearer` on every call, in place of anything the client sent. null sends none. */
   key: string | null;
+  /** Sent to this backend on every call beside its key, for an API that asks for more than one. */
+  headers: Record<string, string>;
   /**
    * Someone else's server, reached over the internet: it has no hardware here and no warm state,
    * and serves only what `serves` names. A request sent to it leaves this machine and this network.
@@ -152,10 +154,14 @@ export type BackendFormat = (typeof BACKEND_FORMATS)[number];
 export const CACHE_TTLS = ["5m", "1h"] as const;
 export type CacheTtl = (typeof CACHE_TTLS)[number];
 
-/** What a backend is sent to say who is calling: its key in the header its API reads, and for Messages the version. */
-export function backendAuth(format: BackendFormat, key: string | null): Record<string, string> {
-  if (format === "anthropic") return { "anthropic-version": "2023-06-01", ...(key ? { "x-api-key": key } : {}) };
-  return key ? { authorization: `Bearer ${key}` } : {};
+/**
+ * What a backend is sent to say who is calling: its key in the header its API reads, for Messages
+ * the version, and its own `headers`, none of which stands in for the key's.
+ */
+export function backendAuth(format: BackendFormat, key: string | null, headers: Record<string, string> = {}): Record<string, string> {
+  const more = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+  if (format === "anthropic") return { ...more, "anthropic-version": "2023-06-01", ...(key ? { "x-api-key": key } : {}) };
+  return { ...more, ...(key ? { authorization: `Bearer ${key}` } : {}) };
 }
 
 /**
@@ -1436,6 +1442,8 @@ export function parseConfig(raw: unknown): HearthConfig {
       promptCache: bool(entry.promptCache, `${at}.promptCache`, true),
       promptCacheTtl: cacheTtl(entry.promptCacheTtl, `${at}.promptCacheTtl`),
       key: entry.key === undefined ? null : resolveSecret(str(entry.key, `${at}.key`), `${at}.key`),
+      headers: Object.fromEntries(Object.entries(asRecord(entry.headers ?? {}, `${at}.headers`))
+        .map(([k, v]) => [k, resolveSecret(str(v, `${at}.headers.${k}`), `${at}.headers.${k}`)])),
       cloud,
       url: backendUrl(entry, at, server === null ? null : servers[server]!.host),
       server,
