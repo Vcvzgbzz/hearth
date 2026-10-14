@@ -3,7 +3,8 @@
  *
  *   - a request the Messages API would refuse: no max_tokens, a system turn among the messages,
  *     two user turns in a row, a tool result or a tool call in the wrong shape
- *   - cache marks missing, or present when switched off
+ *   - cache marks missing, or present when switched off; more marks than the API takes
+ *   - a system message said mid-conversation moved to the front, where it changes a cached prefix
  *   - an answer a chat-completions client cannot read: text, tool calls, finish reason, usage
  *   - a stream that loses a delta, never ends, or reports usage to a caller who did not ask
  *   - the key sent as a bearer token, which this API does not read
@@ -39,12 +40,38 @@ assert.equal(out.max_tokens, 4096, "the API will not choose a limit, so one is a
 assert.deepEqual(out.system, [{ type: "text", text: "be brief", cache_control: { type: "ephemeral" } }]);
 assert.deepEqual(out.messages.map((m) => m.role), ["user", "assistant", "user"], "turns alternate: two user messages are one turn");
 assert.deepEqual(out.messages[0]!.content, [{ type: "text", text: "one" }, { type: "text", text: "two" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }]);
-assert.deepEqual(out.messages[1]!.content, [{ type: "tool_use", id: "call_1", name: "look", input: { q: "x" } }], "an empty reply beside a tool call sends no empty text");
+assert.deepEqual(out.messages[1]!.content, [{ type: "tool_use", id: "call_1", name: "look", input: { q: "x" }, cache_control: { type: "ephemeral" } }], "an empty reply beside a tool call sends no empty text");
 assert.deepEqual(out.messages[2]!.content, [{ type: "tool_result", tool_use_id: "call_1", content: "found", cache_control: { type: "ephemeral" } }], "the conversation so far ends the cached prefix");
 assert.deepEqual(out.tools, [{ name: "look", description: "looks", input_schema: tool.function.parameters, cache_control: { type: "ephemeral" } }]);
 assert.deepEqual([out.tool_choice, out.stop_sequences, out.stream], [{ type: "any" }, ["END"], true]);
 assert.ok(!JSON.stringify(toAnthropic(asked, false)).includes("cache_control"), "switched off, nothing is marked");
 assert.equal((toAnthropic({ ...asked, max_completion_tokens: 50 }, true) as Doc).max_tokens, 50);
+
+// What a later request reads from the cache is what an earlier one marked, unchanged.
+type Sent = { system?: Doc[]; messages: { role: string; content: Doc[] }[]; tools?: Doc[] };
+const marks = (v: unknown): number => JSON.stringify(v).split('"cache_control"').length - 1;
+const unmarked = (v: unknown): unknown => JSON.parse(JSON.stringify(v), (k, x: unknown) => (k === "cache_control" ? undefined : x));
+const talk = [
+  { role: "system", content: "be brief" },
+  { role: "user", content: "one" },
+  { role: "assistant", content: "two" },
+  { role: "user", content: "three" },
+];
+const first = toAnthropic({ model: "m", tools: [tool], messages: talk }, true) as Sent;
+assert.equal(marks(first), 4, "tools, system and the last two turns: as many marks as the API takes");
+assert.deepEqual(first.messages.map((m) => marks(m)), [0, 1, 1], "the turn before the last is marked too, for a caller that rewrites its newest message");
+const later = toAnthropic({ model: "m", tools: [tool], messages: [...talk, { role: "assistant", content: "four" }, { role: "system", content: "now be long" }, { role: "user", content: "five" }] }, true) as Sent;
+assert.deepEqual(unmarked(later.system), unmarked(first.system), "a system message said later does not change the system prompt");
+assert.deepEqual(unmarked(later.messages.slice(0, 3)), unmarked(first.messages), "nor anything said before it");
+assert.deepEqual(later.messages.at(-1), { role: "user", content: [{ type: "text", text: "now be long" }, { type: "text", text: "five", cache_control: { type: "ephemeral" } }] }, "it stays where it was said");
+assert.equal(marks(later), 4);
+// A system message between a tool call and its result: the result still opens the turn.
+const between = toAnthropic({ model: "m", messages: [...asked.messages.slice(0, 4), { role: "system", content: "careful" }, asked.messages[4]] }, false) as Sent;
+assert.deepEqual(between.messages.at(-1)!.content, [{ type: "tool_result", tool_use_id: "call_1", content: "found" }, { type: "text", text: "careful" }]);
+// The longer lifetime is said on every mark; the default is left for the API to fill in.
+const hour = toAnthropic({ model: "m", tools: [tool], messages: talk }, true, "1h") as Sent;
+assert.deepEqual(hour.system, [{ type: "text", text: "be brief", cache_control: { type: "ephemeral", ttl: "1h" } }]);
+assert.equal(JSON.stringify(hour).split('"ttl":"1h"').length - 1, 4);
 
 // The answer, on its own.
 const answer = fromAnthropic({
@@ -102,6 +129,16 @@ flows:
 apiKeys:
   - {key: ours-secret, label: app}
 `);
+const hourPath = join(mkdtempSync(join(tmpdir(), "hearth-anthropic-")), "hearth.yaml");
+const withTtl = (ttl: string): string => { writeFileSync(hourPath, `name: n
+backends:
+  away: {url: "http://127.0.0.1:1", cloud: true, format: anthropic, promptCacheTtl: ${ttl}, serves: [their-model]}
+flows:
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+`); return hourPath; };
+assert.equal(loadConfig(withTtl("1h")).backends[0]!.promptCacheTtl, "1h");
+assert.throws(() => loadConfig(withTtl("2h")), /promptCacheTtl/, "a lifetime the API does not offer is refused when the file is read");
+assert.equal(loadConfig(cfgPath).backends[0]!.promptCacheTtl, "5m");
 const node = createNode(loadConfig(cfgPath), silentLogger);
 node.start();
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));

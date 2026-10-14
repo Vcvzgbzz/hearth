@@ -85,6 +85,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     key: { type: "secret", desc: "Sent to this backend as its bearer key on every call. env:NAME keeps it out of the file." },
     format: { type: "enum", options: ["openai", "anthropic"], desc: "The API it speaks. anthropic is the Messages API: requests and answers are rewritten, so callers still see chat completions.", def: "openai" },
     promptCache: { type: "bool", desc: "With format anthropic: mark each request's system prompt, tools and conversation so far for the provider's prompt cache.", def: true },
+    promptCacheTtl: { type: "enum", options: ["5m", "1h"], desc: "With promptCache: how long the provider keeps a prefix after its last use. 1h costs more to write and is worth it where a conversation's requests come more than five minutes apart.", def: "5m" },
     cloud: { type: "bool", desc: "A provider's server on the internet: no hardware here, and only the models under serves. Requests sent to it leave this network.", def: false },
   },
   activity: {

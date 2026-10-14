@@ -76,8 +76,9 @@ now also carries `X-Request-Id`.
 - **Cloud backends.** A provider's OpenAI-compatible API as a backend, with its
   key, so a rule can send some requests out and keep the rest home. See
   [A provider's models](docs/providers.md).
-- **Anthropic's Messages API**, with prompt caching on by default. Callers still
-  send and receive chat completions.
+- **Anthropic's Messages API**, with prompt caching on by default and
+  `promptCacheTtl: 1h` for conversations whose requests come more than five
+  minutes apart. Callers still send and receive chat completions.
 - **Prices.** A model can carry a price per million tokens, with one of its own
   for input read from a prompt cache; usage is then shown as spend.
 

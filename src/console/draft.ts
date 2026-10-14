@@ -369,10 +369,26 @@ export function retyped(doc: Doc, from: string, to: string): Doc | null {
 /** Where a type sits in the Router's list is kept with the layout, as a rank in `y`. */
 export const RANK = "routing/order:";
 
-/** `names` in the order they were put in: ranked ones first by rank, then the rest as they come. */
-export function ordered(layout: Record<string, { x: number; y: number }> | undefined, names: string[]): string[] {
-  const rank = (n: string) => layout?.[RANK + n]?.y ?? Infinity;
+/** Where the callers of a router stand among the others in the topology, kept the same way; the default router's are `default`. */
+export const BAYS = "topology/order:";
+
+const isOrder = (id: string): boolean => id.startsWith(RANK) || id.startsWith(BAYS);
+
+/** `names` in the order they were put in: ranked ones first by rank, then the rest as they come. `under` is whose order it is. */
+export function ordered(layout: Record<string, { x: number; y: number }> | undefined, names: string[], under = RANK): string[] {
+  const rank = (n: string) => layout?.[under + n]?.y ?? Infinity;
   return names.map((n, i) => [n, i] as const).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([n]) => n);
+}
+
+/**
+ * Put `name` where it was let go among `names`, the order they stand in now: after every other whose
+ * middle (`middles`, by name) `x` has passed. Let go where it already stands, nothing changes.
+ */
+export function movedBay(doc: Doc, names: string[], name: string, x: number, middles: Record<string, number>): Doc {
+  const next = names.filter((n) => n !== name);
+  next.splice(next.filter((n) => (middles[n] ?? Infinity) < x).length, 0, name);
+  if (!names.includes(name) || next.every((n, i) => n === names[i])) return doc;
+  return next.reduce<Doc>((d, n, k) => put(d, "layout", BAYS + n, { x: 0, y: k }), doc);
 }
 
 /** Move a type `by` places in the list `names`, which is the order they are shown in now. */
@@ -386,11 +402,11 @@ export function movedName(doc: Doc, names: string[], name: string, by: number): 
 }
 
 /** Has a node been placed by hand? */
-export const arranged = (doc: Doc): boolean => Object.keys(obj(doc.layout)).some((id) => !id.startsWith(RANK));
+export const arranged = (doc: Doc): boolean => Object.keys(obj(doc.layout)).some((id) => !isOrder(id));
 
-/** The draft with every node back where the automatic arrangement puts it; the order of the types is kept. */
+/** The draft with every node back where the automatic arrangement puts it; the orders things were put in are kept. */
 export function tidied(doc: Doc): Doc {
-  const kept = Object.fromEntries(Object.entries(obj(doc.layout)).filter(([id]) => id.startsWith(RANK)));
+  const kept = Object.fromEntries(Object.entries(obj(doc.layout)).filter(([id]) => isOrder(id)));
   const { layout: _, ...rest } = doc;
   return Object.keys(kept).length ? { ...rest, layout: kept } : rest;
 }

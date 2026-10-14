@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { added, followed, pastedAll, RANK, routeTyped, summary, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, wholes, type Copied, type Doc, type Facts, type Landing, type Picked } from "./draft.js";
+import { added, BAYS, followed, pastedAll, RANK, routeTyped, summary, factsOf, isObj, nodeOf, obj, opsOf, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, wholes, type Copied, type Doc, type Facts, type Landing, type Picked } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 
 /** A whole draft and the router it was shown by, to go back to. */
@@ -450,12 +450,12 @@ export function addRouter(name: string, copy: boolean): void {
   toast("ok", `router ${name} added — choose who uses it`);
 }
 
-/** Take a router away, with the places kept for its map. */
+/** Take a router away, with the places kept for its map and where its callers stood in the topology. */
 export function removeRouter(name: string): void {
   const full = whole(useEdit.getState());
   if (!full) return;
   const { [name]: _, ...others } = obj(full.routers);
-  const layout = Object.fromEntries(Object.entries(obj(full.layout)).filter(([id]) => !id.startsWith(`routing@${name}/`)));
+  const layout = Object.fromEntries(Object.entries(obj(full.layout)).filter(([id]) => !id.startsWith(`routing@${name}/`) && id !== BAYS + name));
   // Whoever went by it goes where everyone else does.
   const callers = Object.fromEntries(Object.entries(obj(full.callers)).filter(([, r]) => r !== name));
   const { routers: _r, layout: _l, callers: _c, ...rest } = full;

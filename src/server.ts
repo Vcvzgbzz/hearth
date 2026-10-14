@@ -506,7 +506,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     const reach = { ...deadline, headers: backendAuth(to.format, to.key) };
     const sent = pool.outboundBody(model, payload);
     if (to.format === "anthropic") {
-      const up = await send(`${url}/v1/messages`, { json: toAnthropic(sent, to.promptCache), ...reach });
+      const up = await send(`${url}/v1/messages`, { json: toAnthropic(sent, to.promptCache, to.promptCacheTtl), ...reach });
       if (to.key && refusedKey(up.status) && !res.headersSent) { await up.text(); throw new BackendFailed(502, KEY_REFUSED); }
       if (spare && up.status >= 500 && !res.headersSent) throw new BackendFailed(up.status, (await up.text()).slice(0, 200));
       const asks = typeof sent.stream_options === "object" && sent.stream_options !== null && (sent.stream_options as Record<string, unknown>).include_usage === true;

@@ -5,6 +5,7 @@
 import type { ServerResponse } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 
+import type { CacheTtl } from "./config.js";
 import { streamErrorFrame } from "./emulate.js";
 import { MAX_HELD_CHARS, type UpstreamResponse } from "./upstream.js";
 import type { Meter } from "./usage.js";
@@ -47,29 +48,35 @@ function args(text: unknown): Doc {
 }
 
 /** The last of these, marked as where a cached prefix ends. */
-function marked<T extends Doc>(items: T[]): T[] {
-  return items.length === 0 ? items : [...items.slice(0, -1), { ...items.at(-1)!, cache_control: { type: "ephemeral" } }];
+function marked<T extends Doc>(items: T[], ttl: CacheTtl): T[] {
+  return items.length === 0 ? items : [...items.slice(0, -1), { ...items.at(-1)!, cache_control: { type: "ephemeral", ...(ttl === "5m" ? {} : { ttl }) } }];
 }
 
 /**
- * A chat completion request as a Messages request. With `cache`, the system prompt, the tools and
+ * A chat completion request as a Messages request. With `cache`, the tools, the system prompt and
  * the conversation so far are each marked as a cached prefix, so the next turn of the same
  * conversation is billed for them as a read.
  */
-export function toAnthropic(body: Doc, cache: boolean): Doc {
+export function toAnthropic(body: Doc, cache: boolean, ttl: CacheTtl = "5m"): Doc {
   let system: Doc[] = [];
   const messages: { role: string; content: Doc[] }[] = [];
   // The API takes turns that alternate; neighbours of one role are one turn.
   const add = (role: string, content: Doc[]): void => {
     if (content.length === 0) return;
     const last = messages.at(-1);
-    if (last?.role === role) last.content.push(...content);
-    else messages.push({ role, content });
+    if (last?.role !== role) messages.push({ role, content });
+    // Results answer the turn before, and the API wants them ahead of anything else said in theirs.
+    else if (content[0]!.type === "tool_result") last.content.splice(last.content.findLastIndex((b) => b.type === "tool_result") + 1, 0, ...content);
+    else last.content.push(...content);
   };
   for (const m of list(body.messages)) {
     if (!isObj(m)) continue;
-    if (m.role === "system" || m.role === "developer") system.push(...blocks(m.content));
-    else if (m.role === "tool") add("user", [{ type: "tool_result", tool_use_id: String(m.tool_call_id ?? ""), content: textOf(m.content) }]);
+    // Only what opens the conversation is the system prompt. A system message said later stays where it
+    // stands: moved up, it would change the start of a prefix the provider has cached, and all of it is paid for again.
+    if (m.role === "system" || m.role === "developer") {
+      if (messages.length === 0) system.push(...blocks(m.content));
+      else add("user", blocks(m.content));
+    } else if (m.role === "tool") add("user", [{ type: "tool_result", tool_use_id: String(m.tool_call_id ?? ""), content: textOf(m.content) }]);
     else if (m.role === "assistant") {
       const calls = list(m.tool_calls).flatMap((c): Doc[] =>
         isObj(c) && isObj(c.function) ? [{ type: "tool_use", id: String(c.id ?? ""), name: String(c.function.name ?? ""), input: args(c.function.arguments) }] : []);
@@ -79,10 +86,11 @@ export function toAnthropic(body: Doc, cache: boolean): Doc {
   let tools = list(body.tools).flatMap((t): Doc[] =>
     isObj(t) && isObj(t.function) ? [{ name: String(t.function.name ?? ""), ...(typeof t.function.description === "string" ? { description: t.function.description } : {}), input_schema: isObj(t.function.parameters) ? t.function.parameters : { type: "object", properties: {} } }] : []);
   if (cache) {
-    system = marked(system);
-    tools = marked(tools);
-    const last = messages.at(-1);
-    if (last) last.content = marked(last.content);
+    system = marked(system, ttl);
+    tools = marked(tools, ttl);
+    // The turn before the last is marked too: a caller that rewrites its newest message between
+    // requests leaves nothing at the last mark to read, and the conversation up to it still is.
+    for (const turn of messages.slice(-2)) turn.content = marked(turn.content, ttl);
   }
   const choice = body.tool_choice;
   const stop = typeof body.stop === "string" ? [body.stop] : list(body.stop).filter((s) => typeof s === "string");

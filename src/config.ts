@@ -142,10 +142,15 @@ export interface BackendConfig {
   format: BackendFormat;
   /** With `format: anthropic`: mark each request's system prompt, tools and conversation so far for the provider's prompt cache. */
   promptCache: boolean;
+  /** With `promptCache`: how long the provider keeps a prefix after its last use. */
+  promptCacheTtl: CacheTtl;
 }
 
 export const BACKEND_FORMATS = ["openai", "anthropic"] as const;
 export type BackendFormat = (typeof BACKEND_FORMATS)[number];
+/** How long a provider keeps a cached prefix after its last use. The longer one costs more to write. */
+export const CACHE_TTLS = ["5m", "1h"] as const;
+export type CacheTtl = (typeof CACHE_TTLS)[number];
 
 /** What a backend is sent to say who is calling: its key in the header its API reads, and for Messages the version. */
 export function backendAuth(format: BackendFormat, key: string | null): Record<string, string> {
@@ -951,6 +956,13 @@ function warmSource(entry: Record<string, unknown>, where: string): WarmSource {
   return kind as WarmSource;
 }
 
+/** `promptCacheTtl: 1h`. */
+function cacheTtl(v: unknown, where: string): CacheTtl {
+  const ttl = str(v, where, "5m");
+  if (!CACHE_TTLS.includes(ttl as CacheTtl)) throw bad(where, `is "${ttl}" — expected ${CACHE_TTLS.join(" or ")}`);
+  return ttl as CacheTtl;
+}
+
 function bool(v: unknown, where: string, fallback: boolean): boolean {
   if (v === undefined) return fallback;
   if (typeof v !== "boolean") throw bad(where, "must be true or false");
@@ -1422,6 +1434,7 @@ export function parseConfig(raw: unknown): HearthConfig {
       name,
       format: format as BackendFormat,
       promptCache: bool(entry.promptCache, `${at}.promptCache`, true),
+      promptCacheTtl: cacheTtl(entry.promptCacheTtl, `${at}.promptCacheTtl`),
       key: entry.key === undefined ? null : resolveSecret(str(entry.key, `${at}.key`), `${at}.key`),
       cloud,
       url: backendUrl(entry, at, server === null ? null : servers[server]!.host),

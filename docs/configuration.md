@@ -34,6 +34,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.key` | none | sent to this backend as `Authorization: Bearer` on every call, in place of anything the client sent. `env:NAME` keeps it out of the file |
 | `backends.<name>.format` | `openai` | the API it speaks: `openai` (chat completions) or `anthropic` (Messages). See [Anthropic's API](providers.md#anthropics-api) |
 | `backends.<name>.promptCache` | `true` | with `format: anthropic`: mark each request's system prompt, tools and conversation so far for the provider's prompt cache |
+| `backends.<name>.promptCacheTtl` | `5m` | with `promptCache`: how long the provider keeps a prefix after its last use, `5m` or `1h`. `1h` costs more to write; it pays where a conversation's requests come more than five minutes apart |
 | `backends.<name>.cloud` | `false` | a provider's server on the internet: no hardware here, no warm state, and only the models under `serves`. See [A provider's models](providers.md#a-providers-models) |
 | `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. See [Backends that don't speak the OpenAI API](backends.md#backends-that-dont-speak-the-openai-api) |
 | `resources.<name>.kind` | `gpu` | `gpu`, `cpu` or `other`. Picks the icon; `gpu` and `other` are exclusive unless shared |
@@ -103,7 +104,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
 | `routers.<name>` | none | A rulebook besides `flows:`: `flows` in the same shape, and `strict: true` so a request runs on the model its line names or fails. See [Routers](routing.md#routers). |
 | `callers.<who>` | none | Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default`. |
-| `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](console.md#editing-on-the-graph); nodes without one are laid out |
+| `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](console.md#editing-on-the-graph); nodes without one are laid out. An order you put things in (the Router's types, the topology's boxes of callers) is kept here too, as a rank in `y` |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](routing.md#flows) |
 | `historyFile` | unset | a file that keeps the console's day of history, its recent log lines and the month of usage per caller across restarts, written every minute and at shutdown. Unset keeps them in memory. A file written by a later hearth is set aside as `<file>.v<n>` and a fresh one started |
 | `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |

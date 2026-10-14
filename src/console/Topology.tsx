@@ -13,7 +13,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type React
 
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
 import { NEW, NewDialog, Refs, refsOf, Review } from "./config.js";
-import { bayRoom, callersIn, draftView, EVERYONE, list, obj, put, routerFor, usersOf, withCaller, callerChoices, paneChoices } from "./draft.js";
+import { BAYS, bayRoom, callersIn, draftView, EVERYONE, list, movedBay, obj, ordered, put, routerFor, usersOf, withCaller, callerChoices, paneChoices } from "./draft.js";
 import { change, chooseAt, dirty, edits, follow, loadDraft, redo, revert, review, showRouter, undo, useEdit, addRouter, askAt } from "./editStore.js";
 import { Menu, VersionsButton, openVersions } from "./editor.js";
 import { control, go, request, restartNode, select, toast, useStore, mintKey, revokeKey, rotateKey } from "./store.js";
@@ -70,12 +70,12 @@ const CallerNode = memo(function CallerNode({ data }: NodeProps<Node<Caller>>) {
 });
 
 /** The callers that go by one router, with the one line that takes them all to it. */
-type Bay = { label: string; own: boolean };
+type Bay = { label: string; own: boolean; /** It can be dragged to another place among the others. */ moves: boolean };
 
 const BayNode = memo(function BayNode({ data }: NodeProps<Node<Bay>>) {
   return (
     <div className={cx("h-full w-full rounded-2xl border border-dashed", data.own ? "border-accent/50" : "border-info/50")}>
-      <div className="truncate px-2.5 pt-1.5 text-[10px] uppercase tracking-wide text-dim">{data.label}</div>
+      <div className="truncate px-2.5 pt-1.5 text-[10px] uppercase tracking-wide text-dim" title={data.moves ? "Drag the box to stand these somewhere else in the row" : undefined}>{data.label}</div>
       <Handle type="source" id="down" position={Position.Bottom} isConnectable={false} />
     </div>
   );
@@ -384,6 +384,8 @@ const H = 64;
 /** A caller's chip, the box of them that go by one router, and the head of the frame those boxes stand in. */
 const CALLER = { w: 150, h: 30, gap: 6, cols: 2 };
 const BAY = { head: 24, pad: 10 };
+/** What the default router's callers go by where the order of the boxes is kept. */
+const DEFAULT = "default";
 const HOME = 56;
 const GAP = 12;
 /** A hardware group: the padding around its backends and the height of its title. */
@@ -592,7 +594,9 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
   // With its callers known, this node is the frame they stand in, boxed by the router they go by: one line a router, however many callers.
   // Those with a router of their own stand to the left; whoever goes by the default one stands over where they all meet.
   const ranks = Object.keys(who?.routers ?? {});
-  const bays = (who ? [...ranks.slice().reverse(), null] : []).flatMap((name) => {
+  // In the order they were dragged into, and one never moved after those that were. With none moved, the default router's is last.
+  const bays = (who ? ordered(d.layout, [...ranks.slice().reverse(), DEFAULT], BAYS) : []).flatMap((key) => {
+    const name = key === DEFAULT ? null : key;
     const callers = who!.callers.filter((c) => c.router === name);
     if (callers.length === 0) return [];
     // No narrower than the router under it, or two routers under one-caller boxes would lie on each other.
@@ -637,7 +641,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
       edges.push({ id: `e:${id}`, source: id, sourceHandle: "down", target: "join", targetHandle: "up", type: "flow", data: { jobs, pulses: pulsesFor(`e:${id}`, jobs), wire: true, color: "var(--dim)" } });
       if (!bay) continue;
       const box = `bay:${name ?? ""}`;
-      nodes.push({ id: box, type: "bay", parentId: "self", extent: "parent" as const, position: { x: bay.x, y: HOME }, style: { width: bay.w, height: bay.h }, data: { label: name === null ? "by the default router" : `by ${name}`, own: name !== null } satisfies Bay });
+      nodes.push({ id: box, type: "bay", parentId: "self", extent: "parent" as const, position: { x: bay.x, y: HOME }, style: { width: bay.w, height: bay.h }, draggable: bays.length > 1, data: { label: name === null ? "by the default router" : `by ${name}`, own: name !== null, moves: bays.length > 1 } satisfies Bay });
       bay.callers.forEach((c, i) => {
         nodes.push({ id: `caller:${c.name}`, type: "caller", parentId: box, extent: "parent" as const, position: { x: bay.inset + (i % CALLER.cols) * (CALLER.w + CALLER.gap), y: BAY.head + Math.floor(i / CALLER.cols) * (CALLER.h + CALLER.gap) }, data: { ...c, busy: mine(c.name).length > 0, editable: true } satisfies Caller });
       });
@@ -753,7 +757,7 @@ export function Topology() {
     callers: callersIn(draft).map((name) => { const at = routerFor(draft, name); return { name, router: at.router, follows: !at.own }; }),
     routers: Object.fromEntries(Object.entries(obj(draft.routers)).map(([name, r]) => [name, { users: usersOf(draft, name), strict: obj(r).strict === true }])),
   } : null), [draft?.routers, draft?.callers, draft?.apiKeys, draft?.servers]);
-  const laid = useMemo(() => layout(data, sel, who), [data.net, data.q.jobs, data.flows, sel, who]);
+  const laid = useMemo(() => layout(data, sel, who), [data.net, data.q.jobs, data.flows, data.layout, sel, who]);
   /** Send a caller by the router chosen from its menu; a new router is named first, where the menu was. */
   const sendBy = (id: string, v: string, x: number, y: number): void => {
     if (v === "follow") follow(id);
@@ -846,6 +850,16 @@ export function Topology() {
         dragging.current = null;
         const at = "changedTouches" in e ? (e as unknown as TouchEvent).changedTouches[0]! : e;
         if (n.id.startsWith("backend:")) dropBackend(n.id.slice(8), at.clientX, at.clientY);
+        // A box of callers let go among the others takes that place in the row, which the draft keeps with its layout.
+        if (n.id.startsWith("bay:")) {
+          const middle = (x: Node) => x.position.x + Number(x.style?.width ?? 0) / 2;
+          const row = laid.nodes.filter((x) => x.type === "bay").sort((a, b) => a.position.x - b.position.x);
+          const key = (x: Node) => x.id.slice(4) || DEFAULT;
+          // Its leading edge decides, so a wide box held back by the frame's edge still gets past a narrow one at the end.
+          const right = n.position.x > (row.find((x) => x.id === n.id)?.position.x ?? 0);
+          const edge = n.position.x + (right ? Number(n.style?.width ?? 0) : 0);
+          change((d) => movedBay(d, row.map(key), key(n), edge, Object.fromEntries(row.map((x) => [key(x), middle(x)]))));
+        }
         setNodes((now) => held(laid.nodes, now, null));
       }}
       // A right-click among the callers: on one, which router it goes by and what to do with its key; anywhere in the frame, a new key.

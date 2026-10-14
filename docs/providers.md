@@ -86,9 +86,21 @@ backends:
   same conversation pays for them as a cache read. A cache write costs more
   than plain input, so for one-off requests with long prompts that are never
   repeated, set `promptCache: false`.
+- A prefix is kept for five minutes after its last use. Where the requests of
+  one conversation come further apart than that (a person who thinks before
+  answering, a tool that runs for a while), `promptCacheTtl: 1h` keeps it for
+  an hour, at a higher price for each write.
+- Only the system messages that open a conversation become the system prompt.
+  One sent later stays where it stands, as text in a user turn: moved to the
+  front it would change the start of the cached prefix, and every turn after
+  it would be paid for in full again.
 - `usage.prompt_tokens` counts all input, cached or not, and
   `usage.prompt_tokens_details.cached_tokens` says how much was read from the
   cache. Per-key usage counts the same totals.
+- A cache write is counted, and priced, as plain input. The provider charges
+  more for one, and more again with `promptCacheTtl: 1h`, so the spend shown
+  for a model with a `price`, and what `limits.dollarsPerDay` counts, is
+  somewhat below the provider's bill.
 - What is carried across: system and developer messages, text and images,
   tools, tool calls and their results, `tool_choice`, `max_tokens`
   (4096 when the request names none: this API requires one), `temperature`,

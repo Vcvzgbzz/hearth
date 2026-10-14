@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To, callerChoices, paneChoices } from "../src/console/draft.js";
+import { addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To, callerChoices, paneChoices } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -384,6 +384,18 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual([arranged(down), arranged(put), arranged(tidied(put)), ordered(tidied(put).layout as never, ["auto", "image"])], [false, true, false, ["image", "auto"]]);
   assert.equal(tidied(placed(doc(), "routing/flow:pick", { x: 5, y: 5 })).layout, undefined);
   assert.doesNotThrow(() => parseConfig(withRest(put, "asked")));
+
+  // A box of callers let go among the others takes that place; the order is the layout's, apart from the types', and outlasts a tidy-up.
+  const row = ["a", "b", "default"];
+  const at = { a: 100, b: 300, default: 500 };
+  const last = movedBay(down, row, "a", 520, at);
+  assert.deepEqual(ordered(last.layout as never, row, BAYS), ["b", "default", "a"]);
+  assert.deepEqual(ordered(movedBay(doc(), row, "default", 200, at).layout as never, row, BAYS), ["a", "default", "b"]);
+  // One never moved stands after those that were; let go where it stood, or not one of them, nothing is written.
+  assert.deepEqual(ordered(last.layout as never, ["new", ...row], BAYS), ["b", "default", "a", "new"]);
+  assert.deepEqual([movedBay(doc(), row, "b", 250, at), movedBay(doc(), row, "c", 0, at)], [doc(), doc()]);
+  assert.deepEqual([ordered(last.layout as never, ["auto", "image"]), arranged(last), ordered(tidied(last).layout as never, row, BAYS)], [["image", "auto"], false, ["b", "default", "a"]]);
+  assert.doesNotThrow(() => parseConfig(withRest(last, "asked")));
 }
 
 // --- boxes that fit together ------------------------------------------------------------------------
