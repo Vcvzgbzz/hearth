@@ -3,10 +3,13 @@
  * the peer's side, since one that only shows on the lender's own page lends anyway.
  */
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { ConfigError, parseConfig } from "../src/config.js";
+import { ConfigError, loadConfig, parseConfig } from "../src/config.js";
 import { closedWhy, termsFor } from "../src/lending.js";
 import { silentLogger } from "../src/log.js";
 import { createNode } from "../src/server.js";
@@ -123,6 +126,30 @@ try {
   assert.equal(row.byModel.lent.big?.requests, 1, "by model");
   assert.deepEqual([Object.values(row.byDay.lent), Object.values(row.byDay.borrowed)], [[60], [40]], "and by day");
   assert.equal((await fetch(`${url}/ui/lending`)).status, 200, "the page reads the same from its own route");
+
+  // A model taken back is taken from a peer's own list too, in the file as well: that list would go on lending it.
+  const file = join(mkdtempSync(join(tmpdir(), "hearth-lending-")), "hearth.yaml");
+  writeFileSync(file, `name: lender
+backends:
+  card: {url: "${at(backend)}", kind: none, serves: [big, small]}
+lending:
+  models: [small, big]
+peers:
+  close: {accept: close-token, lend: {models: [big, small], tokensPerDay: 9}}
+flows:
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+`);
+  const filed = createNode(loadConfig(file), silentLogger);
+  await listen(filed.server);
+  try {
+    const held = await fetch(`${at(filed.server)}/control`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ share: { big: false } }) });
+    assert.equal(held.status, 200);
+    assert.deepEqual(((await (await fetch(`${at(filed.server)}/peer/state`, { headers: as("close-token") })).json()) as { serves: string[] }).serves, ["small"]);
+    const after = loadConfig(file);
+    assert.deepEqual([after.share, after.peerTerms.close], [["small"], { models: ["small"], tokensPerDay: 9 }], "and the rest of its limits stand");
+  } finally {
+    await filed.close();
+  }
 } finally {
   await node.close();
   backend.close();

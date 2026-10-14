@@ -88,7 +88,12 @@ for when it is turned back on.
 A peer that has used its tokens for the day, or is turned off, is shown a node that lends it
 nothing, on the same poll that reports capacity, so its flows stop choosing you
 instead of sending work to be refused. One that asks anyway gets a `429` that
-says so.
+says so. The day's tokens are counted as each answer ends, so a peer can pass
+its limit by what it had in flight when it reached it.
+
+A model taken back on the Models page, or with `share` on `/control`, is taken
+out of every peer's own list as well. One lent there joins `lending.models`
+only: a peer with a list of its own is given it in that list.
 
 Every node also counts, per peer, what that peer ran here and what this node
 ran there. `GET /lending` reports both, and the console shows them on each

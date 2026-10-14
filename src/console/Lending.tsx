@@ -48,7 +48,7 @@ function Num({ value, label, min, onSave, className, none, disabled }: { value: 
   return (
     <input
       aria-label={label} inputMode="numeric" disabled={disabled} placeholder={none}
-      value={text ?? (none !== undefined && value === 0 ? "" : value.toLocaleString())}
+      value={text ?? (none !== undefined && value === 0 ? "" : value.toLocaleString("en-US"))}
       onChange={(e) => setText(e.target.value)} onBlur={commit}
       onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setText(null); }}
       className={cx("h-8 rounded-md border border-line bg-panel px-2 tabular placeholder:text-dim focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50", mono, className)}

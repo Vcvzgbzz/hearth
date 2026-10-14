@@ -17,9 +17,9 @@ comment is read by strangers. Write for them.
 - `src/anthropic.ts`: a backend that speaks the Messages API: the request and
   the answer rewritten each way
 - `src/console/`: the React status page and config editor (built to `dist/`).
-  The Lending page is `Lending.tsx`. The routing map is `Routing.tsx` (layout), `flowNodes.tsx` (one view per
-  kind of node) and `draft.ts` (`NODES`: what drawing a line from or onto each
-  kind changes in the file)
+  The Lending page is `Lending.tsx`. The routing map is `Routing.tsx` (layout),
+  `flowNodes.tsx` (one view per kind of node) and `draft.ts` (`NODES`: what
+  drawing a line from or onto each kind changes in the file)
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

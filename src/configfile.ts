@@ -320,15 +320,20 @@ export function setNote(cfg: HearthConfig, model: string, text: string | null): 
   else notes[model] = text.trim();
 }
 
-/** Lend or withhold one model; new ids append, existing order is kept. */
+/**
+ * Lend or withhold one model; new ids append, existing order is kept. Withheld, it leaves each
+ * peer's own list too: that list stands in for the node's, and would go on lending it.
+ */
 export function setShare(cfg: HearthConfig, model: string, on: boolean): void {
   if (on && !cfg.share.includes(model)) cfg.share = [...cfg.share, model];
-  if (!on) cfg.share = cfg.share.filter((m) => m !== model);
+  if (on) return;
+  cfg.share = cfg.share.filter((m) => m !== model);
+  for (const terms of Object.values(cfg.peerTerms)) if (terms.models) terms.models = terms.models.filter((m) => m !== model);
 }
 
 /**
  * Write what changed between two parsed configs into the YAML document, touching only the share
- * list, peers' model maps, flows, and notes — the fields edits move.
+ * list, peers' own lists and model maps, flows, and notes — the fields edits move.
  */
 function writeDiff(doc: Document, before: HearthConfig, after: HearthConfig, where: string): void {
   /** Replace a list, keeping its flow or block style. */
@@ -341,6 +346,9 @@ function writeDiff(doc: Document, before: HearthConfig, after: HearthConfig, whe
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   if (!same(before.share, after.share)) setList(["lending", "models"], after.share);
+  for (const [name, terms] of Object.entries(after.peerTerms)) {
+    if (terms.models && !same(before.peerTerms[name]?.models, terms.models)) setList(["peers", name, "lend", "models"], [...terms.models]);
+  }
 
   for (const p of after.peers) {
     const was = before.peers.find((x) => x.name === p.name)?.models ?? {};
