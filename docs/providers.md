@@ -57,8 +57,10 @@ off a peer, by a header, a caller or a lane.
 
 - A streamed answer's token count comes from the provider: the node asks for
   it (`stream_options.include_usage`) on every streamed chat it sends to a cloud
-  backend, and keeps the extra event from a caller who did not ask for it. Per-key
-  usage and `tokensPerDay` then count what the provider billed, not an estimate.
+  backend, and keeps the extra event from a caller who did not ask for it. A
+  provider that reports the count on its last event of text instead sends no
+  extra event, and the caller is sent that one as it came. Per-key usage and
+  `tokensPerDay` then count what the provider billed, not an estimate.
 
 The API has to be OpenAI-shaped, or Anthropic's (below). One with another
 format of its own is not reached this way. Where a provider offers an OpenAI-compatible layer beside a native
