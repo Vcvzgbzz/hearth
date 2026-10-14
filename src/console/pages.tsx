@@ -85,7 +85,7 @@ export function Inspector() {
         <Row k="lending"><Switch label="lending" on={d.controls.lending} onChange={(on) => void control({ lending: on }, on ? "lending resumed" : "lending paused")} /></Row>
         <Row k="borrowing"><Switch label="borrowing" on={d.controls.borrowing} onChange={(on) => void control({ borrowing: on }, on ? "borrowing resumed" : "borrowing paused")} /></Row>
         <p className="mt-2 text-[11px] text-dim">Pausing applies at once and is not written to the config; a restart clears it.</p>
-        <Row k="lent">{d.share.length ? d.share.join(", ") : "nothing"}</Row>
+        <Row k="lent">{[...d.share, ...(live.controls.lending ? live.catalog.flatMap((m) => { const to = lentOnlyTo(live, m); return to.length ? [`${m} (to ${to.join(", ")})`] : []; }) : [])].join(", ") || "nothing"}</Row>
       </>
     );
   } else if (sel.kind === "backend") {
@@ -273,7 +273,10 @@ export function Models() {
                 <td className="tabular px-2 py-2 text-dim">{stats?.context ? `${Math.round(stats.context / 1024)}k` : "—"}</td>
                 <td className="px-2 py-2">
                   {local.has(m) && !hosted.has(m)
-                    ? <Switch label={`lend ${m}`} on={lent} onChange={(on) => void control({ share: { [m]: on } }, on ? `lending ${m}` : `holding ${m}`)} />
+                    ? <span className="inline-flex items-center gap-2">
+                        <Switch label={`lend ${m}`} on={lent} onChange={(on) => void control({ share: { [m]: on } }, on ? `lending ${m}` : `holding ${m}`)} />
+                        {lentOnlyTo(d, m).length > 0 && <span className="text-[12px] text-dim" title="lent by that peer's own list, on the Lending page">to {lentOnlyTo(d, m).join(", ")}</span>}
+                      </span>
                     : <span className="text-dim">—</span>}
                 </td>
                 <td className="px-2 py-1">{local.has(m) ? <NoteCell model={m} note={stats?.note ?? ""} /> : null}</td>
@@ -295,6 +298,10 @@ export function Models() {
  * plaintext over once, and after that only the label and a hash are shown, the way the
  * config page does.
  */
+/** The peers lent `model` by a list of their own where the node's list holds it back. */
+const lentOnlyTo = (d: UiData, model: string): string[] =>
+  d.configuredShare.includes(model) ? [] : (d.ledger ?? []).filter((l) => l.own?.includes("models") && !l.terms?.off && l.terms?.models.includes(model)).map((l) => l.peer);
+
 /** A count as a person reads it: 950, 12.4k, 3.1M. */
 export const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
 

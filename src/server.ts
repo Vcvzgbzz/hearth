@@ -1717,7 +1717,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       lent: { today: usage.total(`peer:${peer}`, 1), month: usage.total(`peer:${peer}`, KEEP_DAYS) },
       borrowed: { today: borrowed.total(peer, 1), month: borrowed.total(peer, KEEP_DAYS) },
       // Only a peer with a token can be lent to, so only one has limits to be held to.
-      ...(peer in cfg.peerTokens ? { terms: termsFor(cfg, peer), closed: controls.lendingOn ? closedTo(peer) : "lending is paused" } : {}),
+      ...(peer in cfg.peerTokens ? { terms: termsFor(cfg, peer), own: Object.keys(cfg.peerTerms[peer] ?? {}).filter((k) => k !== "off"), closed: controls.lendingOn ? closedTo(peer) : "lending is paused" } : {}),
     }));
 
   /** One caller's tokens for each day kept; a day with none is absent. */

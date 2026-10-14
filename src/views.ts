@@ -72,6 +72,8 @@ export interface LedgerRow {
   borrowed: { today: Row; month: Row };
   /** What it is held to, for a peer that may borrow at all. */
   terms?: LendTerms;
+  /** Which of those its own `lend:` restates; the rest are the node's. */
+  own?: string[];
   /** Why it is turned away right now; null when it is not. */
   closed?: string | null;
 }

@@ -313,7 +313,7 @@ export interface UiData {
   /** Callers that are not keys (this machine with none, peers) and what they used. */
   others?: { caller: string; today: Used; month: Used }[];
   /** Each peer's lines in the ledger: tokens it ran here, tokens this node ran there, and why it is turned away now, if it is. */
-  ledger?: { peer: string; lent: { today: Used; month: Used }; borrowed: { today: Used; month: Used }; closed?: string | null; terms?: LendTerms }[];
+  ledger?: { peer: string; lent: { today: Used; month: Used }; borrowed: { today: Used; month: Used }; closed?: string | null; terms?: LendTerms; /** Which of `terms` are its own, not the node's. */ own?: string[] }[];
   /** The limits a peer is held to unless it has its own. */
   lendDefaults?: { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
 }

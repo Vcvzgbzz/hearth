@@ -1,5 +1,5 @@
 /** The Lending page: what peers may take, each one's own limits, and what was lent and borrowed. */
-import { ChevronRight, Plus, X } from "lucide-react";
+import { ChevronRight, Plus, Undo2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Menu } from "./editor.js";
@@ -16,10 +16,10 @@ type Detail = Row & { byModel: { lent: Record<string, Used>; borrowed: Record<st
 
 const tokens = (u: Used): number => u.in + u.out;
 
-/** Write one setting into hearth.yaml; it applies at once. */
+/** Write one setting into hearth.yaml, or with no value take it out; it applies at once. */
 async function save(path: Path, value: unknown, done: string): Promise<void> {
   try {
-    await request("PATCH", "/config", { ops: [{ path, value }] });
+    await request("PATCH", "/config", { ops: [value === undefined ? { path, delete: true } : { path, value }] });
     toast("ok", done);
     await refresh();
   } catch (e) {
@@ -36,7 +36,7 @@ async function flip(body: Record<string, unknown>, done: string): Promise<void> 
  * A whole number that saves when it is left or Enter is pressed, and goes back to what is saved on
  * anything else. With `none`, 0 is that word and an empty field: the setting's way of saying no limit.
  */
-function Num({ value, label, min, onSave, className, none, disabled }: { value: number; label: string; min: number; onSave: (n: number) => void; className?: string; none?: string; disabled?: boolean }) {
+function Num({ value, label, min, onSave, className, none, disabled, title }: { value: number; label: string; min: number; onSave: (n: number) => void; className?: string; none?: string; disabled?: boolean; title?: string }) {
   const [text, setText] = useState<string | null>(null);
   const commit = () => {
     if (text === null) return;
@@ -47,7 +47,7 @@ function Num({ value, label, min, onSave, className, none, disabled }: { value: 
   };
   return (
     <input
-      aria-label={label} inputMode="numeric" disabled={disabled} placeholder={none}
+      aria-label={label} title={title} inputMode="numeric" disabled={disabled} placeholder={none}
       value={text ?? (none !== undefined && value === 0 ? "" : value.toLocaleString("en-US"))}
       onChange={(e) => setText(e.target.value)} onBlur={commit}
       onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setText(null); }}
@@ -75,6 +75,15 @@ function Models({ all, lent, who, onToggle, disabled }: { all: string[]; lent: r
                 className="inline-flex size-6 items-center justify-center rounded-md border border-dashed border-line text-dim hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"><Plus size={13} /></button>
       )}
     </div>
+  );
+}
+
+/** Takes one of a peer's own limits out of the file, so the node's holds it again. */
+function Back({ peer, what, path }: { peer: string; what: string; path: Path }) {
+  return (
+    <button type="button" aria-label={`${peer}: ${what} back to the limit for every peer`} title="back to the limit for every peer"
+            onClick={() => void save(path, undefined, `${peer}: ${what} as for every peer`)}
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-dim hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"><Undo2 size={13} /></button>
   );
 }
 
@@ -227,6 +236,9 @@ export function Lending() {
                 const t: LendTerms | undefined = r.terms;
                 const at = (key: string): Path => ["peers", r.peer, "lend", key];
                 const used = tokens(r.lent.today);
+                // A limit the peer does not restate is the node's: drawn dim, and one of its own can be put back to it.
+                const own = (key: string) => (r.own ?? []).includes(key);
+                const num = (key: string) => ({ className: own(key) ? undefined : "text-dim", title: own(key) ? undefined : "the limit for every peer" });
                 const spent = t !== undefined && t.tokensPerDay > 0 && used >= t.tokensPerDay;
                 return (
                   <tr key={r.peer} className={cx("border-b border-line/60 align-top last:border-0", open === r.peer && "bg-accent/5")}>
@@ -246,12 +258,24 @@ export function Lending() {
                           {r.closed != null && !t.off && <div className="mt-1 text-[12px] text-warn">{r.closed}</div>}
                         </td>
                         <td className="px-2 py-3">
-                          <Models all={lendable} lent={t.models} who={r.peer} disabled={t.off}
-                                  onToggle={(m, on) => void save(at("models"), on ? [...t.models, m] : t.models.filter((x) => x !== m), on ? `lending ${m} to ${r.peer}` : `holding ${m} from ${r.peer}`)} />
+                          <div className={cx("flex items-start gap-1", !own("models") && "text-dim")} title={own("models") ? undefined : "what every peer may run"}>
+                            <Models all={lendable} lent={t.models} who={r.peer} disabled={t.off}
+                                    onToggle={(m, on) => void save(at("models"), on ? [...t.models, m] : t.models.filter((x) => x !== m), on ? `lending ${m} to ${r.peer}` : `holding ${m} from ${r.peer}`)} />
+                            {own("models") && <Back peer={r.peer} what="models" path={at("models")} />}
+                          </div>
                         </td>
-                        <td className="px-2 py-3"><Num label={`${r.peer}: tokens a day`} min={0} none="no limit" disabled={t.off} value={t.tokensPerDay} className="w-28" onSave={(n) => void save(at("tokensPerDay"), n, "saved")} /></td>
-                        <td className="px-2 py-3"><Num label={`${r.peer}: jobs at once`} min={1} disabled={t.off} value={t.maxConcurrent} className="w-14" onSave={(n) => void save(at("maxConcurrent"), n, "saved")} /></td>
-                        <td className="px-2 py-3"><Num label={`${r.peer}: requests an hour`} min={1} disabled={t.off} value={t.rateLimit} className="w-18" onSave={(n) => void save(at("rateLimit"), n, "saved")} /></td>
+                        <td className="px-2 py-3"><div className="flex items-center gap-1">
+                          <Num label={`${r.peer}: tokens a day`} min={0} none="no limit" disabled={t.off} value={t.tokensPerDay} {...num("tokensPerDay")} className={cx("w-28", num("tokensPerDay").className)} onSave={(n) => void save(at("tokensPerDay"), n, "saved")} />
+                          {own("tokensPerDay") && <Back peer={r.peer} what="tokens a day" path={at("tokensPerDay")} />}
+                        </div></td>
+                        <td className="px-2 py-3"><div className="flex items-center gap-1">
+                          <Num label={`${r.peer}: jobs at once`} min={1} disabled={t.off} value={t.maxConcurrent} {...num("maxConcurrent")} className={cx("w-14", num("maxConcurrent").className)} onSave={(n) => void save(at("maxConcurrent"), n, "saved")} />
+                          {own("maxConcurrent") && <Back peer={r.peer} what="jobs at once" path={at("maxConcurrent")} />}
+                        </div></td>
+                        <td className="px-2 py-3"><div className="flex items-center gap-1">
+                          <Num label={`${r.peer}: requests an hour`} min={1} disabled={t.off} value={t.rateLimit} {...num("rateLimit")} className={cx("w-18", num("rateLimit").className)} onSave={(n) => void save(at("rateLimit"), n, "saved")} />
+                          {own("rateLimit") && <Back peer={r.peer} what="requests an hour" path={at("rateLimit")} />}
+                        </div></td>
                         <td className="tabular px-2 py-3">
                           {short(used)} <span className="text-dim">{t.tokensPerDay > 0 ? `of ${short(t.tokensPerDay)}` : "· no limit"}</span>
                           {t.tokensPerDay > 0 && (

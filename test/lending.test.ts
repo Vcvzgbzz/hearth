@@ -63,9 +63,13 @@ const backend = createServer((req, res) => {
     res.end(JSON.stringify({ data: [{ id: "big" }, { id: "small" }] }));
     return;
   }
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 40, completion_tokens: 20 } }));
+  // An answer is kept back while `held` is set, so a request can be found still in flight.
+  void (held ?? Promise.resolve()).then(() => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 40, completion_tokens: 20 } }));
+  });
 });
+let held: Promise<void> | null = null;
 await listen(backend);
 
 // The other end of borrowing: a peer that serves what this node sends it.
@@ -87,6 +91,8 @@ const node = createNode(parseConfig({
     close: { url: at(friend), token: "t", accept: "close-token", models: { away: "theirs" }, lend: { models: ["big", "small"] } },
     capped: { accept: "capped-token", lend: { tokensPerDay: 50 } },
     shut: { accept: "shut-token", lend: { off: true } },
+    brisk: { accept: "brisk-token", lend: { rateLimit: 1 } },
+    single: { accept: "single-token", lend: { maxConcurrent: 1 } },
   },
   flows: { away: { inputs: ["away"], steps: [{ to: { peer: "close" } }, { to: { refuse: "not run here" } }] } },
 }), silentLogger);
@@ -116,6 +122,21 @@ try {
   assert.equal((await chat("capped-token", "small")).status, 429, "the day's tokens are spent");
   assert.deepEqual(await serves("capped-token"), [], "and it is shown nothing until tomorrow");
   assert.match((await ledger("capped")).closed!, /today's 50 tokens are used/);
+
+  // How often: a peer's own requests an hour, where the node's 600 would have let the second through.
+  assert.equal((await chat("brisk-token", "small")).status, 200);
+  assert.equal((await chat("brisk-token", "small")).status, 429, "its hour's requests are spent");
+
+  // How many at once: with one answer still in flight, a peer held to one job is refused a second.
+  let release = (): void => {};
+  held = new Promise<void>((r) => { release = r; });
+  const first = chat("single-token", "small");
+  await new Promise((r) => setTimeout(r, 100));
+  // Raced with a clock: a second job let in would wait on the answer kept back, and never be refused.
+  const second = await Promise.race([chat("single-token", "small").then((r) => r.status), new Promise<number>((r) => setTimeout(() => r(0), 3000))]);
+  held = null;
+  release();
+  assert.deepEqual([(await first).status, second], [200, 429], "its one job is taken");
 
   // What was lent and what was borrowed are counted apart, per peer.
   assert.equal((await chat("close-token", "big")).status, 200);
