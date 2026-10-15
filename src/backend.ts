@@ -94,14 +94,13 @@ export class BackendState {
     kind: KindName,
     private readonly log: Logger,
     /**
-     * Which of the ids this URL reports are this backend's. Two backends on one URL split
-     * what it serves, so a sidecar pinned beside a swapping model is nobody's resident but its own.
+     * Which of the ids this URL reports are this backend's, given only where the URL is shared.
+     * Two backends on one URL split what it serves, so each is resident only in its own models
+     * and an unload drops those one by one rather than clearing the URL under its sibling.
      */
-    private readonly mine: (id: string) => boolean = () => true,
+    private readonly mine?: (id: string) => boolean,
     /** Sent with the catalogue read, for a backend that wants a key before it answers anything. */
     private readonly headers: Record<string, string> = {},
-    /** `mine` is exactly this backend's declared ids, so an unload drops those one by one and never clears the URL. */
-    private readonly scoped = false,
   ) {
     this.k = KINDS[kind];
     this.useEvents = this.k.events;
@@ -172,20 +171,37 @@ export class BackendState {
     return this.k.unload !== undefined;
   }
 
+  /** Is this id this backend's? Everything is, alone on a URL. */
+  private owns(id: string): boolean {
+    return this.mine === undefined || this.mine(id);
+  }
+
   /**
    * Clear the card for another backend; a no-op for a kind that cannot. A down backend is a
-   * no-op; a refusal throws so the job does not load on top. A scoped backend drops only its
-   * own loaded models, so a sibling on the same URL keeps its weights.
+   * no-op; a refusal throws so the job does not load on top. On a shared URL only this
+   * backend's own models are dropped, loading ones included, so a sibling keeps its weights.
    */
   async unload(): Promise<void> {
-    if (this.scoped && this.k.unloadModel) {
-      const dropped: string[] = [];
-      for (const wire of [...this.loadedIds]) {
-        if (await this.k.unloadModel(this.url, wire, this.log)) dropped.push(wire);
+    const dropModel = this.k.unloadModel;
+    if (this.mine !== undefined && dropModel) {
+      const ids = [...new Set([...this.loadedIds, ...this.loadingIds])];
+      const dropped = await Promise.all(ids.map((wire) => dropModel(this.url, wire, this.log)));
+      // Re-read rather than trust the answers: a refused drop may be a model already gone.
+      const now = await this.k.readWarm(this.url, this.catalogIds).catch(() => null);
+      if (now !== null) {
+        this.setLoaded(now.loaded.filter((m) => this.owns(m)));
+        this.setLoading(now.loading.filter((m) => this.owns(m)));
+      } else {
+        // Unreadable: only an acknowledged drop counts as gone.
+        const gone = ids.filter((_, i) => dropped[i]);
+        this.loadedIds = this.loadedIds.filter((m) => !gone.includes(m));
+        this.setLoading(this.loadingIds.filter((m) => !gone.includes(m)));
       }
-      // Anything not dropped stays resident, so the caller sees it and does not load on top.
-      this.loadedIds = this.loadedIds.filter((m) => !dropped.includes(m));
       this.lastUpdateAt = Date.now();
+      const left = [...this.loadedIds, ...this.loadingIds].filter((m) => ids.includes(m));
+      if (now !== null && left.length > 0) {
+        throw new Error(`${this.url}: ${left.join(", ")} still loaded after a per-model unload (see backend.unload_model_refused)`);
+      }
       return;
     }
     if (!this.k.unload || !(await this.k.unload(this.url, this.log))) return;
@@ -319,7 +335,7 @@ export class BackendState {
   }
 
   private apply(models: ModelStatus[]): void {
-    const r = readingFromStatus(models.filter((m) => this.mine(m.id)));
+    const r = readingFromStatus(models.filter((m) => this.owns(m.id)));
     this.catalogIds = r.catalog;
     this.setLoading(r.loading);
     this.setLoaded(r.loaded);
@@ -344,12 +360,12 @@ export class BackendState {
       catalogRead.catch(() => this.catalogIds).then((ids) => this.k.readWarm(this.url, ids)),
     ]);
 
-    if (catalog.status === "fulfilled") this.catalogIds = catalog.value.filter((m) => this.mine(m));
+    if (catalog.status === "fulfilled") this.catalogIds = catalog.value.filter((m) => this.owns(m));
     this.catalogFault = catalog.status === "fulfilled" ? null : catalog.reason instanceof UpstreamError && catalog.reason.status !== undefined ? catalog.reason.status : 0;
 
     if (warm.status === "fulfilled" && warm.value !== null) {
-      this.setLoaded(warm.value.loaded.filter((m) => this.mine(m)));
-      this.setLoading(warm.value.loading.filter((m) => this.mine(m)));
+      this.setLoaded(warm.value.loaded.filter((m) => this.owns(m)));
+      this.setLoading(warm.value.loading.filter((m) => this.owns(m)));
       if (warm.value.placements) this.placements = warm.value.placements;
     } else {
       // Missing warm endpoint isn't an error, it just means we never know

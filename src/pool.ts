@@ -86,8 +86,7 @@ export class BackendPool {
   ) {
     this.arbiter.onRelease(() => this.scheduleResume());
     for (const b of cfg.backends) {
-      const seen = this.mineOn(b);
-      const state = new BackendState(b.url, b.kind, log, seen.mine, backendAuth(b.format, b.key, b.headers), seen.scoped);
+      const state = new BackendState(b.url, b.kind, log, this.mineOn(b), backendAuth(b.format, b.key, b.headers));
       const slot: BackendSlot = {
         name: b.name,
         cfg: b,
@@ -142,17 +141,17 @@ export class BackendPool {
 
   /**
    * What a backend sees of a URL it shares with another: its own `serves` if it declares them,
-   * else everything except the ids a sibling declares. Alone on its URL, everything.
+   * else everything except the ids a sibling declares. Undefined alone on its URL.
    */
-  private mineOn(b: BackendConfig): { mine?: (id: string) => boolean; scoped: boolean } {
+  private mineOn(b: BackendConfig): ((id: string) => boolean) | undefined {
     const siblings = this.cfg.backends.filter((o) => o.name !== b.name && o.url === b.url);
-    if (siblings.length === 0) return { scoped: false };
+    if (siblings.length === 0) return undefined;
     if (b.serves.length) {
       const own = new Set(b.serves);
-      return { mine: (id) => own.has(id), scoped: true };
+      return (id) => own.has(id);
     }
     const theirs = new Set(siblings.flatMap((o) => o.serves));
-    return theirs.size === 0 ? { scoped: false } : { mine: (id) => !theirs.has(id), scoped: false };
+    return (id) => !theirs.has(id);
   }
 
   /**
@@ -221,9 +220,11 @@ export class BackendPool {
     );
     // Residents first and together: they are small, and their memory is what the load needs.
     await Promise.all(overlap.filter((s) => s.cfg.resident?.yield).map((s) => this.residentCall(s, "yield", b.name)));
+    // A model still loading holds the card as surely as a loaded one.
+    const onCard = (s: BackendSlot) => s.state.resident() !== null || s.state.loading().length > 0;
     const deadline = Date.now() + EVICT_BUDGET_MS;
     for (const s of overlap) {
-      if (s.cfg.resident || !s.state.resident()) continue;
+      if (s.cfg.resident || !onCard(s)) continue;
       if (Date.now() >= deadline) {
         this.log.warn("pool.evict_budget", {
           for: b.name, resources: mine, skipped: s.name, budgetMs: EVICT_BUDGET_MS,
@@ -235,7 +236,7 @@ export class BackendPool {
       while (this.evicted.length > 20) this.evicted.shift();
       await s.state.unload();
     }
-    const left = overlap.filter((s) => !s.cfg.resident && s.state.resident() !== null).map((s) => s.name);
+    const left = overlap.filter((s) => !s.cfg.resident && onCard(s)).map((s) => s.name);
     if (left.length > 0) {
       throw new Error(`${left.join(", ")} still loaded on ${mine.join(", ")}: not loading ${b.name} on top`);
     }

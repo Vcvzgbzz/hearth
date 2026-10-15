@@ -226,10 +226,12 @@ backends:
 
 Leave out `resident` and the two take turns on the card instead, like any two backends
 that share a resource. On a shared URL each backend counts only its own models as
-loaded: the one that declares `serves` sees just those ids, the other sees everything
-else. So a turn for `card` evicts `rerank` only while the reranker itself is loaded, and
-then drops it alone with `POST /api/models/unload/<id>`, leaving the seat's weights in
-place. Evicting `card`, which declares nothing, still clears the whole llama-swap.
+loaded or loading: the one that declares `serves` sees just those ids, the other sees
+everything else. So a turn for `card` evicts `rerank` only while the reranker itself is
+on the card, and evicting either one drops only its own models, each with
+`POST /api/models/unload/<id>`, never the whole llama-swap. That is why `serves` here must
+list the ids llama-swap reports in `/running`: an alias it reports under another name is
+never counted as loaded, so its neighbour would load on top of it.
 
 ### Backends that don't speak the OpenAI API
 

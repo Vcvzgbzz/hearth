@@ -5,8 +5,8 @@
  * The URL reports every model it holds, so unless each backend reads only its own ids the app
  * backend looks resident whenever the chat model is loaded. Every chat job then "evicts" it,
  * and clearing the whole URL unloads the chat model the job is about to use. What is asserted
- * here: a backend that declares `serves` on a shared URL counts only those ids, and evicting it
- * drops only those ids, one by one.
+ * here: on a shared URL each backend counts only its own ids, and evicting either one drops
+ * only its own ids, one by one, so the other keeps its weights.
  *
  *     npx tsx test/shared-swap.test.ts
  */
@@ -18,21 +18,36 @@ import { silentLogger } from "../src/log.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 
-/** A llama-swap stand-in: /running is ours to set, and every unload it is asked for is recorded. */
+/**
+ * A llama-swap stand-in: /running is ours to set (a `~` prefix marks a model still starting),
+ * every unload is recorded, and a per-model unload of a model it does not hold answers 404.
+ */
 let running: string[] = [];
+let refuse = false;
 const unloads: string[] = [];
 const swap = createServer((req, res) => {
   res.setHeader("content-type", "application/json");
   if (req.url === "/running") {
-    return void res.end(JSON.stringify({ running: running.map((model) => ({ model, state: "ready" })) }));
+    const rows = running.map((m) => m.startsWith("~") ? { model: m.slice(1), state: "starting" } : { model: m, state: "ready" });
+    return void res.end(JSON.stringify({ running: rows }));
   }
   if (req.url === "/v1/models") {
     return void res.end(JSON.stringify({ data: [{ id: "chat-model" }, { id: "image-app" }] }));
   }
-  if (req.url?.startsWith("/api/models/unload")) {
+  if (req.url === "/api/models/unload") {
     unloads.push(req.url);
-    const one = req.url.slice("/api/models/unload/".length);
-    running = one ? running.filter((m) => m !== decodeURIComponent(one)) : [];
+    running = [];
+    return void res.end("ok");
+  }
+  if (req.url?.startsWith("/api/models/unload/")) {
+    unloads.push(req.url);
+    const id = decodeURIComponent(req.url.slice("/api/models/unload/".length));
+    const held = running.some((m) => m === id || m === `~${id}`);
+    if (refuse || !held) {
+      res.statusCode = refuse ? 500 : 404;
+      return void res.end("{}");
+    }
+    running = running.filter((m) => m !== id && m !== `~${id}`);
     return void res.end("ok");
   }
   res.end(JSON.stringify({ choices: [{ message: { content: "hi" } }] }));
@@ -97,13 +112,44 @@ try {
     assert.equal(app.resident(), null, "and the app backend reads as cleared");
   }
 
-  // --- a backend that declares nothing still clears the URL when evicted -----------------
+  // --- the other way round: evicting the chat backend leaves the app model loaded ---------
   {
-    running = ["chat-model"];
+    running = ["chat-model", "image-app"];
     await refresh();
     unloads.length = 0;
     assert.equal(await chat("image-app"), 200);
-    assert.deepEqual(unloads, ["/api/models/unload"], "unchanged without `serves`: the global unload");
+    assert.deepEqual(unloads, ["/api/models/unload/chat-model"], "the backend without `serves` drops its own model by id too");
+    assert.deepEqual(running, ["image-app"], "the app model stayed loaded");
+  }
+
+  // --- a model still loading is dropped as well, or the next one loads on top of it -------
+  {
+    running = ["chat-model", "~image-app"];
+    await refresh();
+    unloads.length = 0;
+    assert.equal(await chat("chat-model"), 200);
+    assert.deepEqual(unloads, ["/api/models/unload/image-app"]);
+    assert.deepEqual(running, ["chat-model"]);
+  }
+
+  // --- a drop refused because the model is already gone does not fail the job ------------
+  {
+    running = ["chat-model", "image-app"];
+    await refresh();
+    running = ["chat-model"]; // gone behind hearth's back
+    unloads.length = 0;
+    assert.equal(await chat("chat-model"), 200, "the re-read shows the card clear");
+    assert.deepEqual(unloads, ["/api/models/unload/image-app"]);
+  }
+
+  // --- a drop refused while the model is still loaded fails the job -----------------------
+  {
+    running = ["chat-model", "image-app"];
+    await refresh();
+    refuse = true;
+    assert.notEqual(await chat("chat-model"), 200, "nothing loads on top of a model that would not go");
+    assert.equal(app.resident(), "image-app");
+    refuse = false;
   }
 } finally {
   node.server.closeAllConnections();

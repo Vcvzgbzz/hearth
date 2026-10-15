@@ -285,15 +285,18 @@ function pool(concurrency = 1) {
 // --- end to end: the overlapping backend is unloaded before we load ---------
 {
   let unloaded = 0;
+  let running = [{ model: "resident", state: "ready" }];
   const backend = createServer((req, res) => {
-    if (req.url === "/api/models/unload") {
+    // One URL shared by both backends, so the neighbour drops its own model by id.
+    if (req.url === "/api/models/unload/resident") {
       unloaded++;
+      running = [];
       res.end("ok");
       return;
     }
     if (req.url === "/running") {
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ running: [{ model: "resident", state: "ready" }] }));
+      res.end(JSON.stringify({ running }));
       return;
     }
     if (req.url === "/v1/models") {
