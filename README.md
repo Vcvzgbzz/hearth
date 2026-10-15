@@ -1,5 +1,10 @@
 # hearth
 
+[![npm](https://img.shields.io/npm/v/@vcvzgbzz/hearth)](https://www.npmjs.com/package/@vcvzgbzz/hearth)
+[![CI](https://github.com/Vcvzgbzz/hearth/actions/workflows/test.yml/badge.svg)](https://github.com/Vcvzgbzz/hearth/actions/workflows/test.yml)
+[![Node](https://img.shields.io/node/v/@vcvzgbzz/hearth)](package.json)
+[![License: MIT](https://img.shields.io/github/license/Vcvzgbzz/hearth)](LICENSE)
+
 A queue in front of your local inference server, and optionally a way to lend
 the spare capacity to someone you trust.
 
