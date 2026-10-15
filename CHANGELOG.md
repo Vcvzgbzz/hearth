@@ -33,6 +33,12 @@ Other things that behave differently:
   A request from loopback that asks for it by any other name is refused, which
   includes a name pointed at `127.0.0.1` in a hosts file.
 - **Cookies do not cross the passthrough**, to a backend or back from one.
+- **Backends that share one llama-swap unload only their own models.** Each
+  counts as loaded only the ids it serves (one without `serves` counts every id
+  its siblings do not declare), and making room drops those one by one instead
+  of clearing the whole llama-swap. On a shared URL, `serves` must list the ids
+  llama-swap reports in `/running`: an id it does not recognise no longer marks
+  the backend warm. A backend alone on its URL behaves as before.
 - **The package exports what embedding needs**: `loadConfig`, `parseConfig`,
   `ConfigError`, `createNode`, `createLogger`, `silentLogger` and their types.
   The scheduler, pool, peer registry and the rest are no longer exported.
@@ -96,7 +102,8 @@ now also carries `X-Request-Id`.
 - **A Routing page**: the rules as a map that can be edited by hand, with
   search, undo, drafts the node keeps, and named versions to go back to.
 - **A Topology page** that can be edited: callers and the routers they go by,
-  hardware, machines, peers and providers.
+  hardware, machines, peers and providers. Each request is one dot that follows
+  its whole route out, and back again when it is answered.
 - **Review before anything is written**: what changes in plain words, the diff,
   and what needs a restart.
 - **Models, Queue and Logs pages**: warm and evict a model, each call behind a
