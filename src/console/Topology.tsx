@@ -291,18 +291,24 @@ const HomeNode = memo(function HomeNode({ data }: NodeProps<Node<Home>>) {
 
 const nodeTypes = { card: CardNode, hardware: GroupNode, machine: MachineNode, ghost: GhostNode, caller: CallerNode, bay: BayNode, home: HomeNode };
 
-type Pulse = { key: string; back: boolean; t: number };
+/** `first`/`last`: this leg begins or ends the dot's whole trip, so it eases and fades there only. */
+type Pulse = { key: string; back: boolean; t: number; first: boolean; last: boolean };
 /** `wire`: a route, drawn to be followed. `lit`: the way a tried request takes, or the line under the pointer. */
 export type Line = { jobs: string[]; pulses: Pulse[]; color?: string; reverse?: boolean; dashed?: boolean; ghost?: boolean; wire?: boolean; lit?: boolean; faint?: boolean };
 
-const TRIP_MS = 900;
+/** Time a dot spends on one line of its route. */
+const HOP_MS = 400;
+
+/** When each request's dot set off, shared by every line of its route so they take it leg by leg. */
+const departed = new Map<string, number>();
 
 /**
  * Pulses per edge, kept outside the edge components because React Flow remounts those on every
- * update: one out when a request appears, one back when it ends, each with the time it set off.
+ * update: one out when a request appears, one back when it ends. `hop` is this line's place on
+ * the route, counted from the caller's end, and `hops` the route's last place.
  */
 const tracked = new Map<string, { seen: Set<string>; pulses: Pulse[] }>();
-function pulsesFor(edge: string, jobs: string[]): Pulse[] {
+function pulsesFor(edge: string, jobs: string[], hop = 0, hops = hop): Pulse[] {
   const now = Date.now();
   const cur = tracked.get(edge);
   const ids = new Set(jobs);
@@ -313,15 +319,27 @@ function pulsesFor(edge: string, jobs: string[]): Pulse[] {
   }
   // Several in one reading leave one after another, so a burst reads as a stream rather than one dot.
   let n = 0;
-  for (const j of jobs) if (!cur.seen.has(j)) cur.pulses.push({ key: `o:${j}`, back: false, t: now + 90 * n++ });
-  for (const j of cur.seen) if (!ids.has(j)) cur.pulses.push({ key: `b:${j}`, back: true, t: now + 90 * n++ });
+  for (const j of jobs) {
+    if (cur.seen.has(j)) continue;
+    if (!departed.has(j)) departed.set(j, now + 90 * n);
+    n++;
+    cur.pulses.push({ key: `o:${j}`, back: false, t: departed.get(j)! + hop * HOP_MS, first: hop === 0, last: hop === hops });
+  }
+  for (const j of cur.seen) {
+    if (ids.has(j)) continue;
+    // The way back starts at the far end, and not before the way out has arrived there.
+    const turn = Math.max(now, (departed.get(j) ?? now) + (hops + 1) * HOP_MS);
+    cur.pulses.push({ key: `b:${j}`, back: true, t: turn + (hops - hop) * HOP_MS, first: hop === hops, last: hop === 0 });
+  }
   cur.seen = ids;
-  cur.pulses = cur.pulses.filter((p) => now - p.t < TRIP_MS).slice(-12);
+  cur.pulses = cur.pulses.filter((p) => now - p.t < HOP_MS).slice(-12);
+  // ponytail: oldest-first cap, not per-job cleanup; a request outliving 500 newer ones redraws its way back from now.
+  for (const k of departed.keys()) { if (departed.size <= 500) break; departed.delete(k); }
   return [...cur.pulses];
 }
 
-/** One trip along the path, eased, placed by its start time so a remounted edge resumes it mid-flight. */
-function PulseDot({ path, color, reverse, t }: { path: string; color: string; reverse: boolean; t: number }) {
+/** One leg of a trip, placed by its start time so a remounted edge resumes it mid-flight. */
+function PulseDot({ path, color, reverse, t, first, last }: { path: string; color: string; reverse: boolean; t: number; first: boolean; last: boolean }) {
   const dot = useRef<SVGCircleElement>(null);
   const track = useRef<SVGPathElement>(null);
   useLayoutEffect(() => {
@@ -330,7 +348,7 @@ function PulseDot({ path, color, reverse, t }: { path: string; color: string; re
       const c = dot.current;
       const p = track.current;
       if (!c || !p) return;
-      const k = (Date.now() - t) / TRIP_MS;
+      const k = (Date.now() - t) / HOP_MS;
       if (k < 0) {
         raf = requestAnimationFrame(step);
         return;
@@ -339,16 +357,17 @@ function PulseDot({ path, color, reverse, t }: { path: string; color: string; re
         c.setAttribute("opacity", "0");
         return;
       }
-      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      // Eased only where the whole trip starts and stops, so the dot runs through the nodes between.
+      const e = first && last ? (1 - Math.cos(Math.PI * k)) / 2 : first ? 1 - Math.cos((Math.PI * k) / 2) : last ? Math.sin((Math.PI * k) / 2) : k;
       const at = p.getPointAtLength((reverse ? 1 - e : e) * p.getTotalLength());
       c.setAttribute("cx", String(at.x));
       c.setAttribute("cy", String(at.y));
-      c.setAttribute("opacity", String(Math.min(1, k / 0.08, (1 - k) / 0.12)));
+      c.setAttribute("opacity", String(Math.min(1, first ? k / 0.08 : 1, last ? (1 - k) / 0.12 : 1)));
       raf = requestAnimationFrame(step);
     };
     step();
     return () => cancelAnimationFrame(raf);
-  }, [path, t, reverse]);
+  }, [path, t, reverse, first, last]);
   return (
     <g>
       <path ref={track} d={path} fill="none" stroke="none" />
@@ -371,7 +390,7 @@ const FlowEdge = memo(function FlowEdge({ id, sourceX, sourceY, targetX, targetY
       }} />
       {(data?.pulses ?? []).map((p) => (
         // Out runs source to target unless the edge is drawn the other way round; back is the opposite.
-        <PulseDot key={p.key} t={p.t} path={path} color={p.back ? "var(--ok)" : color} reverse={p.back !== Boolean(data?.reverse)} />
+        <PulseDot key={p.key} t={p.t} first={p.first} last={p.last} path={path} color={p.back ? "var(--ok)" : color} reverse={p.back !== Boolean(data?.reverse)} />
       ))}
     </>
   );
@@ -495,12 +514,12 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
             tags: (b.resources ?? []).filter((x) => x !== key),
           } satisfies Card,
         });
-        edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run) } });
+        edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run, who ? 2 : 1) } });
       });
       if (group) {
         if (who) drops.set(group, { resource: key, server: machine });
         const all = mine.flatMap((b) => runningIds.get(b.name) ?? []);
-        if (chips) edges.push({ id: `e:${group}`, source: hub, target: group, type: "flow", data: { jobs: all, pulses: pulsesFor(`e:${group}`, all) } });
+        if (chips) edges.push({ id: `e:${group}`, source: hub, target: group, type: "flow", data: { jobs: all, pulses: pulsesFor(`e:${group}`, all, who ? 2 : 1) } });
         inside.push({
           id: group, type: "hardware", ...(frame ? { parentId: frame, extent: "parent" as const } : {}), position: { x: left, y: top }, style: { width, height },
           data: {
@@ -549,7 +568,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
           // Nothing is loaded or unloaded there: what is wrong with it, else what it offers, says more than "idle".
           sub: run.length > 0 || b.restingMs ? backendSub(b, run.length) : b.trouble ?? ((b.serves ?? []).length ? b.serves!.join(", ") : backendSub(b, 0)), meter: [run.length, b.slots ?? 0], busy: run.length > 0, selected: is("backend", b.name) } satisfies Card,
       });
-      edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run) } });
+      edges.push({ id: `e:backend:${b.name}`, source: hub, target: `backend:${b.name}`, type: "flow", data: { jobs: run, pulses: pulsesFor(`e:backend:${b.name}`, run, who ? 2 : 1) } });
     });
     y += HEAD + PAD + away.length * H + (away.length - 1) * GAP + 24;
   }
@@ -576,7 +595,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
         tip: "Decides where each request runs. Click to open the Routing page.",
       } satisfies Card,
     });
-    edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local) } });
+    edges.push({ id: "e:router", source: "self", sourceHandle: "down", target: "router", targetHandle: "up", type: "flow", data: { jobs: local, pulses: pulsesFor("e:router", local, 0, 1) } });
   }
   const load = `${d.q.jobs.filter((j) => j.state === "running").length} running · ${d.q.jobs.filter((j) => j.state === "queued").length} queued`;
   // Each peer gets a block tall enough for its offer: linked models first, then what is only on offer.
@@ -638,7 +657,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
         } satisfies Card,
       });
       // Every router's requests come together at the one point they are sent on from.
-      edges.push({ id: `e:${id}`, source: id, sourceHandle: "down", target: "join", targetHandle: "up", type: "flow", data: { jobs, pulses: pulsesFor(`e:${id}`, jobs), wire: true, color: "var(--dim)" } });
+      edges.push({ id: `e:${id}`, source: id, sourceHandle: "down", target: "join", targetHandle: "up", type: "flow", data: { jobs, pulses: pulsesFor(`e:${id}`, jobs, 1, 2), wire: true, color: "var(--dim)" } });
       if (!bay) continue;
       const box = `bay:${name ?? ""}`;
       nodes.push({ id: box, type: "bay", parentId: "self", extent: "parent" as const, position: { x: bay.x, y: HOME }, style: { width: bay.w, height: bay.h }, draggable: bays.length > 1, data: { label: name === null ? "by the default router" : `by ${name}`, own: name !== null, moves: bays.length > 1 } satisfies Bay });
@@ -647,7 +666,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
       });
       edges.push({
         id: `e:${box}`, source: box, sourceHandle: "down", target: id, targetHandle: "up", type: "flow",
-        data: { jobs, pulses: pulsesFor(`e:${box}`, jobs), wire: true, color: name === null ? "var(--info)" : "var(--accent)" },
+        data: { jobs, pulses: pulsesFor(`e:${box}`, jobs, 0, 2), wire: true, color: name === null ? "var(--info)" : "var(--accent)" },
       });
     }
   }
@@ -665,7 +684,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
     // Work we send them flows out from this node, so the dots run right to left.
     edges.push({
       id: `e:peer:${p.name}`, source: `peer:${p.name}`, target: hub, type: "flow",
-      data: { jobs: peerIds.get(p.name) ?? [], pulses: pulsesFor(`e:peer:${p.name}`, peerIds.get(p.name) ?? []), color: "var(--info)", reverse: true, dashed: !p.up },
+      data: { jobs: peerIds.get(p.name) ?? [], pulses: pulsesFor(`e:peer:${p.name}`, peerIds.get(p.name) ?? [], 0, 1), color: "var(--info)", reverse: true, dashed: !p.up },
     });
 
     // What they lend, as chips to their left; our requests carry on through the peer into the model they asked for.
@@ -692,7 +711,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
       });
       edges.push({
         id: `e:${id}`, source: id, target: `peer:${p.name}`, type: "flow",
-        data: { jobs, pulses: pulsesFor(`e:${id}`, jobs), color: "var(--info)", reverse: true, dashed: c.state === "dead", ghost: c.state === "offered" },
+        data: { jobs, pulses: pulsesFor(`e:${id}`, jobs, 1), color: "var(--info)", reverse: true, dashed: c.state === "dead", ghost: c.state === "offered" },
       });
     });
     py += block + GAP;
