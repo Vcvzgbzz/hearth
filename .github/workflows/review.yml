@@ -1,0 +1,49 @@
+name: review
+
+# A model's first-pass review of every pull request, as one PR comment kept up to date,
+# with a summary posted to Discord. See .github/review.mjs.
+#
+# pull_request_target runs this file as it is on main, with access to secrets, for PRs from
+# forks too. That is safe only because nothing from the PR is checked out or run: the diff
+# is fetched as text. Keep it that way.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to review
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One review at a time: the model API allows a few turns per key, and a cancelled
+# request keeps its turn until it finishes.
+concurrency:
+  group: model-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The base branch only: review.mjs and AGENTS.md as they are on main.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node .github/review.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REVIEW_API: ${{ vars.REVIEW_API }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
