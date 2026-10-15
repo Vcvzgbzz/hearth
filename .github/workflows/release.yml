@@ -1,0 +1,59 @@
+name: release
+
+# Push a tag `vX.Y.Z` whose version matches package.json: the same checks as
+# CI run, the package goes to npm with provenance, and a GitHub release is
+# made from that version's section of CHANGELOG.md.
+#
+# Publishing uses npm trusted publishing (OIDC), so there is no token to keep:
+# set it up once on npmjs.com under the package's Settings → Trusted publishing,
+# naming this repository and the workflow file `release.yml`.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write   # the GitHub release
+  id-token: write   # npm trusted publishing and provenance
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships an older one.
+      - run: npm install -g npm@11.21.0
+
+      - name: The tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json $pkg" >&2
+            exit 1
+          fi
+
+      - run: npm ci
+      # prepublishOnly runs typecheck, the tests and the build before anything is sent.
+      - run: npm publish --provenance --access public
+
+      - name: GitHub release from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 == "## " v { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no '## $version' section" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "hearth $version" --notes-file notes.md --verify-tag
