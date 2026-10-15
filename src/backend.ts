@@ -207,6 +207,7 @@ export class BackendState {
     if (!this.k.unload || !(await this.k.unload(this.url, this.log))) return;
     // The event stream may take a moment to say so; scoring the next job against an evicted model is worse.
     this.loadedIds = [];
+    this.setLoading([]);
     this.lastUpdateAt = Date.now();
   }
 
