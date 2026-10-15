@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Vcvzgbzz/hearth/security/advisories/new
+    about: Privately, not in a public issue.
+  - name: Documentation
+    url: https://github.com/Vcvzgbzz/hearth/tree/main/docs
+    about: Configuration, routing, backends, sharing and the console.

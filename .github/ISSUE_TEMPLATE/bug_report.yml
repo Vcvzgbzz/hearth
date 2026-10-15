@@ -1,0 +1,62 @@
+name: Bug report
+description: hearth did something it should not, or did not do something it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem? Please report it privately instead: see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: hearth version
+      description: The output of `hearth --version`.
+      placeholder: "3.0.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Node version and OS
+      placeholder: "Node 22.11, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend kind
+      description: The `kind` of the backend involved, if any.
+      options:
+        - llama-swap
+        - single (llama.cpp server or similar)
+        - ollama
+        - none (an app that is not an inference server)
+        - a cloud provider
+        - more than one, or not sure
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What you did, and what hearth did. Exact requests help.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: The relevant part of hearth.yaml
+      description: Replace every key, token and password before pasting.
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: From around the time it happened. `--log debug` shows more.
+      render: text

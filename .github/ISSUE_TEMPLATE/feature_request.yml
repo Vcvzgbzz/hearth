@@ -1,0 +1,21 @@
+name: Idea or request
+description: Something hearth could do, or do better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The situation and what gets in the way, before any solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you picture it working. A config sketch is welcome.
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: A workaround, another tool, or nothing.

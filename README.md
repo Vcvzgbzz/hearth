@@ -116,7 +116,8 @@ The defaults assume a private network. hearth binds to `127.0.0.1`; with no
 `apiKeys`, loopback is the only thing trusted; lending is opt-in per model; and
 nothing leaves the machine unless your config names a peer or a cloud backend.
 Do not put a reverse proxy in front of it. [Security](docs/security.md) has the
-whole of it, and is worth reading before you widen `listen`.
+whole of it, and is worth reading before you widen `listen`. Found a
+vulnerability? Report it privately: see [`SECURITY.md`](SECURITY.md).
 
 ## Development
 
@@ -128,7 +129,8 @@ npm run build
 ```
 
 [Development](docs/development.md) covers embedding it and how the tests are
-laid out. Contributing with an AI agent? [`AGENTS.md`](AGENTS.md) has the rules
-for commits, comments and pull requests here.
+laid out. To contribute, start with [`CONTRIBUTING.md`](CONTRIBUTING.md);
+[`AGENTS.md`](AGENTS.md) has the full rules for commits, comments and pull
+requests, for people and AI agents alike.
 
 MIT.
