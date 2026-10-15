@@ -25,19 +25,26 @@ import { parseV1 } from "./v1.js";
 /** A backend that takes `delay` ms to answer, so a request is genuinely in
  *  flight when the shutdown starts rather than racing it. */
 const slowBackend = (delay: number) => {
-  const s = createServer((req, res) => {
+  const s = Object.assign(createServer((req, res) => {
     if (req.url === "/v1/models") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ data: [{ id: "m" }] }));
       return;
     }
     req.resume();
+    if (req.url === "/v1/chat/completions") s.hits++;
     setTimeout(() => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ choices: [{ message: { content: "finished" } }] }));
     }, delay);
-  });
+  }), { hits: 0 });
   return s;
+};
+
+/** Resolves once `n` chat requests reached the backend, so a close starts with them in flight. */
+const arrived = async (backend: { hits: number }, n = 1) => {
+  for (let i = 0; i < 500 && backend.hits < n; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(backend.hits >= n, `the backend received ${n} request(s)`);
 };
 
 const nodeOn = async (url: string) => {
@@ -70,8 +77,7 @@ const chat = (base: string) =>
   const { node, base } = await nodeOn(`http://127.0.0.1:${(backend.address() as AddressInfo).port}`);
 
   const inFlight = chat(base);
-  // Give it long enough to be ON the backend, not merely dispatched.
-  await new Promise((r) => setTimeout(r, 80));
+  await arrived(backend);
 
   const t0 = Date.now();
   await node.close(5_000);
@@ -87,8 +93,8 @@ const chat = (base: string) =>
   assert.ok(!("cut" in out), `the in-flight request was answered, not cut (${"cut" in out ? out.cut : ""})`);
   assert.equal(out.status, 200);
   assert.equal(out.body.choices[0]!.message.content, "finished", "and its body arrived whole");
-  // It had ~220ms left to run. Returning sooner than that would mean close()
-  // did not wait for it at all and the assertions above passed by luck.
+  // It reached the backend with most of its 300ms left. Returning sooner than
+  // that would mean close() did not wait for it and the assertions passed by luck.
   assert.ok(closeMs >= 150, `close waited for the request (took ${closeMs}ms)`);
   assert.ok(closeMs < 4_000, `and did not sit out the full grace (took ${closeMs}ms)`);
 
@@ -108,7 +114,7 @@ const chat = (base: string) =>
     (r) => `status ${r.status}`,
     () => "destroyed",
   );
-  await new Promise((r) => setTimeout(r, 80));
+  await arrived(backend);
 
   const t0 = Date.now();
   await node.close(200);
@@ -130,7 +136,7 @@ const chat = (base: string) =>
   const { node, base } = await nodeOn(`http://127.0.0.1:${(backend.address() as AddressInfo).port}`);
 
   const doomed = chat(base).then(() => "answered", () => "destroyed");
-  await new Promise((r) => setTimeout(r, 80));
+  await arrived(backend);
 
   const t0 = Date.now();
   await node.close();
@@ -185,7 +191,8 @@ const chat = (base: string) =>
 
   const first = chat(base);
   const second = chat(base);
-  await new Promise((r) => setTimeout(r, 80));
+  await arrived(backend);
+  for (let i = 0; i < 500 && !node.pool.jobs().some((j) => j.state === "queued"); i++) await new Promise((r) => setTimeout(r, 10));
   assert.equal(node.pool.jobs().filter((j) => j.state === "queued").length, 1,
     "the second request is genuinely waiting, not running");
 

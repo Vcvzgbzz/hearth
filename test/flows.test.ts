@@ -242,7 +242,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const cfg = parseConfig({
     backends: { main: { url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}`, kind: "none", serves: ["small", "big"] } },
     models: { alias: { as: "big" } },
-    flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }, borrow: { inputs: ["small"], steps: [{ when: { idle: { model: "big", ms: 150 } }, to: "big" }, { to: "small" }] } },
+    flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }, borrow: { inputs: ["small"], steps: [{ when: { idle: { model: "big", ms: 1000 } }, to: "big" }, { to: "small" }] } },
   });
   const node = createNode(cfg, silentLogger);
   const at = await new Promise<string>((ready) =>
@@ -254,12 +254,12 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   assert.equal(await ask("small"), "small", "just started, the big model has not been idle long enough yet");
-  await wait(220);
+  await wait(1100);
   assert.equal(await ask("small"), "big", "idle long enough: the request borrows it");
   assert.equal(await ask("small"), "big", "and borrowing is not use: the next one borrows it too");
   await ask("alias");
   assert.equal(await ask("small"), "small", "someone asked for the big model, under another of its names: it is in use");
-  await wait(220);
+  await wait(1100);
   assert.equal(await ask("small"), "big", "left alone again, it is borrowed again");
 
   await node.close();
@@ -391,7 +391,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
     flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] },
       a: { inputs: ["small"], steps: [{ when: { tokensUnder: 1000000 }, to: "small" }, { to: "big", do: ["after", "onFail", "rare"] }] },
       b: { inputs: ["lone"], steps: [{ to: "small", do: ["onFail"] }] },
-      keep: { sticky: 60000, inputs: ["big"], steps: [{ when: { idle: { model: "lone", ms: 150 } }, to: "lone" }, { to: "big" }] },
+      keep: { sticky: 60000, inputs: ["big"], steps: [{ when: { idle: { model: "lone", ms: 1000 } }, to: "lone" }, { to: "big" }] },
     },
   });
   const node = createNode(cfg, silentLogger);
@@ -433,10 +433,11 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
 
   // A conversation stays with the model it started on; a new one is decided afresh.
   broken = false;
+  await ask("lone");
   seen.length = 0;
   const opening = [{ role: "user", content: "a long story" }];
   await ask("big", opening);
-  await new Promise((r) => setTimeout(r, 220));
+  await new Promise((r) => setTimeout(r, 1100));
   await ask("big", [...opening, { role: "assistant", content: "…" }, { role: "user", content: "go on" }]);
   await ask("big", [{ role: "user", content: "something else" }]);
   assert.deepEqual(seen, ["big", "big", "lone"], "the second turn stayed put though the idle model had become free");
@@ -512,7 +513,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
   const cfg = parseConfig({
     backends: { main: { url, kind: "none", serves: ["small", "big"], concurrency: 4 } },
-    actions: { slow: { call: `${url}/hook`, on: "finished", slowerThan: 100 } },
+    actions: { slow: { call: `${url}/hook`, on: "finished", slowerThan: 500 } },
     flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }, a: { inputs: ["small"], steps: [{ to: "big", max: 1, do: "slow" }, { to: "small", do: "slow" }] } },
   });
   const node = createNode(cfg, silentLogger);
@@ -527,7 +528,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   await second.text();
   assert.deepEqual(seen, ["big", "small"], "the line is at its limit, so the second request goes on down the list");
   assert.equal(second.headers.get("x-hearth-model"), "small", "and the answer says which model ran it");
-  await new Promise((r) => setTimeout(r, 150));
+  await new Promise((r) => setTimeout(r, 600));
   release.forEach((go) => go());
   release = [];
   const one = await first;
@@ -549,7 +550,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   assert.equal(posted.length, 1, "only the request that took long sets off an action for slow ones");
   const told = posted[0]!;
   assert.deepEqual([told["model"], told["backend"], told["outcome"]], ["big", "main", "ok"]);
-  assert.ok((told["ranMs"] as number) >= 100 && (told["ms"] as number) >= (told["ranMs"] as number), "with how long it ran, out of how long it took");
+  assert.ok((told["ranMs"] as number) >= 500 && (told["ms"] as number) >= (told["ranMs"] as number), "with how long it ran, out of how long it took");
   // Its response closed, so the line has room again.
   const third = ask();
   await until(() => release.length === 1);
