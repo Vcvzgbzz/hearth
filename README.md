@@ -17,11 +17,11 @@ hearth serve
 Point any client at `http://127.0.0.1:4141/v1` instead of your backend. That's
 the whole migration.
 
-![The routing map: a rule's lines, and the models, providers and peers they send to](docs/img/routing.jpg)
+![The console: routing rules decide where a request goes, the queue holds work so one card does not thrash between models, and a peer takes the overflow and lends a model this node does not run](assets/demo.gif)
 
 No GPU to hand? Clone the repo and run `npm install && npm run demo`: a node
 with one of everything and stand-ins behind it, at
-<http://127.0.0.1:4300/ui>. The pictures here are of it. See
+<http://127.0.0.1:4300/ui>. The screenshots below are of it. See
 [`demo/`](demo/README.md).
 
 ## What it does
@@ -47,6 +47,8 @@ Each of these is off until you ask for it in `hearth.yaml`.
   and a short list of if / else lines decides which model answers: by the size of
   the prompt, a header, the caller, the time, what is loaded. See
   [Routing](docs/routing.md).
+
+  ![The routing map: a rule's lines, and the models, providers and peers they send to](docs/img/routing.jpg)
 - **A console.** `/ui` draws the node, its hardware, its callers and its rules,
   shows the queue and recent requests, and edits the config with a review before
   anything is written. See [The console](docs/console.md).
