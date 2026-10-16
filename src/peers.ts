@@ -92,6 +92,12 @@ export class PeerRegistry {
   private readonly byName = new Map<string, PeerConfig>();
   private readonly inFlight = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** When the reading each peer's capacity came from was asked for. */
+  private readonly readAt = new Map<string, number>();
+  /** When each peer last answered one of our requests. */
+  private readonly servedAt = new Map<string, number>();
+  /** Our requests to each peer still open, with when they were sent. */
+  private readonly open = new Map<string, Set<{ theirModel: string; at: number }>>();
 
   /** Advertised capabilities per peer, from /peer/hello. */
   private readonly caps = new Map<string, Set<string>>();
@@ -133,25 +139,51 @@ export class PeerRegistry {
     return s ? { ...s, up: this.isUp(name) } : undefined;
   }
 
-  /** Usable right now? Staleness is checked here too, so a wedged poller cannot leave a peer up. */
+  /** Usable right now? Staleness is checked here too, so a wedged poller cannot leave a peer up.
+   *  An answer to one of our requests is as recent a sign of life as a reading. */
   isUp(name: string): boolean {
     const s = this.status.get(name);
     if (!s || !s.up || s.lastOkAt === null) return false;
-    return Date.now() - s.lastOkAt <= this.cfg.peerStaleMs;
+    const last = Math.max(s.lastOkAt, this.servedAt.get(name) ?? 0);
+    return Date.now() - last <= this.cfg.peerStaleMs;
   }
 
-  /** What one model would cost on a peer: its per-model reading, else the node-level one. */
+  /** A request is on its way to a peer; call what this returns once it is over. Until the
+   *  next reading, loadFor counts it, so a burst between readings does not all land on one peer. */
+  sent(name: string, theirModel: string): () => void {
+    const open = this.open.get(name) ?? new Set();
+    this.open.set(name, open);
+    const entry = { theirModel, at: Date.now() };
+    open.add(entry);
+    return () => void open.delete(entry);
+  }
+
+  /** A peer answered one of our requests: it is up, whatever its last poll said. */
+  served(name: string): void {
+    const s = this.status.get(name);
+    if (!s) return;
+    this.servedAt.set(name, Date.now());
+    s.consecutiveFailures = 0;
+  }
+
+  /** What one model would cost on a peer: its per-model reading, else the node-level one,
+   *  with our requests sent since that reading added on. */
   loadFor(peer: string, theirModel: string): PeerModelLoad | null {
     const cap = this.status.get(peer)?.capacity;
     if (!cap) return null;
     const per = cap.models?.[theirModel];
-    if (per) return per;
-    return {
+    const load = per ?? {
       slots: cap.slots,
       free: cap.free,
       queued: Object.values(cap.queued).reduce((a, b) => a + b, 0),
       warm: (cap.loaded ?? []).includes(theirModel),
     };
+    const since = this.readAt.get(peer) ?? 0;
+    let unseen = 0;
+    for (const r of this.open.get(peer) ?? []) if (r.at >= since && (!per || r.theirModel === theirModel)) unseen++;
+    if (unseen === 0) return load;
+    const took = Math.min(unseen, load.free);
+    return { ...load, free: load.free - took, queued: load.queued + unseen - took };
   }
 
   /** What a peer says one of its models can take, or null; only per-model readings answer this. */
@@ -179,6 +211,7 @@ export class PeerRegistry {
     // exactly what caused the lockout to begin with.
     if (s.backoffUntil !== null && Date.now() < s.backoffUntil) return;
 
+    const askedAt = Date.now();
     try {
       const cap = await getJson<PeerCapacity>(`${peer.url}/peer/state`, {
         headers: { Authorization: `Bearer ${peer.token}` },
@@ -211,6 +244,7 @@ export class PeerRegistry {
 
       const was = s.up;
       s.capacity = cap;
+      this.readAt.set(name, askedAt);
       if (!was) void this.helloOnce(name);
       s.lastOkAt = Date.now();
       s.lastError = null;

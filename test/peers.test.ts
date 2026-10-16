@@ -177,6 +177,56 @@ function build(staleMs = 60_000) {
   answering = true;
 }
 
+// --- an answered request counts as a passed check --------------------------
+// A peer busy serving our work can be slow to answer /peer/state; that alone
+// must not take it down, and its answers keep it from going stale.
+{
+  answering = true;
+  const { reg } = build(60_000);
+  await reg.pollAll();
+  answering = false;
+  await reg.pollAll();
+  reg.served("friend");
+  await reg.pollAll();
+  assert.equal(reg.isUp("friend"), true, "a failed poll either side of an answer is one strike, not two");
+
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 61_000;
+    reg.served("friend");
+    assert.equal(reg.isUp("friend"), true, "a recent answer keeps an old reading from going stale");
+    Date.now = () => realNow() + 122_000;
+    assert.equal(reg.isUp("friend"), false, "but an old answer is as stale as an old reading");
+  } finally {
+    Date.now = realNow;
+  }
+  answering = true;
+}
+
+// --- requests sent since the reading count against it ----------------------
+// The reading says one slot is free; a burst before the next one must not all
+// see that same slot.
+{
+  answering = true;
+  const { reg } = build();
+  await reg.pollAll();
+  assert.deepEqual(reg.loadFor("friend", "their-big"), { slots: 1, free: 1, queued: 0, warm: false });
+
+  const first = reg.sent("friend", "their-big");
+  const second = reg.sent("friend", "their-big");
+  assert.deepEqual(reg.loadFor("friend", "their-big"), { slots: 1, free: 0, queued: 1, warm: false },
+    "the first takes the free slot and the second queues behind it");
+
+  second();
+  assert.deepEqual(reg.loadFor("friend", "their-big"), { slots: 1, free: 0, queued: 0, warm: false }, "one finished");
+
+  await new Promise((r) => setTimeout(r, 2));
+  await reg.pollAll();
+  assert.deepEqual(reg.loadFor("friend", "their-big"), { slots: 1, free: 1, queued: 0, warm: false },
+    "a reading taken after a request was sent already includes it");
+  first();
+}
+
 peer.closeAllConnections();
 peer.close();
 console.log("peers.test.ts ok");

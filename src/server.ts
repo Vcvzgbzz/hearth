@@ -1011,6 +1011,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         t.startedAt = Date.now();
         // The peer's id, with the route's params still applied.
         const body = pool.outboundBody(model, payload, decision.theirModel);
+        const over = peers.sent(peer.name, decision.theirModel);
         try {
           const up = await send(`${peer.url}/v1/chat/completions`, {
             json: body,
@@ -1025,8 +1026,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
             const detail = await up.text();
             throw new PeerStatusError(peer.name, up.status, detail.slice(0, 200));
           }
+          peers.served(peer.name);
           await pipeThrough(up, res);
+          over();
         } catch (e) {
+          over();
           if (res.headersSent) throw e;
           // Where the flow sends it with peers out of the picture; only somewhere here will do.
           const home = resolve(asked, { ...world, noPeers: true });

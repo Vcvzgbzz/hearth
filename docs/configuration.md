@@ -97,7 +97,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `borrowing.firstByteMs` | `180000` | how long to wait for a peer to start answering before falling back. `0` waits forever |
 | `borrowing.freshMs` | `4000` | how long a good peer reading is reused before a routing decision asks again |
 | `borrowing.downMs` | `30000` | how long a failed probe is remembered, so an outage doesn't make every local request pay the timeout |
-| `borrowing.pollMs` / `.staleMs` | `60000` / `60000` | background floor that warms the cache. The real mechanism is on-demand |
+| `borrowing.pollMs` / `.staleMs` | `60000` / `60000` | background floor that warms the cache. The real mechanism is on-demand. A peer that answered one of our requests within `staleMs` stays up |
 | `borrowing.coldPenalty` | `2` | what a model load is worth to `fastest`, in queued-jobs-equivalent |
 | `apiKeys` | `[]` | keys allowed on `/v1/*`. Empty means loopback only. Setting it means loopback needs a key too, including any local tool you point at this. An entry may be `{ key, label }` to name a caller, and may carry `models`, `expires` and `limits` — see below |
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](console.md#the-console) |

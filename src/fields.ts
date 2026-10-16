@@ -184,7 +184,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     freshMs: ms("How long a good peer reading is reused before a routing decision asks again.", 4000, 100),
     downMs: ms("How long a failed probe is remembered, so an outage doesn't make every request pay the timeout.", 30000, 1000),
     pollMs: ms("Background floor that warms the peer cache.", 60000, 1000),
-    staleMs: ms("When a background peer reading counts as stale.", 60000, 1000),
+    staleMs: ms("When a peer reading counts as stale. An answer to one of our requests counts as a reading.", 60000, 1000),
     coldPenalty: { type: "number", min: 0, desc: "What a model load is worth to `fastest`, in queued jobs.", def: 2 },
   },
   operator: {
