@@ -168,7 +168,10 @@ line; **+ type** brings one onto the map.
   names the line that decided. **pretend…** lists the state your rules test
   that cannot be arranged on demand (a model idle or just used, full, loaded,
   needing a swap, its hardware held, a line at its limit, a time of day, a
-  caller, a lane) so each line can be tried.
+  caller, a lane) so each line can be tried. **send it** then runs one small
+  real request for that name and says where the node ran it, how long it took
+  and what came back, with a note when that is not where the rules pointed. It
+  is offered only for the rules the node runs now, with nothing pretended.
 - **A model's box carries the hardware it runs on** as a small tag, and so does
   each model in the list of places to send a line, so two copies of one model
   (one on a card, one on the CPU) are told apart at a glance.

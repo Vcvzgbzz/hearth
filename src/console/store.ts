@@ -317,6 +317,27 @@ async function authed(method: string, path: string, body?: unknown): Promise<Res
   return r;
 }
 
+/** Where a sent request ran, as the node's own log line for it says. */
+export interface Ran { ok: boolean; ms: number; text: string; model?: string; backend?: string; peer?: string; target?: string }
+
+/** Send one small real request for `model` and say how it went: the answer, the time, and where the node ran it. */
+export async function sendTest(model: string): Promise<Ran> {
+  const t0 = performance.now();
+  const r = await authed("POST", "/v1/chat/completions", { model, max_tokens: 24, messages: [{ role: "user", content: "Say hello in a few words." }] });
+  const ms = Math.round(performance.now() - t0);
+  const d = (await r.json().catch(() => ({}))) as { choices?: { message?: { content?: unknown } }[]; error?: { message?: string } };
+  const text = r.ok ? String(d.choices?.[0]?.message?.content ?? "") : d.error?.message ?? `failed (${r.status})`;
+  const out: Ran = { ok: r.ok, ms, text, model: r.headers.get("x-hearth-model") ?? undefined };
+  // The request's own line in the node's log names the backend or peer; the log is loopback or a session only, so it may be out of reach.
+  const id = r.headers.get("x-request-id");
+  try {
+    const logs = (await (await fetch("/ui/logs", { cache: "no-store" })).json()) as { entries: { msg: string; fields: Record<string, unknown> }[] };
+    const f = [...logs.entries].reverse().find((e) => e.msg === "request" && e.fields.id === id)?.fields;
+    if (f) Object.assign(out, { model: String(f.model ?? out.model ?? ""), backend: f.backend as string | undefined, peer: f.peer as string | undefined, target: f.target as string | undefined });
+  } catch { /* the answer and the time still stand */ }
+  return out;
+}
+
 /** Save `hearth report` from the node: the versions, the config with its secrets replaced, and the node's health, network and recent logs. */
 export async function downloadReport(): Promise<void> {
   try {

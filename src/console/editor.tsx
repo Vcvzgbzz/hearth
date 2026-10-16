@@ -8,10 +8,10 @@ import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
+import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
-import { useStore } from "./store.js";
+import { sendTest, useStore, type Ran } from "./store.js";
 import { Button, cx, Dialog, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
@@ -493,6 +493,9 @@ function situations(draft: Doc, on: string[]): Choice[] {
 /** Ask where a request would go under the draft, and light the way it takes. */
 export function TryStrip() {
   const { draft, trial, tried, pending } = useEdit();
+  const [ran, setRan] = useState<Ran | "sending" | null>(null);
+  // A sent result belongs to the request it answered.
+  useEffect(() => setRan(null), [trial?.model]);
   // The name last tried stays chosen when the result is cleared.
   const [last, setLast] = useState<string | null>(null);
   useEffect(() => { if (trial) setLast(trial.model); }, [trial]);
@@ -533,6 +536,12 @@ export function TryStrip() {
     void tryRequest({ ...t, pretend: had.includes(v) ? had.filter((p) => p !== v) : [...had.filter((p) => p !== rival && !(kind === "now" && p.startsWith("now:"))), v] });
   };
   const decided = tried?.path.at(-1);
+  // Only what the node runs now can be sent: a draft or a pretended state would answer a different question.
+  const real = (t.pretend ?? []).length === 0 && !t.images && !t.long && !t.tools && changed(useEdit.getState()) === 0;
+  const send = async () => {
+    setRan("sending");
+    try { setRan(await sendTest(t.model)); } catch (e) { setRan({ ok: false, ms: 0, text: e instanceof Error ? e.message : String(e) }); }
+  };
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-line bg-panel px-4 py-2.5">
       <span className="font-medium">Try a request</span>
@@ -566,8 +575,22 @@ export function TryStrip() {
                 <span className="text-dim">· {decided ? `decided by rule ${decided.flow}, ${decided.step === (obj(obj(draft.flows)[decided.flow]).steps as unknown[] | undefined ?? []).length - 1 ? "its Otherwise line" : `line ${decided.step + 1}`}` : "no rule: it runs as itself"}</span>
               </>
             )}
-          <button type="button" aria-label="stop trying" title="clear" className="ml-auto text-dim hover:text-fg" onClick={() => void tryRequest(null)}><X size={14} /></button>
+          {tried && !tried.error && tried.target !== "unavailable" && (
+            <Button disabled={!real || ran === "sending"} onClick={() => void send()}>{ran === "sending" ? "sending…" : "send it"}</Button>
+          )}
+          <button type="button" aria-label="stop trying" title="clear" className="ml-auto text-dim hover:text-fg" onClick={() => { setRan(null); void tryRequest(null); }}><X size={14} /></button>
         </>
+      )}
+      {!real && trial && <span className="basis-full text-[12px] text-dim">To send it for real, clear what is pretended and the request options, and save or discard the draft: a sent request runs on the rules the node has now.</span>}
+      {ran !== null && ran !== "sending" && (
+        <div className="flex basis-full flex-wrap items-center gap-2 text-[12px]">
+          {ran.ok ? <>
+            <span className="font-medium text-ok">sent</span>
+            <span>ran as <span className={mono}>{ran.model}</span>{ran.peer ? <> on the peer <b>{ran.peer}</b></> : ran.backend ? <> on the <b>{ran.backend}</b> backend</> : null} in {(ran.ms / 1000).toFixed(1)} s</span>
+            {tried && (ran.peer ?? null) !== (tried.peer ?? null) && <span className="text-warn">· not where the rules pointed: it fell back or the state changed in between</span>}
+            <span className="min-w-0 truncate text-dim">“{ran.text.trim()}”</span>
+          </> : <><span className="font-medium text-bad">failed</span><span>{ran.text}</span></>}
+        </div>
       )}
     </div>
   );
