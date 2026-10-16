@@ -16,6 +16,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
 | `/backends/probe` | local | `POST { url, key?, format? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
 | `/keys/mint`, `/keys/revoke`, `/keys/rotate` | local | `POST { label, models?, expires?, limits? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label, or for rotate gives it a new key, answered once, and keeps the rest of it (its label, and so its router, scope, limits and usage). An entry that reads its key from `env:NAME` is not rotated here. All take effect at once |
+| `/v1/messages` | local | `POST` a Messages API request: it is served as a chat completion, routed and queued like one, and answered in Messages shapes, streaming included. Text, images, tools and tool results carry over; thinking blocks and cache marks are dropped, and a model's reasoning comes back as a `thinking` block. Errors come in the Messages error shape. See [Messages API clients](#messages-api-clients) |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
 | `/lending` | local | `GET`: every peer with the requests and tokens it ran here (`lent`) and this node ran there (`borrowed`), today and over the 31 days kept, the limits it is held to as `terms` with those of its own named in `own`, `closed`: why it is turned away right now, or `null`, and the same use `byModel` and as tokens `byDay` |
 | `/usage` | local | `GET ?days=N` (31 at most): requests, failures and tokens in and out, as day → caller → model, with `prices` for the models that carry one. Days are UTC. Tokens are the backend's own `usage` where its answer carries one; a stream without one is counted by its events, and the request by its estimated size |
@@ -36,6 +37,27 @@ Anything else gets proxied to your backend untouched, so a client already using
 `/unload` or llama-swap's `/upstream/<model>/…` keeps working. Those passthrough
 paths **are not queued** unless a backend names them: see
 [Backends that don't speak the OpenAI API](backends.md#backends-that-dont-speak-the-openai-api).
+
+## Messages API clients
+
+A client that speaks only the Messages API points its base URL at the node.
+For Claude Code:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:4300
+export ANTHROPIC_AUTH_TOKEN=<one of the node's apiKeys>
+export ANTHROPIC_MODEL=my-model
+claude
+```
+
+Claude Code always sends a credential, and a node with no `apiKeys` refuses
+any credential it is shown, so the node needs a key for it. The key goes in
+`ANTHROPIC_AUTH_TOKEN`, which is sent as a bearer token; `ANTHROPIC_API_KEY`
+is sent as `x-api-key`, which the node does not read. The
+model id is one this node offers, or a name a flow takes. Claude Code also asks
+for a smaller model for background work under its own name, so a flow that takes
+every other name (`inputs: ["*"]`) keeps those requests from a `404`.
+`/v1/messages/count_tokens` is not served.
 
 ## What `/healthz` actually checks
 

@@ -38,7 +38,8 @@ cap, and a preference for whatever model is already loaded.
 
 **Speaks OpenAI.** `/v1/chat/completions` and `/v1/models`, streaming included.
 Bodies pass through byte-for-byte, so tool calls, vision parts and whatever gets
-invented next month keep working.
+invented next month keep working. `/v1/messages` answers Messages API clients,
+such as Claude Code, from the same models.
 
 **Federates, if you want it to.** Point a model at a peer and those requests run
 on their machine. They never take a local slot, because they never touch the

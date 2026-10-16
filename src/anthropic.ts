@@ -38,7 +38,7 @@ function blocks(content: unknown): Doc[] {
 }
 
 /** A tool call's arguments as the object they spell; text that is not JSON is kept under `_raw`. */
-function args(text: unknown): Doc {
+export function args(text: unknown): Doc {
   try {
     const v: unknown = JSON.parse(typeof text === "string" && text !== "" ? text : "{}");
     return isObj(v) ? v : { _raw: v };

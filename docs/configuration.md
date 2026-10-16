@@ -139,7 +139,7 @@ it stays a hash.
 
 A key can also be **scoped** with `models:`. Every key above is a full local
 caller — chat on anything, the passthrough, `/v1/warm`, `/control`. A scoped
-key gets `POST /v1/chat/completions` for exactly the ids it names and a
+key gets `POST /v1/chat/completions` and `POST /v1/messages` for exactly the ids it names and a
 `/v1/models` filtered to them, and every other route answers 403:
 
 ```yaml
