@@ -18,6 +18,10 @@ comment is read by strangers. Write for them.
   the answer rewritten each way
 - `src/messages.ts`: the `/v1/messages` door, the same rewrite the other way
   round, for a client that speaks the Messages API
+- `src/report.ts`: `hearth report`, the one-file bug report with secrets
+  scrubbed
+- `src/updates.ts`: the daily npm check behind the console's "newer hearth"
+  notice (`updateCheck`)
 - `src/console/`: the React status page and config editor (built to `dist/`).
   The Lending page is `Lending.tsx`. The routing map is `Routing.tsx` (layout),
   `flowNodes.tsx` (one view per kind of node) and `draft.ts` (`NODES`: what
