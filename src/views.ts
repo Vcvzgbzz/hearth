@@ -11,6 +11,7 @@ import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
 import type { ConfigFile } from "./configfile.js";
 import type { PeerRegistry } from "./peers.js";
+import type { RecentCall } from "./server.js";
 import { troubleSays } from "./backend.js";
 import type { BackendPool } from "./pool.js";
 import type { ModelStats } from "./stats.js";
@@ -105,12 +106,14 @@ export interface ViewDeps {
   lendDefaults: () => { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
   /** A newer published hearth, or null. */
   update: () => string | null;
+  /** The requests this node made most recently, newest first. */
+  recent: () => readonly RecentCall[];
 }
 
 /** Which console this node serves. A page that was loaded from another one reloads itself when it sees this change. */
 const build = createHash("sha256").update(CONSOLE_HTML).digest("hex").slice(0, 12);
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults, update }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults, update, recent }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -172,6 +175,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       ledger: ledger(),
       lendDefaults: lendDefaults(),
       update: update(),
+      recent: recent(),
       // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
       actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
       // Where the operator placed topology nodes; the page lays out the rest.

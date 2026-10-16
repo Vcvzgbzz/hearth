@@ -11,6 +11,7 @@ import {
 import { CircuitBoard, Cloud, Cpu, Flame, Globe, KeyRound, Monitor, Plus, Redo2, RotateCcw, Save, Server, Split, Undo2, Users, Waypoints } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { Rail } from "./Rail.js";
 import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
 import { NEW, NewDialog, Refs, refsOf, Review } from "./config.js";
 import { BAYS, bayRoom, callersIn, draftView, EVERYONE, list, movedBay, movedHardware, obj, ordered, put, routerFor, usersOf, withCaller, callerChoices, paneChoices, restacked, STACK, unstacked } from "./draft.js";
@@ -880,7 +881,9 @@ export function Topology() {
   return (
     <div className="flex h-full flex-col">
     {strip}
-    <div className="relative min-h-0 flex-1">
+    <div className="relative flex min-h-0 flex-1">
+    <Rail />
+    <div className="relative min-w-0 flex-1">
     <ReactFlow
       nodes={nodes} edges={laid.edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={who !== null} elementsSelectable={false} zoomOnDoubleClick={false}
@@ -972,6 +975,7 @@ export function Topology() {
       {plan && <Review plan={plan} onClose={() => useEdit.setState({ plan: null })} />}
     </ReactFlow>
     <Menu />
+    </div>
     </div>
     </div>
   );

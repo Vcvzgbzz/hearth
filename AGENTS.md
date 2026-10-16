@@ -25,7 +25,8 @@ comment is read by strangers. Write for them.
 - `src/updates.ts`: the daily npm check behind the console's "newer hearth"
   notice (`updateCheck`)
 - `src/console/`: the React status page and config editor (built to `dist/`).
-  The Lending page is `Lending.tsx`. The routing map is `Routing.tsx` (layout),
+  The Lending page is `Lending.tsx`; the recent-requests rail beside the
+  Topology map is `Rail.tsx`. The routing map is `Routing.tsx` (layout),
   `flowNodes.tsx` (one view per kind of node) and `draft.ts` (`NODES`: what
   drawing a line from or onto each kind changes in the file)
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`

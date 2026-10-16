@@ -318,4 +318,6 @@ export interface UiData {
   lendDefaults?: { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
   /** A newer published hearth, or null. */
   update?: string | null;
+  /** The requests this node made most recently, newest first; neither `backend` nor `peer` when it never ran. */
+  recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }[];
 }

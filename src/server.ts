@@ -136,6 +136,10 @@ function forwardable(
   return out;
 }
 
+/** One request this node asked for, where it ran, and how it ended; `backend` and `peer` are both absent when it never ran. */
+export interface RecentCall { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }
+const RECENT_KEPT = 12;
+
 export interface HearthNode {
   server: Server;
   /** The local backends and their queues. One entry unless `backends:` is used. The node's own machinery, as are the next two: not held steady between releases. */
@@ -471,6 +475,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     /** The size the request was judged to be, for an answer that does not say. */
     need?: number;
   }
+  /** The requests this node made most recently, newest first. */
+  const recent: RecentCall[] = [];
   function logRequest(
     t: Timing,
     fields: Record<string, unknown>,
@@ -493,6 +499,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const who = typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : typeof fields.forPeer === "string" ? `peer:${fields.forPeer}` : "local";
       usage.add(who, fields.model, ok, used);
       if (fields.target === "peer" && typeof fields.peer === "string") borrowed.add(fields.peer, fields.model, ok, used);
+    }
+    // What this node asked for, wherever it ran, for the console's rail; work done for a peer is not this node's request.
+    if (fields.forPeer === undefined && typeof fields.model === "string") {
+      recent.unshift({
+        t: Date.now(), model: fields.model, caller: typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : "local",
+        ...(fields.target === "peer" && typeof fields.peer === "string" ? { peer: fields.peer } : t.startedAt > 0 ? { backend: String(fields.backend ?? "") } : {}),
+        ms: t.startedAt > 0 ? Date.now() - started : 0, ok,
+      });
+      if (recent.length > RECENT_KEPT) recent.length = RECENT_KEPT;
     }
     const headers = testedHeaders();
     log.info("request", {
@@ -2968,6 +2983,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     ledger: ledgerView,
     lendDefaults: () => ({ tokensPerDay: cfg.lendTokensPerDay, maxConcurrent: cfg.peerMaxConcurrent, rateLimit: cfg.peerRateLimit }),
     update: () => node.update,
+    // A copy, so the page's last frame keeps what it had and the next change is seen as one.
+    recent: () => [...recent],
   });
 
   /** Expired sessions, swept like any other in-memory state; unref'd so it never holds the process. */

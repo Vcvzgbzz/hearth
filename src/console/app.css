@@ -101,3 +101,6 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .flow-dot { display: none; }
 }
+
+/* The box a request in the rail ran in, while it is pointed at. */
+.react-flow__node[data-lit] { filter: drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 2px var(--accent)); transition: filter 0.15s; z-index: 10 !important; }

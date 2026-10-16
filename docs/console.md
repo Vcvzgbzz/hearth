@@ -27,6 +27,11 @@ Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   a new key is shown once over the page. **Drag a box of callers** along the
   row to stand it somewhere else among the others; the order joins the draft
   and is kept with the layout.
+  **Recent requests** down the left lists what this node asked for, running
+  ones first, then the last twelve that ended, each with who asked, where it
+  ran and how long it took. Point at one and the backend or peer that ran it
+  lights up on the map; click it for that box's settings. The rail folds away
+  with its arrow, and the browser remembers.
   A right-click on the empty part of the picture offers what the strip over it
   does, where the pointer is: a new backend, hardware, machine or provider, the
   published versions, and fitting the picture in view.
