@@ -40,7 +40,7 @@ export function Rail() {
   if (!open) {
     return (
       <button type="button" onClick={toggle} title="show recent requests" aria-label="show recent requests"
-              className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-line bg-panel pt-3 text-dim hover:text-fg">
+              className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-line bg-panel pt-3 text-dim hover:text-fg max-md:hidden">
         <ChevronsRight size={14} />
         <span className="text-[11px] [writing-mode:vertical-rl]">recent requests</span>
       </button>
