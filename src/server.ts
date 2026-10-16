@@ -1980,9 +1980,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /**
    * A token proved without sending it: keyed with the invite's secret, so a proof shown to one
-   * code's address is worth nothing against any other code.
+   * code's address is worth nothing against any other code. Each side proves with its own label, so
+   * neither can pass a proof it was shown back as its own: only a holder of the token can answer.
    */
-  const proof = (secret: string, token: string): string => createHmac("sha256", secret).update(token).digest("hex");
+  const proof = (secret: string, token: string, side: "join" | "known"): string => createHmac("sha256", secret).update(`${side}:${token}`).digest("hex");
 
   /**
    * The peer here a joiner already is, if any: one sharing a token the joiner proves it holds (with
@@ -1994,8 +1995,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const held = new Set(knows);
       const shared: [string, string][] = [...Object.entries(cfg.peerTokens), ...cfg.peers.map((p): [string, string] => [p.name, p.token])];
       for (const [peer, token] of shared) {
-        const knew = proof(secret, token);
-        if (held.has(knew)) return { peer, knew };
+        if (held.has(proof(secret, token, "join"))) return { peer, knew: proof(secret, token, "known") };
       }
     }
     const bound = Object.entries(cfg.peerTailnet);
@@ -2081,11 +2081,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       if (was !== null && was !== u) throw new Refusal(409, `you already borrow from a peer called ${expected}: join again with as`);
       // Tokens the inviter may already share with this node, proved and never sent: what it presents
       // to that entry, and what it accepts from each peer. The inviter's answer names the one it holds.
-      const mine = new Map<string, string>();
+      const held: [string, string][] = Object.entries(cfg.peerTokens);
       const there = cfg.peers.find((p) => p.name === expected);
-      if (there) mine.set(proof(s, there.token), there.name);
-      for (const [peer, token] of Object.entries(cfg.peerTokens)) mine.set(proof(s, token), peer);
-      const knows = [...mine.keys()].slice(0, 64);
+      if (there) held.unshift([there.name, there.token]);
+      // What is sent, and what only an inviter that holds the same token can answer with.
+      const knows = held.map(([, token]) => proof(s, token, "join")).slice(0, 64);
+      const mine = new Map(held.map(([peer, token]) => [proof(s, token, "known"), peer]));
       const up = await send(`${u}/peer/join`, { method: "POST", json: { secret: s, name: cfg.name, ...(knows.length > 0 && { knows }) }, headersTimeoutMs: 15_000 });
       const said = await up.text();
       let answer: { name?: unknown; token?: unknown; knew?: unknown; error?: unknown } = {};

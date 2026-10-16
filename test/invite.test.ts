@@ -149,7 +149,7 @@ assert.equal(reverse.body.peer, "borrower");
 // A proof made for one code is worth nothing with another.
 {
   const sixth = (await lender.post("/peers/invite", { url: lender.url })).body.code as string;
-  const stale = createHmac("sha256", "some-other-secret").update(token ?? "").digest("hex");
+  const stale = createHmac("sha256", "some-other-secret").update(`join:${token ?? ""}`).digest("hex");
   const replay = await lender.post("/peer/join", { secret: secretOf(sixth), name: "borrower", knows: [stale] });
   assert.equal(replay.status, 409, "a proof keyed with another secret is not recognised");
 }
@@ -162,6 +162,32 @@ const onFriend = loadConfig(friend.path);
 assert.equal(onFriend.peerTokens.lender, "friend-lends-to-lender", "what it lends the inviter stays as it was");
 assert.deepEqual(onFriend.peers.map((p) => [p.name, p.url, p.token]), [["lender", lender.url, loadConfig(lender.path).peerTokens.friend]], "and the same entry now borrows from it");
 await friend.node.close();
+
+// An inviter that passes back a proof it was shown, holding none of the tokens, moves no entry here.
+{
+  let shown: string[] = [];
+  const echo = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += String(c); });
+    req.on("end", () => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/healthz") return void res.end(JSON.stringify({ ok: true, name: "echo" }));
+      shown = ((JSON.parse(raw || "{}") as { knows?: string[] }).knows) ?? [];
+      res.end(JSON.stringify({ name: "echo", token: "hpeer_from-echo", knew: shown.at(-1) }));
+    });
+  });
+  await new Promise<void>((r) => echo.listen(0, "127.0.0.1", r));
+  const echoUrl = `http://127.0.0.1:${(echo.address() as AddressInfo).port}`;
+  const victim = await boot("victim", "peers:\n  trusted: { url: \"http://127.0.0.1:9\", token: real-token, accept: trusted-accept }\n");
+  const code = "hearth-invite:" + Buffer.from(JSON.stringify({ u: echoUrl, s: "a-secret" })).toString("base64url");
+  assert.equal((await victim.post("/peers/join", { code })).status, 200);
+  assert.ok(shown.length > 0, "the joiner offered its proofs");
+  const onVictim = loadConfig(victim.path);
+  assert.deepEqual(onVictim.peers.find((p) => p.name === "trusted")?.url, "http://127.0.0.1:9", "an echoed proof does not move another peer to the inviter");
+  assert.equal(onVictim.peers.find((p) => p.url === echoUrl)?.name, "echo", "the inviter is added as a new peer instead");
+  await victim.node.close();
+  echo.close();
+}
 
 await lender.node.close();
 await borrower.node.close();
