@@ -26,7 +26,8 @@ library and what the larger tests prove.
 
 - **A bug:** use the bug report form. The hearth version (`hearth --version`),
   the backend kind and the relevant part of `hearth.yaml` with secrets taken
-  out make most reports answerable on the first read.
+  out make most reports answerable on the first read. `hearth report` writes
+  all of that, plus the node's recent log lines, into one file to attach.
 - **An idea:** say what you are trying to do before how. A change to a
   config key, a route or the `/v1` wire format is breaking, so it needs an
   issue agreed before a PR.

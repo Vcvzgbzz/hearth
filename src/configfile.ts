@@ -131,6 +131,17 @@ function maskSecrets(text: string, doc: Record<string, unknown>): { text: string
   return { text: masked, doc: d };
 }
 
+/** A config file's text with every secret in it replaced by a stand-in; text that is not YAML comes back as it is. */
+export function maskedText(text: string): string {
+  let doc: unknown;
+  try {
+    doc = parseDocument(text).toJS();
+  } catch {
+    return text;
+  }
+  return isObj(doc) ? maskSecrets(text, doc).text : text;
+}
+
 /** A string as a YAML scalar that reads back as that string wherever it is put. */
 const scalarOf = (s: string): string =>
   /^[\w./+=:@-]+$/.test(s) && !s.endsWith(":") && parseDocument(s).toJS() === s ? s : JSON.stringify(s);
@@ -629,13 +640,7 @@ export class ConfigFile {
 
   /** The text a console sees back: the file's secrets out, stand-ins in. */
   private masked(text: string): string {
-    let doc: unknown;
-    try {
-      doc = parseDocument(text).toJS();
-    } catch {
-      return text;
-    }
-    return isObj(doc) ? maskSecrets(text, doc).text : text;
+    return maskedText(text);
   }
 
   private applyInMemory(draft: HearthConfig): CommitResult {

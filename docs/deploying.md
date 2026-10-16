@@ -81,3 +81,19 @@ so it gets its turn if the grace allows. The queue itself is memory only and
 nothing is written down, so whatever the grace does not cover is simply gone.
 Pair `Restart=on-failure` with `StartLimitBurst` in `[Unit]` so a crash loop
 cannot quietly eat a job every five seconds.
+
+## Reporting a bug
+
+```bash
+hearth report --config /etc/hearth.yaml
+```
+
+writes `hearth-report-<date>.md` in the current directory: the hearth, Node and
+OS versions, the config with its secrets replaced and whether it loads, and,
+from the running node, `/healthz`, `/network` and the last 300 log lines.
+Every secret the config resolves to, `env:` ones included, is replaced
+wherever it appears, log lines too. Hostnames, addresses and model names are
+left in, so read the file before attaching it. As with `--check`, source the
+env file first, or the config will not load and the node's half is left out.
+The node is asked over loopback; `/network` uses one of the config's unscoped
+keys when it has any.

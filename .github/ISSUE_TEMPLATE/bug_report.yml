@@ -6,6 +6,9 @@ body:
     attributes:
       value: |
         A security problem? Please report it privately instead: see SECURITY.md.
+
+        `hearth report` writes the version, the config with secrets replaced, and the node's
+        health and recent log lines into one file. Read it, then attach it below.
   - type: input
     id: version
     attributes:
