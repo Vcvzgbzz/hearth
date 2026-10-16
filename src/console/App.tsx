@@ -75,7 +75,7 @@ function Endpoints({ onClose }: { onClose: () => void }) {
         <div className="rounded-md bg-warn/10 px-3 py-2 text-[12px]">
           {keyed
             ? <>This node has API keys, so every app needs one{tab === "claude" ? ", Claude Code included" : ""}. <button className="underline" onClick={() => { onClose(); go("keys"); }}>Make one on Keys.</button></>
-            : <>This node has no API keys, so only apps on this machine can call it. Claude Code always sends a key, so it needs one: <button className="underline" onClick={() => { onClose(); go("keys"); }}>make one on Keys.</button></>}
+            : <>This node has no API keys, so apps on this machine call it without one. Claude Code always sends a key, so it needs one, but once the first key exists every app here needs a key too: give it to them as well. <button className="underline" onClick={() => { onClose(); go("keys"); }}>Make a key on Keys.</button></>}
         </div>
         <div className="flex gap-1" role="tablist" aria-label="example setup">
           {(["curl", "claude"] as const).map((t) => (
