@@ -62,17 +62,17 @@ ${diff}
 \`\`\``;
 
 /** One streamed completion: the API's edge cuts non-streamed requests at 60 s, and prefill can take longer. */
-async function review() {
+async function complete(messages, maxTokens) {
   for (let attempt = 1; ; attempt++) {
     const r = await fetch(`${API}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${env("REVIEW_API_KEY")}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: MODEL, stream: true, max_tokens: 16000, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+      body: JSON.stringify({ model: MODEL, stream: true, max_tokens: maxTokens, temperature: 0.2, messages }),
     });
     // A busy key (429) or an edge hiccup (5xx) is waited out, not hammered: an abandoned request still holds its turn.
     if ((r.status === 429 || r.status >= 500) && attempt < 4) { console.log(`model API ${r.status}, waiting 60 s (attempt ${attempt})`); await sleep(60_000); continue; }
     if (!r.ok) throw new Error(`model API ${r.status}: ${(await r.text()).slice(0, 300)}`);
-    let text = "", buf = "";
+    let text = "", buf = "", finish = null, usage = null;
     const dec = new TextDecoder();
     for await (const chunk of r.body) {
       buf += dec.decode(chunk, { stream: true });
@@ -83,23 +83,70 @@ async function review() {
         if (!line.startsWith("data:")) continue; // keepalive comments while queued or in prefill
         const data = line.slice(5).trim();
         if (data === "[DONE]") continue;
-        try { text += JSON.parse(data).choices?.[0]?.delta?.content ?? ""; } catch { /* a partial or non-JSON line */ }
+        try {
+          const j = JSON.parse(data);
+          if (j.error) throw new Error(`model API stream error: ${String(j.error.message ?? JSON.stringify(j.error)).slice(0, 300)}`);
+          const c = j.choices?.[0];
+          text += c?.delta?.content ?? "";
+          finish = c?.finish_reason ?? finish;
+          usage = j.usage ?? usage;
+        } catch (e) { if (e instanceof Error && e.message.startsWith("model API")) throw e; /* a partial or non-JSON line */ }
       }
     }
-    return text.trim();
+    // Said in the job log, so a review that fails explains itself.
+    console.log(`model: finish=${finish} completion=${usage?.completion_tokens ?? "?"} reasoning=${usage?.completion_tokens_details?.reasoning_tokens ?? "?"} chars=${text.length}`);
+    return { text: text.trim(), finish };
   }
+}
+
+const COUNTS = /^COUNTS\s+high=(\d+)\s+medium=(\d+)\s+low=(\d+)\s*$/m;
+
+/**
+ * The report in a model's answer: what follows the marker, or, when the model left the marker out
+ * after thinking aloud, the bullet list just above its COUNTS line. Null when there is no report.
+ */
+function reportIn(out) {
+  const at = out.lastIndexOf("=== REVIEW ===");
+  if (at >= 0) {
+    const report = out.slice(at + "=== REVIEW ===".length).replace(/<\/?think>/g, "").trim();
+    return COUNTS.test(report) ? report : null;
+  }
+  const lines = out.split("\n");
+  const end = lines.findLastIndex((l) => COUNTS.test(l));
+  if (end < 0) return null;
+  let start = end;
+  // Past blank lines straight above COUNTS, then back over one unbroken list of bullets and their
+  // indented follow-on lines; a blank line or the thinking above it ends the list.
+  while (start > 0 && lines[start - 1].trim() === "") start--;
+  while (start > 0 && /^(- |\s+\S)/.test(lines[start - 1])) start--;
+  const report = lines.slice(start, end + 1).join("\n").trim();
+  return /^- /m.test(report) ? report : null;
+}
+
+/** The review, asked once; an answer with no report gets one short follow-up asking for only the report. */
+async function review() {
+  const ask = [{ role: "system", content: system }, { role: "user", content: user }];
+  const first = await complete(ask, 16000);
+  const found = reportIn(first.text);
+  if (found) return found;
+  console.log(`no report in the answer (finish=${first.finish}); asking for it on its own`);
+  // Its own notes, the end of them, so the follow-up writes the report without reading the diff again.
+  const notes = first.text.slice(-12000);
+  const again = await complete([...ask, { role: "assistant", content: notes }, {
+    role: "user",
+    content: "Stop here and write the report now from what you found: a line containing only === REVIEW === and then the report in the format above, ending with the COUNTS line. Nothing else.",
+  // Room for the model's capped reasoning as well as the report.
+  }], 6000);
+  return reportIn(again.text);
 }
 
 const started = Date.now();
 let body, counts = { high: 0, medium: 0, low: 0 }, failed = null;
 try {
-  const out = await review();
-  // Only what follows the marker is the report; anything before it is the model thinking.
-  const at = out.lastIndexOf("=== REVIEW ===");
-  const report = at >= 0 ? out.slice(at + "=== REVIEW ===".length).replace(/<\/?think>/g, "").trim() : "";
-  const m = report.match(/^COUNTS\s+high=(\d+)\s+medium=(\d+)\s+low=(\d+)\s*$/m);
+  const report = await review();
   // A report that did not finish is never read as a clean one.
-  if (!m) throw new Error(at < 0 ? "the model did not finish its review (no report marker)" : "the report has no COUNTS line");
+  const m = report?.match(COUNTS);
+  if (!m) throw new Error("the model did not finish its review, even when asked for the report on its own");
   counts = { high: +m[1], medium: +m[2], low: +m[3] };
   body = report.replace(/^COUNTS .*$/m, "").trim();
 } catch (e) {
