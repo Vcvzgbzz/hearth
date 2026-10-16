@@ -67,11 +67,21 @@ carries only a one-time secret, which the join swaps for it.
   so send it the way you would send a short-lived password.
 - A code names the address your node contacts when you join, the way a peer's
   `url` does. Join only with a code from someone you would add as a peer by hand.
-- The borrower's node name must be one the lender has no peer under yet.
-  `hearth join --as <name>` picks the name the lender is kept under on the
-  borrower's side. A name the borrower already borrows from is refused before
-  the code is spent; a peer the borrower only lends to keeps its entry and
-  gains the `url` and `token` to borrow back, so the two link both ways.
+- Two nodes that already have entries for each other keep one entry each. The
+  borrower proves the tokens it already holds without sending them (each is
+  keyed with the code's one-time secret), and the lender joins the entry that
+  shares one instead of adding a new peer; on the borrower's side the same
+  entry gains the lender's `url` and `token`. So inviting the other way links
+  the reverse in the entries you have, and joining a friend you already borrow
+  from changes nothing. The borrower's entry at the code's address, or the one
+  the lender recognised, wins over a new name.
+- A lender that binds a peer with `tailnet` also knows a join from that
+  machine as that peer, and hands it the token its entry already accepts.
+- Otherwise the borrower's node name must be one the lender has no peer under
+  yet. `hearth join --as <name>` picks the name the lender is kept under on the
+  borrower's side. A name the borrower already borrows from at another address
+  is refused before the code is spent; a peer the borrower only lends to keeps
+  its entry and gains the `url` and `token` to borrow back.
 - Both commands ask the node that is running, on its `listen` port. If it sets
   `apiKeys`, give one as `HEARTH_KEY`.
 - The tokens are written into each `hearth.yaml` as they are, the way minted api

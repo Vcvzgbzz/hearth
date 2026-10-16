@@ -3,7 +3,8 @@
  * local tailscaled names the caller. A stand-in tailscaled answers whois on a socket. Asserted:
  * the bound machine gets in, any other machine and an off-tailnet address get 403 even with the
  * right token, a tailscaled that cannot be asked fails closed, and a peer without `tailnet` keeps
- * the token-only door it always had.
+ * the token-only door it always had; and an invite redeemed from a bound machine joins that
+ * peer's entry instead of adding a second one.
  *
  *     npx tsx test/peer-tailnet.test.ts
  */
@@ -154,6 +155,41 @@ peers:
   answer = "n-friend";
   assert.equal((await fetch(`${at}/peer/hello`, { headers: { Authorization: "Bearer friend-token" } })).status, 200);
   await live.close();
+}
+
+// --- an invite redeemed from a bound machine joins that peer's entry ----------------
+// The joiner shares no token with the inviter, but tailscaled says it is the machine `friend` is bound to.
+{
+  const dir = mkdtempSync(join(tmpdir(), "hearth-tailnet-"));
+  const boot = async (name: string, extra: string) => {
+    const path = join(dir, `${name}.yaml`);
+    writeFileSync(path, `name: ${name}
+${extra}backends:
+  gpu: {url: "http://127.0.0.1:9", kind: none, serves: [my-model]}
+flows:
+  anything-else: {inputs: ["*"], steps: [{to: {asked: true}}]}
+`);
+    const n = createNode(loadConfig(path), silentLogger);
+    await new Promise<void>((r) => n.server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(n.server.address() as AddressInfo).port}`;
+    const post = async (route: string, body: unknown) =>
+      (await fetch(`${url}${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).status;
+    return { node: n, url, path, post };
+  };
+  const inviter = await boot("inviter", `tailscaleSocket: ${JSON.stringify(socket)}\npeers:\n  friend: {accept: friend-token, tailnet: n-friend}\n`);
+  const joiner = await boot("joiner", "");
+  const invite = async () => ((await (await fetch(`${inviter.url}/peers/invite`, { method: "POST", body: JSON.stringify({ url: inviter.url }) })).json()) as { code: string }).code;
+
+  answer = "n-friend";
+  assert.equal(await joiner.post("/peers/join", { code: await invite() }), 200);
+  assert.deepEqual(Object.keys(loadConfig(inviter.path).peerTokens), ["friend"], "the bound machine joins its own entry, not a new one");
+  assert.deepEqual(loadConfig(joiner.path).peers.map((p) => [p.name, p.token]), [["inviter", "friend-token"]], "and is handed the token that entry accepts");
+
+  answer = "n-somewhere-else";
+  const other = await boot("other", "");
+  assert.equal(await other.post("/peers/join", { code: await invite() }), 200);
+  assert.deepEqual(Object.keys(loadConfig(inviter.path).peerTokens), ["friend", "other"], "any other machine is a new peer");
+  for (const n of [inviter, joiner, other]) await n.node.close();
 }
 tailscaled.close();
 console.log("peer-tailnet.test.ts ok");

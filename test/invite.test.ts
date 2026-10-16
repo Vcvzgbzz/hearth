@@ -3,11 +3,13 @@
  * the borrower redeems it, and each file gains the other as a peer with one fresh token between
  * them, live, with no secret ever typed by a person. Asserted: the borrower can then read the
  * lender's state with that token; a code works once; a wrong secret, a taken name and malformed
- * input are refused without writing anything.
+ * input are refused without writing anything; and two nodes already linked either way, under any
+ * names, join the entries they have instead of adding a second one for the same friend.
  *
  *     npx tsx test/invite.test.ts
  */
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -92,17 +94,65 @@ assert.equal((await lender.post("/peer/join", { secret: secretOf(second), name: 
 assert.equal((await lender.post("/peer/join", { secret: secretOf(second), name: "bad name!" })).status, 400, "so is a name that cannot be a peer's");
 assert.equal((await lender.post("/peer/join", { secret: secretOf(second), name: "third" })).status, 200, "and the code still works for a good one");
 
-// The borrower will not overwrite a peer it already has.
+// A name this node borrows from at another address is another node: refused before the code is spent.
+const stranger = await boot("stranger", 'peers:\n  lender: { url: "http://127.0.0.1:9", token: not-the-lender }\n');
 const third = (await lender.post("/peers/invite", { url: lender.url })).body.code as string;
-assert.equal((await borrower.post("/peers/join", { code: third, as: "lender" })).status, 409, "joining as a name already in use is refused");
+assert.equal((await stranger.post("/peers/join", { code: third, as: "lender" })).status, 409, "joining as a name already in use is refused");
+assert.equal((await stranger.post("/peers/join", { code: third })).status, 409, "and without as, the inviter's own name is checked the same way");
 assert.equal((await lender.post("/peer/join", { secret: secretOf(third), name: "fourth" })).status, 200, "before the lender is ever asked, so its code is unspent");
+assert.deepEqual(loadConfig(stranger.path).peers.map((p) => [p.name, p.token]), [["lender", "not-the-lender"]], "the peer it has is untouched");
+await stranger.node.close();
 
-// Without `as`, the inviter's own name is checked the same way, before its code is spent.
+// Joining a node it is already linked with adds nothing on either side, whatever name is asked for.
+const lending = Object.keys(loadConfig(lender.path).peerTokens);
 const fifth = (await lender.post("/peers/invite", { url: lender.url })).body.code as string;
-const clash = await borrower.post("/peers/join", { code: fifth });
-assert.equal(clash.status, 409, "the inviter's name is already a peer this node borrows from");
-assert.equal((await lender.post("/peer/join", { secret: secretOf(fifth), name: "sixth" })).status, 200, "and the code is still unspent");
-assert.deepEqual(loadConfig(borrower.path).peers.map((p) => [p.name, p.token]), [["lender", token]], "the peer it has is untouched");
+const rejoin = await borrower.post("/peers/join", { code: fifth, as: "another-name" });
+assert.equal(rejoin.status, 200, JSON.stringify(rejoin.body));
+assert.equal(rejoin.body.peer, "lender", "the entry at the code's address is the inviter");
+assert.deepEqual(Object.keys(loadConfig(lender.path).peerTokens), lending, "the lender finds its entry for the borrower instead of adding one");
+assert.equal(loadConfig(lender.path).peerTokens.borrower, token, "and keeps the token it accepts");
+assert.deepEqual(loadConfig(borrower.path).peers.map((p) => [p.name, p.url, p.token]), [["lender", lender.url, token]], "the borrower still has one entry for it");
+
+// The other way round: each node already has an entry for the other, and that one entry gains the reverse direction.
+const back = (await borrower.post("/peers/invite", { url: borrower.url })).body.code as string;
+const reverse = await lender.post("/peers/join", { code: back });
+assert.equal(reverse.status, 200, JSON.stringify(reverse.body));
+assert.equal(reverse.body.peer, "borrower");
+{
+  const onL = loadConfig(lender.path);
+  const onB = loadConfig(borrower.path);
+  assert.equal(onL.peerTokens.borrower, token, "the lender still lends to the borrower with its token");
+  assert.deepEqual(onL.peers.map((p) => [p.name, p.url, p.token]), [["borrower", borrower.url, onB.peerTokens.lender]], "and now borrows from it in the same entry");
+  assert.match(onB.peerTokens.lender ?? "", /^hpeer_[0-9a-f]{48}$/, "with a fresh token the borrower accepts");
+  assert.deepEqual(Object.keys(onB.peerTokens), ["lender"], "in its entry for the lender, not a new one");
+  assert.deepEqual(onB.peers.map((p) => [p.name, p.token]), [["lender", token]], "which still borrows as before");
+}
+
+// The same with a name of its own for the inviter: the entry it already has is still the one that gains it.
+{
+  const a = await boot("alpha");
+  const b = await boot("beta");
+  assert.equal((await b.post("/peers/join", { code: (await a.post("/peers/invite", { url: a.url })).body.code })).status, 200);
+  const named = await a.post("/peers/join", { code: (await b.post("/peers/invite", { url: b.url })).body.code, as: "my-friend" });
+  assert.equal(named.status, 200, JSON.stringify(named.body));
+  assert.equal(named.body.peer, "beta", "the inviter recognised the joiner, so its entry here is the one it joins");
+  const onA = loadConfig(a.path);
+  const onB = loadConfig(b.path);
+  assert.deepEqual(Object.keys(onA.peerTokens), ["beta"]);
+  assert.deepEqual(onA.peers.map((p) => [p.name, p.token]), [["beta", onB.peerTokens.alpha]], "one entry on each side, linked both ways");
+  assert.deepEqual(Object.keys(onB.peerTokens), ["alpha"]);
+  assert.deepEqual(onB.peers.map((p) => [p.name, p.token]), [["alpha", onA.peerTokens.beta]]);
+  await a.node.close();
+  await b.node.close();
+}
+
+// A proof made for one code is worth nothing with another.
+{
+  const sixth = (await lender.post("/peers/invite", { url: lender.url })).body.code as string;
+  const stale = createHmac("sha256", "some-other-secret").update(token ?? "").digest("hex");
+  const replay = await lender.post("/peer/join", { secret: secretOf(sixth), name: "borrower", knows: [stale] });
+  assert.equal(replay.status, 409, "a proof keyed with another secret is not recognised");
+}
 
 // A node that already lends to the inviter keeps that, and gains the way to borrow back.
 const friend = await boot("friend", "peers:\n  lender: { accept: friend-lends-to-lender }\n");

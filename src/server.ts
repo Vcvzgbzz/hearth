@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { pipeline as pipeline_ } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
@@ -1979,9 +1979,42 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /**
+   * A token proved without sending it: keyed with the invite's secret, so a proof shown to one
+   * code's address is worth nothing against any other code.
+   */
+  const proof = (secret: string, token: string): string => createHmac("sha256", secret).update(token).digest("hex");
+
+  /**
+   * The peer here a joiner already is, if any: one sharing a token the joiner proves it holds (with
+   * that proof, so the joiner can find its own entry too), or one bound to the tailnet machine it
+   * calls from. Null for a node this one has no link with.
+   */
+  async function knownJoiner(req: IncomingMessage, secret: string, knows: readonly string[]): Promise<{ peer: string; knew?: string } | null> {
+    if (knows.length > 0) {
+      const held = new Set(knows);
+      const shared: [string, string][] = [...Object.entries(cfg.peerTokens), ...cfg.peers.map((p): [string, string] => [p.name, p.token])];
+      for (const [peer, token] of shared) {
+        const knew = proof(secret, token);
+        if (held.has(knew)) return { peer, knew };
+      }
+    }
+    const bound = Object.entries(cfg.peerTailnet);
+    if (bound.length === 0) return null;
+    try {
+      const node = await whois(req.socket.remoteAddress ?? "", req.socket.remotePort ?? 0);
+      const peer = bound.find(([, id]) => id === node?.id)?.[0];
+      return peer === undefined ? null : { peer };
+    } catch {
+      // Unasked is unknown: the joiner is taken as a new peer, as it would be with no tailscaled at all.
+      return null;
+    }
+  }
+
+  /**
    * The inviter's half of a join, the one write a caller with no credential can make: a live
    * invite secret, spent on first use, adds the caller as a peer under the name it gives and
-   * answers with the token it is to present from then on.
+   * answers with the token it is to present from then on. A caller that is already a peer here
+   * joins that entry instead, keeping any token it is already accepted with.
    */
   async function routePeerJoin(c: Call): Promise<void> {
     try {
@@ -1994,14 +2027,19 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       }
       const name = typeof body.name === "string" ? body.name.trim() : "";
       if (!PEER_NAME.test(name)) throw new Refusal(400, "name must be 1-40 letters, digits, '.', '_' or '-'");
-      const taken = name in cfg.peerTokens || cfg.peers.some((p) => p.name === name);
-      if (taken) throw new Refusal(409, `this node already has a peer called ${name}`);
+      const knows = Array.isArray(body.knows) ? body.knows.filter((k): k is string => typeof k === "string").slice(0, 64) : [];
+      const known = await knownJoiner(c.req, secret, knows);
+      if (known === null && (name in cfg.peerTokens || cfg.peers.some((p) => p.name === name))) {
+        throw new Refusal(409, `this node already has a peer called ${name}`);
+      }
       // Spent before the write, so a second try with the same secret cannot race this one.
       invites.delete(secret);
-      const token = "hpeer_" + randomBytes(24).toString("hex");
-      config.patch({ ops: [{ path: ["peers", name], value: { accept: token } }] });
-      log.info("peers.joined", { peer: name, ip: c.req.socket.remoteAddress ?? "?" });
-      json(c.res, 200, { name: cfg.name, token });
+      const peer = known?.peer ?? name;
+      const kept = cfg.peerTokens[peer];
+      const token = kept ?? "hpeer_" + randomBytes(24).toString("hex");
+      if (kept === undefined) config.patch({ ops: [{ path: ["peers", peer, "accept"], value: token }] });
+      log.info("peers.joined", { peer, ...(known !== null && { already: true }), ip: c.req.socket.remoteAddress ?? "?" });
+      json(c.res, 200, { name: cfg.name, token, ...(known?.knew !== undefined && { knew: known.knew }) });
     } catch (e) {
       failConfig(c.res, e);
     }
@@ -2034,13 +2072,23 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       if (!/^https?:\/\/[^/?#]+$/.test(u) || s === "") throw new Refusal(400, "that is not an invite code: it starts with hearth-invite:");
       const as = typeof body.as === "string" ? body.as.trim() : "";
       if (as !== "" && !PEER_NAME.test(as)) throw new Refusal(400, "as must be 1-40 letters, digits, '.', '_' or '-'");
-      const borrowing = (name: string): boolean => cfg.peers.some((p) => p.name === name);
-      // Without `as`, the inviter's name from its health check, so a clash is refused before the code is spent.
-      const expected = as !== "" ? as : await inviterName(u);
-      if (expected !== null && borrowing(expected)) throw new Refusal(409, `you already borrow from a peer called ${expected}: join again with as`);
-      const up = await send(`${u}/peer/join`, { method: "POST", json: { secret: s, name: cfg.name }, headersTimeoutMs: 15_000 });
+      const borrowsAt = (name: string): string | null => cfg.peers.find((p) => p.name === name)?.url ?? null;
+      // The entry that already stands for the inviter: the one at the code's address, else the name it is to be kept under.
+      const atUrl = cfg.peers.find((p) => p.url === u)?.name;
+      const expected = atUrl ?? (as !== "" ? as : await inviterName(u));
+      const was = expected === null ? null : borrowsAt(expected);
+      // A name borrowing from another address is another node, refused before the code is spent.
+      if (was !== null && was !== u) throw new Refusal(409, `you already borrow from a peer called ${expected}: join again with as`);
+      // Tokens the inviter may already share with this node, proved and never sent: what it presents
+      // to that entry, and what it accepts from each peer. The inviter's answer names the one it holds.
+      const mine = new Map<string, string>();
+      const there = cfg.peers.find((p) => p.name === expected);
+      if (there) mine.set(proof(s, there.token), there.name);
+      for (const [peer, token] of Object.entries(cfg.peerTokens)) mine.set(proof(s, token), peer);
+      const knows = [...mine.keys()].slice(0, 64);
+      const up = await send(`${u}/peer/join`, { method: "POST", json: { secret: s, name: cfg.name, ...(knows.length > 0 && { knows }) }, headersTimeoutMs: 15_000 });
       const said = await up.text();
-      let answer: { name?: unknown; token?: unknown; error?: unknown } = {};
+      let answer: { name?: unknown; token?: unknown; knew?: unknown; error?: unknown } = {};
       try {
         answer = JSON.parse(said) as typeof answer;
       } catch {
@@ -2052,11 +2100,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         throw new Refusal(502, `the inviter refused: ${typeof why === "string" ? why.slice(0, 200) : `it answered ${up.status}`}`);
       }
       if (typeof answer.token !== "string" || typeof answer.name !== "string") throw new Refusal(502, "the inviter answered something that is not a join");
-      const name = as || answer.name;
+      // The entry the inviter recognised us by is the same node, whatever it is called here.
+      const same = typeof answer.knew === "string" ? mine.get(answer.knew) : undefined;
+      const name = same ?? expected ?? answer.name;
       if (!PEER_NAME.test(name)) throw new Refusal(502, `the inviter's name ${JSON.stringify(name)} cannot be a peer name here: join again with as`);
-      if (borrowing(name)) throw new Refusal(409, `the inviter added you, but you already borrow from a peer called ${name}: add peers.<another name> with url ${u} and token ${answer.token} by hand`);
-      // A peer this node only lends to keeps its entry and gains the url and token beside it.
-      const ops = name in cfg.peerTokens
+      const now = borrowsAt(name);
+      if (same === undefined && now !== null && now !== u) throw new Refusal(409, `the inviter added you, but you already borrow from a peer called ${name}: add peers.<another name> with url ${u} and token ${answer.token} by hand`);
+      // An entry this node has for the inviter keeps what it holds and gains, or refreshes, the url and token beside it.
+      const ops = name in cfg.peerTokens || now !== null
         ? [{ path: ["peers", name, "url"], value: u }, { path: ["peers", name, "token"], value: answer.token }]
         : [{ path: ["peers", name], value: { url: u, token: answer.token } }];
       try {
