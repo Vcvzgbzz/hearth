@@ -325,7 +325,8 @@ export async function downloadReport(): Promise<void> {
     const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? "hearth-report.md";
     const url = URL.createObjectURL(await r.blob());
     Object.assign(document.createElement("a"), { href: url, download: name }).click();
-    URL.revokeObjectURL(url);
+    // Revoked after the click has handed the file over, or some browsers save nothing.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     toast("ok", `${name} saved: secrets are replaced, but read it before attaching it to an issue`);
   } catch (e) {
     toast("bad", (e as Error).message);

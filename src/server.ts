@@ -1406,14 +1406,17 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     json(c.res, h.ok ? 200 : 503, h);
   }
 
+  /** This build's version, read once, for the report's header. */
+  let reportVersion: string | undefined;
+
   /** `hearth report` as a download: the same file, with the node's part read from memory rather than over loopback. */
   async function routeReport(c: Call): Promise<void> {
     if (cfg.configPath === null) {
       apiError(c.res, 409, "this node was not started from a config file, so there is no report to write");
       return;
     }
-    const version = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
-    const text = await bugReport(cfg.configPath, version, async (path) => {
+    reportVersion ??= (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+    const text = await bugReport(cfg.configPath, reportVersion, async (path) => {
       if (path === "/healthz") return { ok: true, text: JSON.stringify(health()) };
       if (path === "/network") return { ok: true, text: JSON.stringify(networkView()) };
       return { ok: true, text: JSON.stringify({ entries: logs.all() }) };
