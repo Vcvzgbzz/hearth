@@ -62,7 +62,7 @@ type Finding = { tone: "bad" | "warn"; text: string; go: () => void };
 const downSince = new Map<string, number>();
 const dur = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
 
-/** What needs attention, worst first: a config that will not load, then outages, then backlog, then restarts. */
+/** What needs attention, worst first: a config that will not load, then outages, then backlog, then restarts, then a newer release. */
 function findings(d: UiData): Finding[] {
   const out: Finding[] = [];
   const now = Date.now();
@@ -114,6 +114,7 @@ function findings(d: UiData): Finding[] {
     }
   }
   if (d.config.restartPending.length) out.push({ tone: "warn", text: `restart to apply ${d.config.restartPending.join(", ")}`, go: () => go("config") });
+  if (d.update) out.push({ tone: "warn", text: `hearth ${d.update} is out`, go: () => { window.open("https://github.com/Vcvzgbzz/hearth/releases", "_blank", "noopener"); } });
   return out;
 }
 

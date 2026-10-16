@@ -107,6 +107,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `callers.<who>` | none | Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default`. |
 | `layout.<node>` | none | `{ x, y }`: where the console's topology draws a node you placed. Written by [its editor](console.md#editing-on-the-graph); nodes without one are laid out. An order you put things in (the Router's types, the topology's boxes of callers) is kept here too, as a rank in `y` |
 | `modelHeader` | `true` | send `x-hearth-model` on every chat answer: the id the request ran as. See [Flows](routing.md#flows) |
+| `updateCheck` | `true` | ask the npm registry once a day, and when `hearth serve` starts, whether a newer hearth is out; the console says so and the log has an `update.available` line. The request names the package and nothing else. Applies live |
 | `historyFile` | unset | a file that keeps the console's day of history, its recent log lines and the month of usage per caller across restarts, written every minute and at shutdown. Unset keeps them in memory. A file written by a later hearth is set aside as `<file>.v<n>` and a fresh one started |
 | `stateFile` | unset | a console sidecar from an earlier version. If it exists at startup its contents are written into the config and it is renamed `.migrated` |
 

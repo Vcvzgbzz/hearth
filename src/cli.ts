@@ -22,6 +22,7 @@ import { LEVELS, createLogger, type Level } from "./log.js";
 import { hashPassword } from "./login.js";
 import { migrateDoc, routedMarker, unguarded, v1Marker } from "./migrate.js";
 import { bugReport } from "./report.js";
+import { watchUpdates } from "./updates.js";
 import { createNode } from "./server.js";
 import { getJson } from "./upstream.js";
 import { parseDocument } from "yaml";
@@ -49,7 +50,9 @@ function starterConfig(backendUrl: string, found: boolean): string {
   return `# hearth: a queue in front of your inference server.
 #
 # Everything runs locally until you add a peer or a cloud backend AND a flow
-# sends something to it. Nothing leaves this machine by default.
+# sends something to it. No prompt leaves this machine by default; the one
+# outside request is a daily check with npm for a newer hearth, and
+# updateCheck: false turns that off.
 #
 # Every setting: https://github.com/Vcvzgbzz/hearth/blob/main/docs/configuration.md
 version: ${CONFIG_VERSION}
@@ -197,7 +200,7 @@ async function main(): Promise<void> {
     console.log(USAGE);
     return;
   }
-  const version = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+  const { name: pkg, version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { name: string; version: string };
   if (values.version) {
     console.log(version);
     return;
@@ -336,6 +339,7 @@ async function main(): Promise<void> {
   const log = node.log;
 
   node.start();
+  watchUpdates({ name: pkg, current: version, enabled: () => cfg.updateCheck, found: (latest) => { node.update = latest; }, log });
   node.server.listen(cfg.listen.port, cfg.listen.host, () => {
     log.info("listening", {
       name: cfg.name,

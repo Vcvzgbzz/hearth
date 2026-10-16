@@ -431,6 +431,8 @@ export interface HearthConfig {
   callers: Record<string, string>;
   /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
   modelHeader: boolean;
+  /** Ask the npm registry once a day whether a newer hearth is out, for the console to say so. */
+  updateCheck: boolean;
   /** `actions:`: what a flow step can set off beside routing, by name. */
   actions: Record<string, Action>;
   /** Where the console draws a topology node the operator has placed, by node id; the rest are laid out. */
@@ -1757,6 +1759,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     historyFile: str(root.historyFile, "historyFile", "") || null,
     layout: layoutDecl(root.layout),
     modelHeader: bool(root.modelHeader, "modelHeader", true),
+    updateCheck: bool(root.updateCheck, "updateCheck", true),
     flows: flowDecls(root.flows, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))),
     routers,
     callers: callerDecls(root.callers, routers),

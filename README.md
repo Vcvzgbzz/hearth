@@ -120,7 +120,9 @@ Better to know this before you deploy it than after.
 
 The defaults assume a private network. hearth binds to `127.0.0.1`; with no
 `apiKeys`, loopback is the only thing trusted; lending is opt-in per model; and
-nothing leaves the machine unless your config names a peer or a cloud backend.
+no prompt leaves the machine unless your config names a peer or a cloud backend.
+The one request hearth makes on its own is a daily check with npm for a newer
+version, which `updateCheck: false` turns off.
 Do not put a reverse proxy in front of it. [Security](docs/security.md) has the
 whole of it, and is worth reading before you widen `listen`. Found a
 vulnerability? Report it privately: see [`SECURITY.md`](SECURITY.md).

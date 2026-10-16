@@ -316,4 +316,6 @@ export interface UiData {
   ledger?: { peer: string; lent: { today: Used; month: Used }; borrowed: { today: Used; month: Used }; closed?: string | null; terms?: LendTerms; /** Which of `terms` are its own, not the node's. */ own?: string[] }[];
   /** The limits a peer is held to unless it has its own. */
   lendDefaults?: { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
+  /** A newer published hearth, or null. */
+  update?: string | null;
 }
