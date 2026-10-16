@@ -63,6 +63,25 @@ apiKeys:
   assert.match(report, /<secret \d+>/, "a secret a log line carried is replaced, not dropped");
 }
 
+// The console's download: the same report, the node's part read from memory, for a full local caller only.
+{
+  const node = createNode(loadConfig(path), silentLogger);
+  await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
+  node.log.warn("test.download", { said: "scoped-key-in-the-file" });
+  const at = `http://127.0.0.1:${(node.server.address() as AddressInfo).port}/report`;
+  assert.equal((await fetch(at)).status, 401, "no key, no report");
+  assert.equal((await fetch(at, { headers: { Authorization: "Bearer scoped-key-in-the-file" } })).status, 403, "a scoped key is a chat client and nothing more");
+  const r = await fetch(at, { headers: { Authorization: "Bearer full-key-in-the-file" } });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-disposition") ?? "", /attachment; filename="hearth-report-\d{4}-\d{2}-\d{2}\.md"/);
+  const report = await r.text();
+  await node.close();
+  for (const s of secrets) assert.ok(!report.includes(s), `${s} must not be in the download`);
+  assert.match(report, /^## The node$/m, "asked from memory, not over an address");
+  assert.match(report, /"name": "node-under-test"/, "with the network view");
+  assert.match(report, /test\.download/, "and the log lines");
+}
+
 // With the node down: the config still comes through.
 {
   const report = await bugReport(path, "9.9.9");

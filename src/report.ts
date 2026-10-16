@@ -40,6 +40,9 @@ export function nodeUrl(cfg: HearthConfig): string {
   return `http://${host}:${cfg.listen.port}`;
 }
 
+/** One of the paths the report reads from the node, answered as text: the body, or why there is none. */
+export type Ask = (path: "/healthz" | "/network" | "/ui/logs") => Promise<{ ok: boolean; text: string }>;
+
 /** One GET to the node, answered as text: the body, or why there is none. */
 async function ask(base: string, path: string, key: string | null): Promise<{ ok: boolean; text: string }> {
   try {
@@ -59,8 +62,8 @@ const pretty = (text: string): string => {
   }
 };
 
-/** The report for the config at `path`, as Markdown; `version` is this build's. */
-export async function bugReport(path: string, version: string): Promise<string> {
+/** The report for the config at `path`, as Markdown; `version` is this build's. The node is asked over loopback unless `asked` answers for it. */
+export async function bugReport(path: string, version: string, asked?: Ask): Promise<string> {
   const out: string[] = [
     "# hearth bug report",
     "",
@@ -93,8 +96,9 @@ export async function bugReport(path: string, version: string): Promise<string> 
     // An unscoped key, since /network is closed to a scoped one; none is needed when the node has none.
     const i = cfg.apiKeyModels.findIndex((m) => m === null);
     const key = cfg.apiKeys.length > 0 && i >= 0 ? cfg.apiKeys[i]! : null;
-    const [health, net, logs] = await Promise.all([ask(base, "/healthz", null), ask(base, "/network", key), ask(base, "/ui/logs", null)]);
-    out.push(`## The node at ${base}`, "", "### /healthz", "", "```json", pretty(health.text), "```", "");
+    const from: Ask = asked ?? ((p) => ask(base, p, p === "/network" ? key : null));
+    const [health, net, logs] = await Promise.all([from("/healthz"), from("/network"), from("/ui/logs")]);
+    out.push(asked ? "## The node" : `## The node at ${base}`, "", "### /healthz", "", "```json", pretty(health.text), "```", "");
     out.push("### /network", "", "```json", pretty(net.text), "```", "");
     out.push(`### Recent log lines`, "");
     if (logs.ok) {

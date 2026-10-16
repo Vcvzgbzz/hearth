@@ -2,10 +2,11 @@
  * The Logs page: hearth's recent log lines as sentences, newest first, with the raw fields one
  * click away. journald (or wherever stdout goes) stays the full record; this is the readable tail.
  */
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Download } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { Card, cx, Empty, mono, Pill, type Tone } from "./ui.js";
+import { downloadReport } from "./store.js";
+import { Button, Card, cx, Empty, mono, Pill, type Tone } from "./ui.js";
 
 export interface LogEntry {
   t: string;
@@ -133,6 +134,7 @@ export function Logs() {
         <label className="flex items-center gap-1.5 text-[12px] text-dim">
           <input type="checkbox" checked={requests} onChange={(e) => setRequests(e.target.checked)} />requests
         </label>
+        <Button onClick={() => void downloadReport()}><Download size={13} />bug report</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {entries === null ? <Empty>loading…</Empty> : shown.length === 0 ? <Empty>{entries.length ? "Nothing matches." : "Nothing logged yet."}</Empty> : (
