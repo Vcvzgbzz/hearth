@@ -1,5 +1,5 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
@@ -34,6 +34,59 @@ function useTheme(): [boolean, () => void] {
     try { localStorage.setItem("hearth.theme", d ? "light" : "dark"); } catch { /* per-browser nicety only */ }
     return !d;
   })];
+}
+
+/** One address to copy, with what speaks to it. */
+function Address({ name, url, says }: { name: string; url: string; says: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-3 border-b border-line py-2.5 last:border-0">
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium">{name}</div>
+        <div className="select-all break-all font-mono text-[12px]">{url}</div>
+        <div className="text-[12px] text-dim">{says}</div>
+      </div>
+      {/* A page served over plain http off this machine has no clipboard; the text is selectable either way. */}
+      {navigator.clipboard && <Button onClick={() => void navigator.clipboard.writeText(url).then(() => setCopied(true), () => {})}>{copied ? "copied" : "copy"}</Button>}
+    </div>
+  );
+}
+
+/** Where to point an app: this node's addresses, whether it wants a key, and a setup to paste. */
+function Endpoints({ onClose }: { onClose: () => void }) {
+  const d = useStore((s) => s.data)!;
+  const [tab, setTab] = useState<"curl" | "claude">("curl");
+  // The console is served from the node's own port, so its origin is the address apps use.
+  const base = location.origin;
+  const keyed = (d.keys ?? []).length > 0;
+  const model = d.catalog[0] ?? "my-model";
+  const key = keyed ? "$HEARTH_KEY" : "";
+  const snippet = tab === "curl"
+    ? `curl ${base}/v1/chat/completions \\\n${keyed ? `  -H "Authorization: Bearer ${key}" \\\n` : ""}  -H "Content-Type: application/json" \\\n  -d '{"model":"${model}","messages":[{"role":"user","content":"hi"}]}'`
+    : `export ANTHROPIC_BASE_URL=${base}\nexport ANTHROPIC_AUTH_TOKEN=${keyed ? key : "<a key from the Keys page>"}\nexport ANTHROPIC_MODEL=${model}\nclaude`;
+  return (
+    <Dialog title="Point your apps here" onClose={onClose}>
+      <div className="flex flex-col gap-3 p-4">
+        <p className="text-[12px] text-dim">The same address whichever backend or peer ends up answering.</p>
+        <div>
+          <Address name="OpenAI-compatible" url={`${base}/v1`} says="chat completions and models, streaming included" />
+          <Address name="Anthropic Messages" url={base} says="the base URL for Claude Code and other Messages clients" />
+        </div>
+        <div className="rounded-md bg-warn/10 px-3 py-2 text-[12px]">
+          {keyed
+            ? <>This node has API keys, so every app needs one{tab === "claude" ? ", Claude Code included" : ""}. <button className="underline" onClick={() => { onClose(); go("keys"); }}>Make one on Keys.</button></>
+            : <>This node has no API keys, so only apps on this machine can call it. Claude Code always sends a key, so it needs one: <button className="underline" onClick={() => { onClose(); go("keys"); }}>make one on Keys.</button></>}
+        </div>
+        <div className="flex gap-1" role="tablist" aria-label="example setup">
+          {(["curl", "claude"] as const).map((t) => (
+            <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+                    className={cx("h-7 rounded-md border px-2.5 text-[12px]", tab === t ? "border-accent bg-accent/10 text-accent" : "border-line hover:bg-muted")}>{t === "curl" ? "curl" : "Claude Code"}</button>
+          ))}
+        </div>
+        <pre className="overflow-x-auto rounded-md border border-line bg-bg p-3 font-mono text-[12px] leading-5">{snippet}</pre>
+      </div>
+    </Dialog>
+  );
 }
 
 function ConfigPill() {
@@ -275,6 +328,7 @@ export default function App() {
   const loginRequired = useStore((s) => s.loginRequired);
   const page = useStore((s) => s.page);
   const [dark, toggleTheme] = useTheme();
+  const [endpoints, setEndpoints] = useState(false);
 
   useEffect(() => {
     // `go` has already moved the page and may have picked something on it since: only a page change that came from the address clears the selection.
@@ -316,6 +370,7 @@ export default function App() {
           {data?.operator && <span className="max-sm:hidden"><Pill tone="ok">signed in as {data.operator}</Pill></span>}
           <div className="ml-2 min-w-0 flex-1 overflow-hidden"><Health /></div>
           <div className="flex shrink-0 items-center gap-3">
+            {data && <button onClick={() => setEndpoints(true)} className="flex items-center gap-1.5 text-[12px] text-dim hover:text-fg" title="the addresses to point apps at"><Globe size={14} /> endpoints</button>}
             {data?.operator && (
               <button onClick={() => { void logout(); }} className="flex items-center gap-1.5 text-[12px] text-dim hover:text-fg" title="end this browser's session">
                 <LogOut size={14} /> sign out
@@ -331,6 +386,7 @@ export default function App() {
         {/* Above the page, because a degraded seat is a fact about the node, not
             about the tab you happen to be looking at. */}
         {data && <CanaryAlert />}
+        {endpoints && data && <Endpoints onClose={() => setEndpoints(false)} />}
 
         {!data ? (
           <div className="grid flex-1 place-items-center text-dim">{dead ? "hearth is not answering" : "connecting…"}</div>

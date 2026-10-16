@@ -106,6 +106,11 @@ finishes what is in flight, then exits with status `75` so a supervisor that
 restarts on failure (systemd's `Restart=on-failure`) brings it straight back,
 and the page reconnects. Without such a supervisor it only stops.
 
+**endpoints** in the header lists the addresses to point an app at (the
+OpenAI-compatible `/v1` and the Messages API base), each with a copy button,
+says whether the node wants a key, and shows a setup to paste for curl or
+Claude Code.
+
 ### Editing on the graph
 
 The **Routing** page is a map of the routing you have set up, and it is where
