@@ -51,9 +51,13 @@ hearth invite --url http://100.x.y.z:4141
 hearth join hearth-invite:…
 ```
 
+The console does the same from the Lending page: **invite a peer** asks for the
+address and shows the code to copy, and **join with a code** takes one.
+
 The lender's node adds `peers.<borrower's name>` with a fresh `accept`, the
 borrower's adds `peers.<lender's name>` with the lender's `url` and that same
-token, and both apply at once. Neither person ever sees the token.
+token, and both apply at once. Neither person ever sees the token: the code
+carries only a one-time secret, which the join swaps for it.
 
 - An invite lends one way: the borrower may run what the lender's `lending`
   allows, and the lender borrows nothing back. Inviting the other way links the

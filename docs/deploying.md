@@ -96,4 +96,5 @@ wherever it appears, log lines too. Hostnames, addresses and model names are
 left in, so read the file before attaching it. As with `--check`, source the
 env file first, or the config will not load and the node's half is left out.
 The node is asked over loopback; `/network` uses one of the config's unscoped
-keys when it has any.
+keys when it has any. The console's Logs page has a **bug report** button that
+downloads the same file from the running node.

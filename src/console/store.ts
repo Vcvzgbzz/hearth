@@ -276,6 +276,17 @@ function askForKey(): Promise<string | null> {
  * none is stored yet. Errors come back as `{message, path}` so a form can place them.
  */
 export async function request<T = Record<string, unknown>>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await authed(method, path, body);
+  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!r.ok) {
+    const err = (d.error ?? {}) as { message?: string; path?: string | null };
+    throw new RequestError(err.message ?? (typeof d.error === "string" ? d.error : `failed (${r.status})`), err.path ?? null);
+  }
+  return d as T;
+}
+
+/** The node's answer with whatever credential it takes, asking for a key as `request` does; a 401 that stands is thrown. */
+async function authed(method: string, path: string, body?: unknown): Promise<Response> {
   const doFetch = (k: string): Promise<Response> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (k) headers.Authorization = `Bearer ${k}`;
@@ -294,7 +305,6 @@ export async function request<T = Record<string, unknown>>(method: string, path:
       r = await doFetch(key);
     }
   }
-  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
   if (r.status === 401) {
     // With no key in play the session is what was refused: the next look at the node offers the login.
     if (key === "") {
@@ -304,11 +314,23 @@ export async function request<T = Record<string, unknown>>(method: string, path:
     forgetKey();
     throw new RequestError("key rejected — try again to re-enter it", null);
   }
-  if (!r.ok) {
-    const err = (d.error ?? {}) as { message?: string; path?: string | null };
-    throw new RequestError(err.message ?? (typeof d.error === "string" ? d.error : `failed (${r.status})`), err.path ?? null);
+  return r;
+}
+
+/** Save `hearth report` from the node: the versions, the config with its secrets replaced, and the node's health, network and recent logs. */
+export async function downloadReport(): Promise<void> {
+  try {
+    const r = await authed("GET", "/report");
+    if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: { message?: string } }).error?.message ?? `failed (${r.status})`);
+    const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? "hearth-report.md";
+    const url = URL.createObjectURL(await r.blob());
+    Object.assign(document.createElement("a"), { href: url, download: name }).click();
+    // Revoked after the click has handed the file over, or some browsers save nothing.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("ok", `${name} saved: secrets are replaced, but read it before attaching it to an issue`);
+  } catch (e) {
+    toast("bad", (e as Error).message);
   }
-  return d as T;
 }
 
 /** Ask the node to restart, then reload once it answers again; a restart ends every session. */

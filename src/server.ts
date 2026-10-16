@@ -33,6 +33,7 @@ import { createViews, type CallerUse, type KeyInfo, type LedgerRow, type Spent }
 import { multipartField, replaceMultipartField } from "./multipart.js";
 import { relayAnthropic, toAnthropic } from "./anthropic.js";
 import { tailscaleWhois } from "./tailscale.js";
+import { bugReport } from "./report.js";
 import { chatOf, MessagesResponse } from "./messages.js";
 import { troubleSays } from "./backend.js";
 import { getJson, send, UpstreamError, type UpstreamResponse } from "./upstream.js";
@@ -1319,6 +1320,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     { path: "/peers/join", methods: ["POST"], auth: "local", handler: routeJoin },
     { path: "/peers/machine", methods: ["GET"], auth: "local", handler: routePeerMachine },
     { path: "/usage", methods: ["GET"], auth: "local", handler: routeUsage },
+    { path: "/report", methods: ["GET"], auth: "local", handler: routeReport },
     { path: "/backends/probe", methods: ["POST"], auth: "local", handler: routeProbe },
 
     // The OpenAI surface: a peer may send us work here, and so may we.
@@ -1400,13 +1402,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
    * Whether this node can serve, for an external probe: 503 only when every backend we hold an
    * event stream to is gone. Peers never affect it. Unauthenticated, so counts only, never names.
    */
-  async function routeHealthz(c: Call): Promise<void> {
-    const { res } = c;
+  /** What /healthz answers: counts only, never names, since it is unauthenticated and may be bound wide. */
+  function health(): { ok: boolean } & Record<string, unknown> {
     const local = pool.all();
     const watched = local.filter((b) => b.state.watched());
     const connected = watched.filter((b) => b.state.streamingNow());
     const ok = watched.length === 0 || connected.length > 0;
-    json(res, ok ? 200 : 503, {
+    return {
       ok,
       name: cfg.name,
       backends: {
@@ -1421,8 +1423,33 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       // Only with a canary configured, and as a count: this endpoint is unauthenticated
       // and may be bound wide, so it says how many models are out, never which.
       ...(canary ? { canary: { degraded: canary.degradedCount() } } : {}),
+    };
+  }
+
+  async function routeHealthz(c: Call): Promise<void> {
+    const h = health();
+    json(c.res, h.ok ? 200 : 503, h);
+  }
+
+  /** This build's version, read once, for the report's header. */
+  let reportVersion: string | undefined;
+
+  /** `hearth report` as a download: the same file, with the node's part read from memory rather than over loopback. */
+  async function routeReport(c: Call): Promise<void> {
+    if (cfg.configPath === null) {
+      apiError(c.res, 409, "this node was not started from a config file, so there is no report to write");
+      return;
+    }
+    reportVersion ??= (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+    const text = await bugReport(cfg.configPath, reportVersion, async (path) => {
+      if (path === "/healthz") return { ok: true, text: JSON.stringify(health()) };
+      if (path === "/network") return { ok: true, text: JSON.stringify(networkView()) };
+      return { ok: true, text: JSON.stringify({ entries: logs.all() }) };
     });
-    return;
+    c.res.writeHead(200, {
+      "Content-Type": "text/markdown; charset=utf-8",
+      "Content-Disposition": `attachment; filename="hearth-report-${new Date().toISOString().slice(0, 10)}.md"`,
+    }).end(text);
   }
 
   // ---- peer surface ----
