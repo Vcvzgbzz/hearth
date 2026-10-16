@@ -4,6 +4,7 @@
 [![CI](https://github.com/Vcvzgbzz/hearth/actions/workflows/test.yml/badge.svg)](https://github.com/Vcvzgbzz/hearth/actions/workflows/test.yml)
 [![Node](https://img.shields.io/node/v/@vcvzgbzz/hearth)](package.json)
 [![License: MIT](https://img.shields.io/github/license/Vcvzgbzz/hearth)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/xH4p2FTpqn)
 
 A queue in front of your local inference server, and optionally a way to lend
 the spare capacity to someone you trust.
@@ -134,7 +135,8 @@ npm run build
 ```
 
 [Development](docs/development.md) covers embedding it and how the tests are
-laid out. To contribute, start with [`CONTRIBUTING.md`](CONTRIBUTING.md);
+laid out. Questions, setups and release news are on [Discord](https://discord.gg/xH4p2FTpqn).
+To contribute, start with [`CONTRIBUTING.md`](CONTRIBUTING.md);
 [`AGENTS.md`](AGENTS.md) has the full rules for commits, comments and pull
 requests, for people and AI agents alike.
 

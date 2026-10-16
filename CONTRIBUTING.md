@@ -24,6 +24,8 @@ library and what the larger tests prove.
 
 ## Issues
 
+- **A question:** ask in the help forum on [Discord](https://discord.gg/xH4p2FTpqn), one post per
+  question. Issues are for bugs and ideas.
 - **A bug:** use the bug report form. The hearth version (`hearth --version`),
   the backend kind and the relevant part of `hearth.yaml` with secrets taken
   out make most reports answerable on the first read.

@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Ask a question
+    url: https://discord.gg/xH4p2FTpqn
+    about: The help forum on the hearth Discord, for setup questions and how-tos.
   - name: Report a security vulnerability
     url: https://github.com/Vcvzgbzz/hearth/security/advisories/new
     about: Privately, not in a public issue.
