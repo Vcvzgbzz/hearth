@@ -7,7 +7,7 @@ import { choose } from "./editStore.js";
 import { short } from "./pages.js";
 import { control, refresh, request, toast, useStore } from "./store.js";
 import type { LendTerms, UiData, Used } from "./types.js";
-import { Card, cx, mono, Pill, Switch } from "./ui.js";
+import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";
 
 type Row = NonNullable<UiData["ledger"]>[number];
 type Path = (string | number)[];
@@ -174,11 +174,110 @@ function PeerDetail({ peer }: { peer: string }) {
   );
 }
 
+const ADDRESS_KEY = "hearth.inviteUrl";
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Where a friend reaches this node: the last one given here, else the page's own address unless it is loopback. */
+function knownAddress(): string {
+  try {
+    const kept = localStorage.getItem(ADDRESS_KEY);
+    if (kept) return kept;
+  } catch { /* storage can be off; the field starts empty then */ }
+  return LOOPBACK.has(location.hostname) ? "" : location.origin;
+}
+
+/** Mint an invite code for the address a friend reaches this node at, and show it to copy. */
+function Invite({ onClose }: { onClose: () => void }) {
+  const [url, setUrl] = useState(knownAddress);
+  const [made, setMade] = useState<{ code: string; expiresAt: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const mint = async () => {
+    try {
+      const d = await request<{ code: string; expiresAt: string }>("POST", "/peers/invite", { url: url.trim() });
+      try { localStorage.setItem(ADDRESS_KEY, url.trim()); } catch { /* remembered only where storage allows */ }
+      setMade(d);
+    } catch (e) {
+      toast("bad", (e as Error).message);
+    }
+  };
+  return (
+    <Dialog title="Invite a peer" onClose={onClose}>
+      <div className="flex flex-col gap-3 p-4">
+        {made === null ? (
+          <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void mint(); }}>
+            <label htmlFor="invite-url" className="text-[12px] text-dim">The address your friend reaches this node at, such as its tailnet address and port.</label>
+            <input id="invite-url" autoFocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://100.x.y.z:4141"
+                   className={cx("h-8 rounded-md border border-line bg-bg px-2 focus-visible:outline-2 focus-visible:outline-accent", mono)} />
+          </form>
+        ) : (
+          <>
+            <p className="text-[12px] text-dim">
+              Send this to your friend. They paste it under <span className="font-medium text-fg">join with a code</span> on their Lending page, or run <span className={mono}>hearth join</span> with it.
+              It works once, until {new Date(made.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, and anyone holding it can join, so send it like a short-lived password.
+            </p>
+            <code className={cx("select-all break-all rounded-md border border-line bg-bg px-3 py-2", mono)}>{made.code}</code>
+          </>
+        )}
+      </div>
+      <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
+        {made === null ? <Button tone="primary" disabled={url.trim() === ""} onClick={() => void mint()}>make a code</Button> : (
+          <>
+            {/* A page served over plain http off this machine has no clipboard; the text is selectable either way. */}
+            {navigator.clipboard && <Button onClick={() => void navigator.clipboard.writeText(made.code).then(() => setCopied(true), () => {})}>{copied ? "copied" : "copy"}</Button>}
+            <Button tone="primary" onClick={onClose}>done</Button>
+          </>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+/** Redeem a friend's invite code: this node joins theirs as a peer and can borrow from it at once. */
+function Join({ onClose }: { onClose: () => void }) {
+  const [code, setCode] = useState("");
+  const [as, setAs] = useState("");
+  const [busy, setBusy] = useState(false);
+  const join = async () => {
+    setBusy(true);
+    try {
+      const d = await request<{ peer: string }>("POST", "/peers/join", { code: code.trim(), ...(as.trim() ? { as: as.trim() } : {}) });
+      toast("ok", `joined ${d.peer}: you can borrow from it now`);
+      await refresh();
+      onClose();
+    } catch (e) {
+      toast("bad", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog title="Join with a code" onClose={onClose}>
+      <form className="flex flex-col gap-3 p-4" onSubmit={(e) => { e.preventDefault(); void join(); }}>
+        <label className="flex flex-col gap-1 text-[12px] text-dim">
+          The code your friend sent
+          <textarea autoFocus rows={3} value={code} onChange={(e) => setCode(e.target.value)} placeholder="hearth-invite:…"
+                    className={cx("rounded-md border border-line bg-bg px-2 py-1.5 text-fg focus-visible:outline-2 focus-visible:outline-accent", mono)} />
+        </label>
+        <label className="flex flex-col gap-1 text-[12px] text-dim">
+          Name for them here (optional: their node's own name otherwise)
+          <input value={as} onChange={(e) => setAs(e.target.value)}
+                 className={cx("h-8 rounded-md border border-line bg-bg px-2 text-fg focus-visible:outline-2 focus-visible:outline-accent", mono)} />
+        </label>
+      </form>
+      <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
+        <Button onClick={onClose}>cancel</Button>
+        <Button tone="primary" disabled={busy || !code.trim().startsWith("hearth-invite:")} onClick={() => void join()}>{busy ? "joining…" : "join"}</Button>
+      </div>
+    </Dialog>
+  );
+}
+
 export function Lending() {
   const d = useStore((s) => s.data)!;
   const rows = d.ledger ?? [];
   const defaults = d.lendDefaults ?? { tokensPerDay: 0, maxConcurrent: 2, rateLimit: 600 };
   const [open, setOpen] = useState<string | null>(null);
+  const [pairing, setPairing] = useState<"invite" | "join" | null>(null);
   // A provider's model spends its key, and a name a flow takes is a rule a peer's work never goes through: neither is offered.
   const self = d.net.nodes.find((n) => n.self)!;
   const hosted = new Set((self.backends ?? []).filter((b) => b.cloud).flatMap((b) => b.serves ?? []));
@@ -191,9 +290,11 @@ export function Lending() {
     <div>
       <div className="mb-4 flex flex-wrap items-end gap-4">
         <p className="flex-[1_1_320px] text-dim">
-          {rows.length === 0 ? "No peers yet. A peer is added in Config, under peers."
+          {rows.length === 0 ? "No peers yet. Invite a friend's node, join theirs with a code they sent, or add one in Config, under peers."
             : `${rows.length} ${rows.length === 1 ? "peer" : "peers"}. Over the days kept they ran ${total((r) => r.lent.month)} tokens here and you ran ${total((r) => r.borrowed.month)} on theirs.`}
         </p>
+        <Button onClick={() => setPairing("invite")}>invite a peer</Button>
+        <Button onClick={() => setPairing("join")}>join with a code</Button>
         <label className="flex items-center gap-2">lending <Switch label="lending" on={d.controls.lending} onChange={(on) => void flip({ lending: on }, on ? "lending resumed" : "lending paused")} /></label>
         <label className="flex items-center gap-2">borrowing <Switch label="borrowing" on={d.controls.borrowing} onChange={(on) => void flip({ borrowing: on }, on ? "borrowing resumed" : "borrowing paused")} /></label>
       </div>
@@ -297,6 +398,8 @@ export function Lending() {
       )}
 
       {open !== null && <PeerDetail peer={open} />}
+      {pairing === "invite" && <Invite onClose={() => setPairing(null)} />}
+      {pairing === "join" && <Join onClose={() => setPairing(null)} />}
       <Menu />
     </div>
   );
