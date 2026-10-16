@@ -7,7 +7,7 @@ import { choose } from "./editStore.js";
 import { short } from "./pages.js";
 import { control, refresh, request, toast, useStore } from "./store.js";
 import type { LendTerms, UiData, Used } from "./types.js";
-import { Card, cx, mono, Pill, Switch } from "./ui.js";
+import { Button, Card, cx, mono, Pill, Switch } from "./ui.js";
 
 type Row = NonNullable<UiData["ledger"]>[number];
 type Path = (string | number)[];
@@ -111,6 +111,43 @@ function Days({ lent, borrowed, days }: { lent: Record<string, number>; borrowed
   );
 }
 
+type Seen = { ip: string; at: string; node: { id: string; name: string; login: string } | null; error?: string };
+
+/** Which tailnet machine a peer may borrow from, offered from the machine it last called from. */
+function Machine({ peer }: { peer: string }) {
+  const [got, setGot] = useState<{ bound: string | null; seen: Seen | null } | null>(null);
+  const load = () => void request<{ bound: string | null; seen: Seen | null }>("GET", `/peers/machine?peer=${encodeURIComponent(peer)}`).then(setGot, () => setGot(null));
+  useEffect(load, [peer]);
+  if (!got) return null;
+  const { bound, seen } = got;
+  const bind = async (id: string | undefined, done: string) => { await save(["peers", peer, "tailnet"], id, done); load(); };
+  const node = seen?.node ?? null;
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line/60 pt-3 text-[12px]">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-dim">machine</span>
+      {bound !== null ? (
+        <>
+          <span>its token works only from tailnet machine <span className={mono}>{bound}</span>{node && node.id === bound ? <> ({node.name})</> : null}</span>
+          {node && node.id !== bound && <span className="text-warn">its last call came from {node.name}, another machine, and was refused</span>}
+          <Button onClick={() => void bind(undefined, `${peer}: token works from any machine`)}>unbind</Button>
+        </>
+      ) : node ? (
+        <>
+          <span className="text-dim">its token works from any machine; its last call came from <span className="text-fg">{node.name}</span> ({seen!.ip}{node.login ? `, ${node.login}` : ""})</span>
+          <Button onClick={() => void bind(node.id, `${peer}: token works only from ${node.name}`)}>bind to {node.name}</Button>
+        </>
+      ) : (
+        <span className="text-dim">
+          its token works from any machine.{" "}
+          {seen === null ? "It has not called since this node started; it can be bound to its machine once it does."
+            : seen.error ? `tailscaled could not be asked who it is (${seen.error}).`
+            : `Its last call came from ${seen.ip}, which is not on the tailnet, so there is no machine to bind it to.`}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** One peer's use by model each way, and by day. */
 function PeerDetail({ peer }: { peer: string }) {
   const [got, setGot] = useState<{ days: number; row: Detail } | null>(null);
@@ -170,6 +207,7 @@ function PeerDetail({ peer }: { peer: string }) {
           <div className="mt-2"><Days lent={row.byDay.lent} borrowed={row.byDay.borrowed} days={days} /></div>
         </div>
       </div>
+      {row.terms !== undefined && <Machine peer={peer} />}
     </Card></div>
   );
 }

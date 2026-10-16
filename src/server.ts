@@ -1216,6 +1216,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
 
     const asPeer = r.auth === "local" ? null : peerCaller(req);
+    if (asPeer !== null) peerSeen.set(asPeer, { ip: req.socket.remoteAddress ?? "", port: req.socket.remotePort ?? 0, at: Date.now() });
     if (r.auth === "peer") {
       if (asPeer === null) {
         refuse(res, 401, "unknown peer token", env);
@@ -1245,6 +1246,29 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   const whois = tailscaleWhois(cfg.tailscaleSocket);
+  /** Where each peer last presented its token from, so the console can offer to bind it to that machine. */
+  const peerSeen = new Map<string, { ip: string; port: number; at: number }>();
+
+  /** `GET ?peer=`: what the peer is bound to now, and which tailnet machine it last called from as tailscaled names it. */
+  async function routePeerMachine(c: Call): Promise<void> {
+    const peer = c.url.searchParams.get("peer") ?? "";
+    if (!(peer in cfg.peerTokens)) {
+      apiError(c.res, 404, `${peer || "that"} is not a peer that borrows from this node`, "not_found_error");
+      return;
+    }
+    const bound = cfg.peerTailnet[peer] ?? null;
+    const seen = peerSeen.get(peer);
+    if (!seen) {
+      json(c.res, 200, { peer, bound, seen: null });
+      return;
+    }
+    try {
+      const node = await whois(seen.ip, seen.port);
+      json(c.res, 200, { peer, bound, seen: { ip: seen.ip.replace(/^::ffff:/, ""), at: new Date(seen.at).toISOString(), node } });
+    } catch (e) {
+      json(c.res, 200, { peer, bound, seen: { ip: seen.ip.replace(/^::ffff:/, ""), at: new Date(seen.at).toISOString(), node: null, error: e instanceof Error ? e.message : String(e) } });
+    }
+  }
 
   /**
    * A peer bound with `tailnet` is let in only from that machine, so its token alone is not enough.
@@ -1293,6 +1317,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     // Invite a node to borrow from this one, or redeem another node's invite.
     { path: "/peers/invite", methods: ["POST"], auth: "local", handler: routeInvite },
     { path: "/peers/join", methods: ["POST"], auth: "local", handler: routeJoin },
+    { path: "/peers/machine", methods: ["GET"], auth: "local", handler: routePeerMachine },
     { path: "/usage", methods: ["GET"], auth: "local", handler: routeUsage },
     { path: "/backends/probe", methods: ["POST"], auth: "local", handler: routeProbe },
 

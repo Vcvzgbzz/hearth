@@ -181,7 +181,9 @@ of the token used from anywhere else gets a 403, and the log line
 `peer.wrong_machine` names the machine that tried.
 
 - Match on the stable node ID (`StableID` in `tailscale whois --json`). It
-  survives renames, which the machine name does not.
+  survives renames, which the machine name does not. The console offers it
+  instead: open the peer on the Lending page and **bind to** the machine it
+  last called from.
 - The check needs the peer to reach you over the tailnet. A connection to your
   LAN address has no tailnet identity, so it is refused for a bound peer.
 - hearth reads tailscaled's local API at `tailscaleSocket`. Tailscale running in

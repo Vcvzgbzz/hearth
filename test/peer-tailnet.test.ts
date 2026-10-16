@@ -104,6 +104,26 @@ const chat = await fetch(`${url}/v1/chat/completions`, {
 });
 assert.equal(chat.status, 403, "the check covers work a peer sends, not only the peer protocol");
 
+// --- the machine a peer calls from, for the console to offer a binding ----------
+{
+  type Machine = { peer: string; bound: string | null; seen: { ip: string; node: { id: string; name: string } | null; error?: string } | null };
+  const machine = async (peer: string) => {
+    const r = await fetch(`${url}/peers/machine?peer=${peer}`);
+    return { status: r.status, body: (await r.json()) as Machine };
+  };
+  assert.equal((await machine("stranger")).status, 404, "only a peer that borrows from this node");
+  answer = "n-other";
+  assert.equal(await hello("other-token"), 200);
+  const other = (await machine("other")).body;
+  assert.equal(other.bound, null, "not bound yet");
+  assert.equal(other.seen?.ip, "127.0.0.1", "the address it last called from");
+  assert.equal(other.seen?.node?.id, "n-other", "and the machine tailscaled says that is");
+  assert.equal((await machine("friend")).body.bound, "n-friend", "a bound peer says what it is bound to");
+  answer = "fail";
+  assert.match((await machine("other")).body.seen?.error ?? "", /500/, "a tailscaled that cannot answer is said, not guessed");
+  answer = "n-friend";
+}
+
 await node.close();
 
 // --- a peer added by a live edit is bound from its first request -----------------
