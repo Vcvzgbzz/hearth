@@ -2074,12 +2074,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       const name = typeof body.name === "string" ? body.name.trim() : "";
       if (!PEER_NAME.test(name)) throw new Refusal(400, "name must be 1-40 letters, digits, '.', '_' or '-'");
       const knows = Array.isArray(body.knows) ? body.knows.filter((k): k is string => typeof k === "string").slice(0, 64) : [];
+      // Claimed before the lookup awaits, so a second try with the same secret cannot race this one.
+      invites.delete(secret);
       const known = await knownJoiner(c.req, secret, knows);
       if (known === null && (name in cfg.peerTokens || cfg.peers.some((p) => p.name === name))) {
+        // A taken name spends nothing: the joiner may try again under another.
+        invites.set(secret, until);
         throw new Refusal(409, `this node already has a peer called ${name}`);
       }
-      // Spent before the write, so a second try with the same secret cannot race this one.
-      invites.delete(secret);
       const peer = known?.peer ?? name;
       const kept = cfg.peerTokens[peer];
       const token = kept ?? "hpeer_" + randomBytes(24).toString("hex");

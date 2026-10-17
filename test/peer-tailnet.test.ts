@@ -189,6 +189,12 @@ flows:
   const other = await boot("other", "");
   assert.equal(await other.post("/peers/join", { code: await invite() }), 200);
   assert.deepEqual(Object.keys(loadConfig(inviter.path).peerTokens), ["friend", "other"], "any other machine is a new peer");
+
+  // Two joins racing on one code while tailscaled is asked who each is: exactly one gets in.
+  const secret = (JSON.parse(Buffer.from((await invite()).slice("hearth-invite:".length), "base64url").toString()) as { s: string }).s;
+  const race = await Promise.all(["racer-a", "racer-b"].map((name) => inviter.post("/peer/join", { secret, name })));
+  assert.deepEqual(race.sort(), [200, 403], "the first join spends the code before the lookup answers");
+  assert.deepEqual(Object.keys(loadConfig(inviter.path).peerTokens).length, 3, "and only one peer is added");
   for (const n of [inviter, joiner, other]) await n.node.close();
 }
 tailscaled.close();
