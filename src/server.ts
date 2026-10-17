@@ -2727,8 +2727,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           }
         }
       }
-      // A path with the model in it is matched to its backend by that name, so only the others can be asked again.
-      if (!held && r.path.length > 0) {
+      if (r.path.length > 0) {
         flowed = name;
         again = (failed) => resolve(name, { ...world, noPeers: true, skip: new Set(failed) });
       }
@@ -2855,7 +2854,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
           // What is left if this fails before anything reaches the client: the flow's next line that ends at a
           // model this path can run, as a chat flow's would, and after the last of those the route's own fallback.
           const next = !strict && again ? again([...failed, as]) : null;
-          const line = next && next.target === "local" && next.model !== as && !failed.includes(next.model) ? placeOf(next.model) : undefined;
+          const usable = next && next.target === "local" && next.model !== as && !failed.includes(next.model);
+          // A path with the model in it runs the next line at that path for its model.
+          const line = !usable ? undefined : held ? pool.forPath(held.as(next.model))?.slot : placeOf(next.model);
           const more = line ? { slot: line, model: next!.model, line: next }
             : spare && fb && !fellBack ? { slot: spare, model: fb.model, line: null } : null;
           try {
@@ -2871,7 +2872,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
             failed.push(as);
             if (more.line && flowed !== null) settle(more.line, flowed, who);
             else fellBack = true;
-            [to, as, sendBody] = [more.slot, more.model, renamed(more.model)];
+            if (held && more.line) outPath = held.as(more.model);
+            [to, as, sendBody] = [more.slot, more.model, held && more.line ? sendBody : renamed(more.model)];
           }
         }
       } else if (routed) {

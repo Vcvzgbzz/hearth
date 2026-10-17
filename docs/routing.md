@@ -97,9 +97,9 @@ position stays where it is.
 A flow that `takes` a path survives the same way: its next line that ends at a
 model the path can run takes the request, and after the last of those the
 route's own `fallback`. A line may name a model on another backend when that
-backend declares the same path, or declares none. A path with the model in it
-(`/upstream/{model}/...`) is matched to its backend by that name and is not
-asked again.
+backend declares the same path, or declares none. On a path with the model in
+it (`/upstream/{model}/...`) the next line runs at that path with its own model
+in the segment.
 
 `sticky: 1800000` on a flow keeps a conversation where its first turn went: a
 later turn (one that carries an assistant message) goes to the same model or
