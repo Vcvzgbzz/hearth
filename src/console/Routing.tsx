@@ -97,12 +97,14 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     const on = d.routing?.[model]?.backend ?? (self.backends ?? []).find((b) => (b.serves ?? []).includes(model) || (b.routes ?? []).some((r) => r.model === model))?.name;
     const where = (self.backends ?? []).find((b) => b.name === on);
     if (where?.cloud) away.add(model);
+    const fb = (where?.routes ?? []).find((r) => r.fallback && (r.model === model || r.path.includes("{model}")))?.fallback;
     nodes.push({
       id: `model:${model}`, type: "dest", position: { x: endX, y },
       data: {
         hardware: (where?.resources ?? []).map((name) => ({ name, cpu: (d.net.resources ?? []).find((r) => r.name === name)?.kind === "cpu" })),
         title: model, kind: "model", ...(where?.cloud ? { cloud: true } : {}), on: tried?.target === "local" && tried.model === model, ...(edit && edit.facts.kind(model) === "paths" ? { shut: true } : {}),
         sub: on === undefined ? "no backend lists this yet" : `on ${on}${where?.server ? ` · ${where.server}` : ""}`,
+        ...(fb && { fallback: `${fb.model} on ${fb.backend}` }),
       } satisfies Dest,
     });
     y += 56;

@@ -289,6 +289,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
               model: r.model,
               lane: r.lane,
               queue: r.queue,
+              ...(r.fallback && { fallback: { ...r.fallback } }),
             })),
           };
         }),

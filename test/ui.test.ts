@@ -220,7 +220,7 @@ const base = await new Promise<string>((ready) =>
         { name: "img", url: backendUrl, kind: "llama-swap", serves: ["image"], resources: ["gpu1"] },
         {
           name: "video", url: backendUrl, kind: "none", concurrency: 1, resources: ["gpu1"],
-          routes: [{ path: "/generate", model: "video-wan" }],
+          routes: [{ path: "/generate", model: "video-wan", fallback: { backend: "img", model: "image" } }],
         },
         { name: "embed", url: backendUrl, llamaSwapExtras: false, serves: ["embed"] },
       ],
@@ -238,7 +238,7 @@ const base = await new Promise<string>((ready) =>
       evictions: unknown[];
       nodes: { self?: boolean; backends?: {
         name: string; resources: string[]; answering: boolean;
-        routes: { path: string; model: string; lane: string; queue: boolean }[];
+        routes: { path: string; model: string; lane: string; queue: boolean; fallback?: unknown }[];
       }[] }[];
     };
   };
@@ -253,8 +253,8 @@ const base = await new Promise<string>((ready) =>
   const backends = d.net.nodes.find((n) => n.self)!.backends!;
   const video = backends.find((b) => b.name === "video")!;
   assert.deepEqual(video.resources, ["gpu1"]);
-  assert.deepEqual(video.routes, [{ path: "/generate", model: "video-wan", lane: "batch", queue: true }],
-    "a route backend is described by its paths, since it has no models to show");
+  assert.deepEqual(video.routes, [{ path: "/generate", model: "video-wan", lane: "batch", queue: true, fallback: { backend: "img", model: "image" } }],
+    "a route backend is described by its paths, since it has no models to show, and where each falls back to");
   assert.deepEqual(backends.find((b) => b.name === "embed")!.resources, [],
     "a backend that declares nothing competes for nothing, and draws as unpinned");
   // Silence is only evidence where we are listening. None of these backends

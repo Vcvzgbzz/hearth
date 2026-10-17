@@ -7,6 +7,8 @@ export interface Route {
   lane: string;
   /** false means the path is forwarded but never queued — a progress endpoint. */
   queue: boolean;
+  /** Where a request goes when this backend fails it before answering. */
+  fallback?: { backend: string; model: string };
 }
 
 /** What a model can take. Absent means not asked yet, never "no limit". */

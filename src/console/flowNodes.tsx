@@ -578,7 +578,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   );
 });
 
-export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; /** A model on a provider's server. */ cloud?: boolean; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean };
+export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; /** A model on a provider's server. */ cloud?: boolean; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean; /** Where its backend's route sends a request it fails, as "model on backend". */ fallback?: string };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -597,6 +597,11 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
         ))}
       </div>
       <div className={cx("truncate text-[10px]", data.down ? "text-bad" : "text-dim")}>{data.sub}</div>
+      {data.fallback && (
+        <div title="Where this backend's route sends a request it fails before answering. A strict router's callers skip it." className="mt-0.5 truncate border-t border-dashed border-line pt-0.5 text-[10px] text-dim">
+          ↳ falls back to <span className="font-mono">{data.fallback}</span>
+        </div>
+      )}
     </div>
   );
 });
