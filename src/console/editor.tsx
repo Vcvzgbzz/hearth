@@ -536,6 +536,8 @@ export function TryStrip() {
     void tryRequest({ ...t, pretend: had.includes(v) ? had.filter((p) => p !== v) : [...had.filter((p) => p !== rival && !(kind === "now" && p.startsWith("now:"))), v] });
   };
   const decided = tried?.path.at(-1);
+  // A type that takes only its own paths is not chat: the chat options and a chat send do not apply to it.
+  const takes = list(Object.values(obj(draft.flows)).map(obj).find((f) => list(f.inputs).includes(t.model.split(":")[0]!))?.takes);
   // Only what the node runs now can be sent: a draft or a pretended state would answer a different question.
   const real = (t.pretend ?? []).length === 0 && !t.images && !t.long && !t.tools && changed(useEdit.getState()) === 0;
   const send = async () => {
@@ -550,9 +552,11 @@ export function TryStrip() {
               onClick={(e) => choose(e, names.map((m) => ({ label: m, mono: true, on: m === t.model })), (m) => void tryRequest({ ...t, model: m }))}>
         {t.model}<ChevronDown size={12} className="text-dim" />
       </button>
-      {toggle("images", "with images", "the request carries an image")}
-      {toggle("long", "long prompt", "a prompt of about 50,000 tokens, where a short one is about 200")}
-      {toggle("tools", "with tools", "the request offers tools to call")}
+      {takes.length === 0 && <>
+        {toggle("images", "with images", "the request carries an image")}
+        {toggle("long", "long prompt", "a prompt of about 50,000 tokens, where a short one is about 200")}
+        {toggle("tools", "with tools", "the request offers tools to call")}
+      </>}
       {offered.length > 0 && (
         <button type="button" title="state your rules test that cannot be arranged on demand: pretend it, and see which line decides"
                 className={cx("flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12px] transition-colors", ticked.length ? "border-accent bg-accent/15" : "border-line hover:bg-muted")}
@@ -572,10 +576,11 @@ export function TryStrip() {
                 <span className="text-dim">{tried.peer ? `on the peer ${tried.peer}` : `on the ${tried.backend} backend`}</span>
                 {tried.unfit && <span className="font-medium text-bad">but it would be turned down: {tried.unfit}</span>}
                 {(tried.actions ?? []).length > 0 && <span className="flex items-center gap-1 text-warn"><Zap size={12} />and runs {tried.actions!.map(runs).join(", ")}</span>}
-                <span className="text-dim">· {decided ? `decided by rule ${decided.flow}, ${decided.step === (obj(obj(draft.flows)[decided.flow]).steps as unknown[] | undefined ?? []).length - 1 ? "its Otherwise line" : `line ${decided.step + 1}`}` : "no rule: it runs as itself"}</span>
+                <span className="text-dim">· {decided ? `decided by rule ${decided.flow}, ${lineName(decided.step, (obj(obj(draft.flows)[decided.flow]).steps as unknown[] | undefined ?? []).length)}` : "no rule: it runs as itself"}</span>
               </>
             )}
-          {tried && !tried.error && tried.target !== "unavailable" && (
+          {tried && !tried.error && tried.target !== "unavailable" && takes.length > 0 && <span className="text-dim">· it takes {takes.join(", ")}, not chat: send it from a client on that path</span>}
+          {tried && !tried.error && tried.target !== "unavailable" && takes.length === 0 && (
             <Button disabled={!real || ran === "sending"} onClick={() => void send()}>{ran === "sending" ? "sending…" : "send it"}</Button>
           )}
           <button type="button" aria-label="stop trying" title="clear" className="ml-auto text-dim hover:text-fg" onClick={() => { setRan(null); void tryRequest(null); }}><X size={14} /></button>
@@ -595,6 +600,9 @@ export function TryStrip() {
     </div>
   );
 }
+
+/** How the try strip names the line that decided: a rule of one line has no "otherwise". */
+const lineName = (step: number, of: number): string => (of === 1 ? "its only line" : step === of - 1 ? "its Otherwise line" : `line ${step + 1}`);
 
 /* --------------------------------------------------------------------- rail */
 
