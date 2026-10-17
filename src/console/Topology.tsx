@@ -849,11 +849,11 @@ export function Topology() {
   const strip = draft && (
     <div className="relative z-10 mx-3 mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-2 py-1.5 shadow-sm">
       {(["backends", "resources", "servers"] as const).map((k) => (
-        <button key={k} type="button" className="flex h-7 items-center gap-1 rounded-lg border border-line bg-panel px-2 text-[12px] hover:bg-muted" onClick={() => setAdding(k)}>
+        <button key={k} type="button" className="flex h-8 items-center gap-1 rounded-lg border border-line bg-panel px-2.5 text-[12px] hover:bg-muted" onClick={() => setAdding(k)}>
           <Plus size={12} />{NEW[k]!.noun}
         </button>
       ))}
-      <button type="button" className="flex h-7 items-center gap-1 rounded-lg border border-line bg-panel px-2 text-[12px] hover:bg-muted" title="a provider's API on the internet, as a backend" onClick={() => setProviding(true)}>
+      <button type="button" className="flex h-8 items-center gap-1 rounded-lg border border-line bg-panel px-2.5 text-[12px] hover:bg-muted" title="a provider's API on the internet, as a backend" onClick={() => setProviding(true)}>
         <Plus size={12} />provider
       </button>
       <VersionsButton />

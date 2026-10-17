@@ -69,6 +69,12 @@ export function refsOf(doc: Record<string, unknown>, catalog: string[]): Record<
 /** Renames ride as their own ops, so the file keeps the entry's comments and layout. */
 const Renamer = createContext<(path: Path, to: string) => void>(() => {});
 
+/** How far a setting sits indented inside the outermost card, in px: its label gives that up so every input starts in one column. */
+const Indent = createContext(0);
+/** What a group's left rule and padding indent by, and what a card nested in a group adds. */
+const GROUP_INDENT = 14;
+const CARD_INDENT = 13;
+
 /** `obj` with the key at `rel` renamed, order kept. */
 function renameIn(obj: unknown, rel: Path, to: string): unknown {
   if (!isObj(obj) || rel.length === 0) return obj;
@@ -259,6 +265,7 @@ function Entry({ label, title, bad, onRemove, onRename, children }: {
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(true);
+  const depth = useContext(Indent);
   const [name, setName] = useState(label);
   const [why, setWhy] = useState<string | null>(null);
   useEffect(() => { setName(label); }, [label]);
@@ -289,7 +296,7 @@ function Entry({ label, title, bad, onRemove, onRename, children }: {
         {title ?? <button type="button" onClick={() => setOpen(!open)} className={cx(mono, "font-medium")}>{label}</button>}
         <button type="button" className="ml-auto text-dim hover:text-bad" aria-label={`remove ${label}`} onClick={onRemove}><Trash2 size={14} /></button>
       </div>
-      {open && <div className="px-3 py-1">{children}</div>}
+      {open && <div className="px-3 py-1"><Indent.Provider value={depth === 0 ? 0 : depth + CARD_INDENT}>{children}</Indent.Provider></div>}
     </Card>
   );
 }
@@ -305,6 +312,7 @@ function Obj({ v, path, onChange, err, compact }: {
   const drop = (k: string) => { const { [k]: _, ...rest } = v; onChange(rest); };
   const set = (k: string) => (n: unknown) => onChange({ ...v, [k]: n });
   const noteRename = useContext(Renamer);
+  const indent = useContext(Indent);
   if (spec) {
     return (
       <div className="flex flex-col gap-3">
@@ -335,14 +343,14 @@ function Obj({ v, path, onChange, err, compact }: {
       {Object.entries(v).filter(([k]) => k !== hide).map(([k, x]) => {
         const at = [...path, k];
         const nested = isObj(x) || (Array.isArray(x) && x.some(isObj));
-        const label = <label htmlFor={nested ? undefined : fid(at)} title={fieldAt(at)?.desc} className={cx("w-44 shrink-0 pt-1.5 text-dim max-sm:w-auto max-sm:pt-0", mono)}>{k}</label>;
+        const label = <label htmlFor={nested ? undefined : fid(at)} title={fieldAt(at)?.desc} style={{ width: 176 - indent }} className={cx("shrink-0 pt-1.5 text-dim max-sm:!w-auto max-sm:pt-0", mono)}>{k}</label>;
         // A group's name sits above it, and its settings indent under it rather than taking a column.
         if (nested) {
           return (
             <div key={k} id={`g${fid(at)}`} tabIndex={-1} className={cx("obj-row border-b border-line/50 py-2 outline-none last:border-0", ROW_HOVER)}>
               <div className="flex items-start justify-between">{label}{rm(k)}</div>
               <div className="mt-1 border-l-2 border-line pl-3">
-                <Value name={k} v={x} path={at} err={err} onChange={set(k)} compact />
+                <Indent.Provider value={indent + GROUP_INDENT}><Value name={k} v={x} path={at} err={err} onChange={set(k)} compact /></Indent.Provider>
               </div>
             </div>
           );

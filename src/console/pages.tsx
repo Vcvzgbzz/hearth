@@ -273,7 +273,7 @@ export function Models() {
                 <td className="tabular px-2 py-2 text-dim">{stats?.context ? `${Math.round(stats.context / 1024)}k` : "—"}</td>
                 <td className="px-2 py-2">
                   {local.has(m) && !hosted.has(m)
-                    ? <span className="inline-flex items-center gap-2">
+                    ? <span className="flex items-center gap-2">
                         <Switch label={`lend ${m}`} on={lent} onChange={(on) => void control({ share: { [m]: on } }, on ? `lending ${m}` : `holding ${m}`)} />
                         {lentOnlyTo(d, m).length > 0 && <span className="text-[12px] text-dim" title="lent by that peer's own list, on the Lending page">to {lentOnlyTo(d, m).join(", ")}</span>}
                       </span>

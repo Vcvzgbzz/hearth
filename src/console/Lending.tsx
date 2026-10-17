@@ -546,7 +546,7 @@ export function Lending() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-end gap-4">
+      <div className="mb-4 flex flex-wrap items-center gap-4">
         <p className="flex-[1_1_320px] text-dim">
           {rows.length === 0 ? "No peers yet. Invite a friend's node, join theirs with a code they sent, or add one in Config, under peers."
             : `${rows.length} ${rows.length === 1 ? "peer" : "peers"}. Over the days kept they ran ${total((r) => r.lent.month)} tokens here and you ran ${total((r) => r.borrowed.month)} on theirs.`}
@@ -562,9 +562,9 @@ export function Lending() {
           <h2 className="text-[11px] font-medium uppercase tracking-wide text-dim">limits for a new peer</h2>
           <span className="text-[12px] text-dim">what a peer is held to until it is given its own below</span>
         </div>
-        <div className="mt-3 flex flex-wrap items-end gap-6">
-          <div><div className="mb-1 text-[12px] text-dim">may run</div>
-            <Models all={lendable} lent={d.configuredShare} who="every peer" onToggle={(m, on) => void flip({ share: { [m]: on } }, on ? `lending ${m}` : `holding ${m}`)} /></div>
+        <div className="mt-3 flex flex-wrap items-start gap-6">
+          <div><div className="mb-1 text-[12px] text-dim">may run</div><div className="flex min-h-8 items-center">
+            <Models all={lendable} lent={d.configuredShare} who="every peer" onToggle={(m, on) => void flip({ share: { [m]: on } }, on ? `lending ${m}` : `holding ${m}`)} /></div></div>
           <div><div className="mb-1 text-[12px] text-dim">tokens a day, each model</div>
             <Num label="tokens a day of each model, for every peer" min={0} none="no limit" value={defaults.tokensPerDay} className="w-32" onSave={(n) => void save(["lending", "tokensPerDay"], n, "saved")} /></div>
           <div><div className="mb-1 text-[12px] text-dim">jobs at once, all models</div>
