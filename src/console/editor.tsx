@@ -549,7 +549,14 @@ export function TryStrip() {
       <span className="font-medium">Try a request</span>
       <span className="text-dim">asking for</span>
       <button type="button" aria-label="the name asked for" className={cx("flex h-8 items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 hover:bg-muted", mono)}
-              onClick={(e) => choose(e, names.map((m) => ({ label: m, mono: true, on: m === t.model })), (m) => void tryRequest({ ...t, model: m }))}>
+              onClick={(e) => {
+                const kinds = [...new Set([...typed, ...pending])];
+                const item = (m: string): Choice => ({ label: m, value: m, mono: true, on: m === t.model });
+                const models = names.filter((m) => !kinds.includes(m));
+                // Types first; a model asked for by its own name goes to the flow for every other name.
+                choose(e, kinds.length && models.length ? [{ label: "types", head: true }, ...kinds.map(item), { label: "models, by their own name", head: true }, ...models.map(item)] : names.map(item),
+                  (m) => void tryRequest({ ...t, model: m }));
+              }}>
         {t.model}<ChevronDown size={12} className="text-dim" />
       </button>
       {takes.length === 0 && <>
