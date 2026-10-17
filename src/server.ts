@@ -21,7 +21,7 @@ import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, h
 import { LogRing, type Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
-import { decide, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
+import { decide, entryOf, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
 import { KEEP_DAYS, meter, Usage, withoutUsage, type Meter } from "./usage.js";
@@ -260,8 +260,18 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   const isType = (name: string): boolean =>
     [cfg.flows, ...Object.values(cfg.routers).map((r) => r.flows)].some((flows) => Object.values(flows).some((f) => f.inputs.includes(name)));
 
-  /** The gates every model request passes before it is queued; throws the Refusal. */
-  function admit(c: Call, model: string): void {
+  /** Null when something here or on a mapped peer serves this id, else what is served instead. */
+  const unknownHere = (m: string): string | null => (pool.certainlyUnknown(m) && peersMapping(m, [], cfg.peers).length === 0
+    ? pool.catalog().join(", ") || "nothing"
+    : null);
+
+  /**
+   * The gates every model request passes before it is queued; throws the Refusal. With `flowed`, a
+   * name nothing serves that a flow takes, the flow for every other name included, is left to that
+   * flow to answer; true then, and the caller's limits are for the caller to check once it runs.
+   */
+  function admit(c: Call, model: string, flowed = false): boolean {
+    let deferred = false;
     // Said in its own words: a peer told only "does not share" cannot tell a spent day from a model it was never lent.
     const lent = c.peer !== null && controls.lendingOn && !termsFor(cfg, c.peer).off;
     const why = lent && controls.share(termsFor(cfg, c.peer!).models).includes(model) ? spentOn(c.peer!, model) : null;
@@ -271,14 +281,19 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       shared: () => (c.peer !== null ? shared(c.peer) : shared()),
       type: isType,
       // A peer may map an id nothing here serves.
-      unknown: (m) => pool.certainlyUnknown(m) && peersMapping(m, [], cfg.peers).length === 0
-        ? pool.catalog().join(", ") || "nothing"
-        : null,
+      unknown: (m) => {
+        const flows = rulesFor(c.caller).flows;
+        const instead = unknownHere(m);
+        deferred = instead !== null && flowed && (entryOf(flows, m) ?? entryOf(flows, ANY)) !== undefined;
+        return deferred ? null : instead;
+      },
     });
     if (refused) throw refused;
+    if (deferred) return true;
     // Counted only once the model is known to be lent, so a refused ask spends none of a model's hour.
     if (c.peer !== null && peerOverLimit(c.peer, model)) throw new Refusal(429, `rate capped for ${model}`, "rate_limit_error");
     withinLimits(c.caller);
+    return false;
   }
 
   /** When each limited key last asked, for its requests-a-minute limit. */
@@ -805,11 +820,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     onPosition?: (position: number) => void,
     id?: string,
     headers: World["headers"] = {},
+    limits?: () => void,
   ): Promise<void> {
     const ended: ((error: string | null) => void)[] = [];
     let error: string | null = null;
     try {
-      const status = await route(payload, asked, askedLane, caller, res, signal, ended, onPosition, id, headers);
+      const status = await route(payload, asked, askedLane, caller, res, signal, ended, onPosition, id, headers, limits);
       if (status >= 400) error = `backend answered ${status}`;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -831,6 +847,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     onPosition?: (position: number) => void,
     id?: string,
     headers: World["headers"] = {},
+    /** The caller's limits, when admit left them to be checked once the flow has decided. */
+    limits?: () => void,
   ): Promise<number> {
     // Refresh peer state only when a decision needs it, and only for requests that may leave.
     if (mayLeave(cfg, asked)) await peers.ensureFresh();
@@ -941,6 +959,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       // The flow's own words: a refusal step's reason, with why a peer was passed over when one was.
       throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
     }
+    // A flow that runs a name as itself still needs something here to serve it.
+    const instead = decision.target === "local" ? unknownHere(model) : null;
+    if (instead !== null) throw new Refusal(404, `no backend here serves "${model}" (${instead})`);
+    limits?.();
 
     // A model that keeps its answers gives one back to a request identical to the one it answered.
     // A stream opened early to report queue position is neither kept nor answered from what is.
@@ -2417,11 +2439,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     try {
       const payload = await readJson(c.req);
       const model = typeof payload.model === "string" ? payload.model : "";
-      admit(c, model);
+      const deferred = admit(c, model, true);
       // Before anything is queued or routed: a degraded seat is out of rotation
       // for everyone, peers included.
       refuseDegraded(model);
-      await chat(c, model, payload);
+      await chat(c, model, payload, deferred);
     } catch (e) {
       fail(c.res, e);
     }
@@ -2434,15 +2456,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     try {
       const body = await readJson(c.req);
       out.model = typeof body.model === "string" ? body.model : "";
-      admit(m, out.model);
+      const deferred = admit(m, out.model, true);
       refuseDegraded(out.model);
-      await chat(m, out.model, chatOf(body));
+      await chat(m, out.model, chatOf(body), deferred);
     } catch (e) {
       fail(m.res, e);
     }
   }
 
-  async function chat(c: Call, asked: string, payload: Record<string, unknown>): Promise<void> {
+  async function chat(c: Call, asked: string, payload: Record<string, unknown>, limitsDeferred = false): Promise<void> {
     const { res } = c;
     let model = asked;
     // A peer's request gets served here and never routed onward. Two nodes
@@ -2472,7 +2494,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     });
 
     if (fromPeer === null) {
-      await dispatch(payload, model, lane, caller, res, ctrl.signal, positionStream(c.req, res, payload), jobId(c.req), headersOf(c.req));
+      await dispatch(payload, model, lane, caller, res, ctrl.signal, positionStream(c.req, res, payload), jobId(c.req), headersOf(c.req), limitsDeferred ? () => withinLimits(caller) : undefined);
       return;
     }
     // A peer running a model here is that model in use.

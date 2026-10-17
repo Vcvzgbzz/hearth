@@ -908,4 +908,40 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   backend.close();
 }
 
+// --- a name nothing serves is answered by the flow for every other name ------------------------------
+{
+  const backend = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: "x", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }] }));
+    });
+  });
+  await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
+  const ask = async (rest: unknown, model: string) => {
+    const node = createNode(parseConfig({
+      backends: { gpu: { url, kind: "none", serves: ["my-model"] } },
+      flows: { rest: { inputs: ["*"], steps: [{ to: rest }] } },
+    }), silentLogger);
+    const at = await new Promise<string>((ready) =>
+      node.server.listen(0, "127.0.0.1", () => ready(`http://127.0.0.1:${(node.server.address() as AddressInfo).port}`)));
+    const r = await fetch(`${at}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "x" }] }) });
+    const out = { status: r.status, message: ((await r.json()) as { error?: { message?: string } }).error?.message ?? "" };
+    await node.close();
+    return out;
+  };
+  // Refused in the operator's own words, not with the list of what is served.
+  const refused = await ask({ refuse: "ask for my-model" }, "nope");
+  assert.equal(refused.status, 503);
+  assert.match(refused.message, /nope is not being run: ask for my-model/);
+  // Run as itself, a name nothing serves is still not found.
+  const itself = await ask({ asked: true }, "nope");
+  assert.equal(itself.status, 404);
+  assert.match(itself.message, /no backend here serves "nope" \(my-model\)/);
+  assert.equal((await ask({ asked: true }, "my-model")).status, 200, "and one something serves runs");
+  backend.closeAllConnections();
+  backend.close();
+}
+
 console.log("flows.test.ts ok");

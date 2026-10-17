@@ -157,9 +157,10 @@ flows:
 ```
 
 **Every file has one flow with `inputs: ["*"]`**, which says what becomes of a
-name no other flow takes. `to: { refuse: "…" }` turns it away, so only your
-types can be asked for. `to: { asked: true }` runs it here as the id that was
-asked for, which keeps every model callable by its own name; `asked` works in
+name no other flow takes. `to: { refuse: "…" }` turns it away in your words,
+a name nothing here serves included, so only your types can be asked for.
+`to: { asked: true }` runs it here as the id that was asked for, which keeps
+every model callable by its own name, and a name nothing serves gets a `404`; `asked` works in
 any flow, and is how one that takes several names sends each to its own model.
 It may have conditions like any flow. A file without one does not load:
 `hearth migrate` adds one that runs names as themselves, which is how a node
