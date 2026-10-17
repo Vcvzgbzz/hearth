@@ -551,6 +551,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const told = posted[0]!;
   assert.deepEqual([told["model"], told["backend"], told["outcome"]], ["big", "main", "ok"]);
   assert.ok((told["ranMs"] as number) >= 500 && (told["ms"] as number) >= (told["ranMs"] as number), "with how long it ran, out of how long it took");
+  assert.ok((told["queuedMs"] as number) >= 0, "and the wait before it, never below zero");
   // Its response closed, so the line has room again.
   const third = ask();
   await until(() => release.length === 1);

@@ -892,10 +892,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
         };
         if (action.on === "decided") act(a.name, action, facts);
         else ended.push((error) => {
-          const ms = Date.now() - startedAt;
+          // One reading of the clock, so the time it ran is never more than the time it took.
+          const now = Date.now();
+          const ms = now - startedAt;
           if ((action.on === "failed" && error === null) || (action.slowerThan > 0 && ms <= action.slowerThan)) return;
           // Where it ended up, which a failed backend or peer may have changed since the step decided.
-          const ran = t.startedAt > 0 ? Date.now() - t.startedAt : 0;
+          const ran = t.startedAt > 0 ? now - t.startedAt : 0;
           act(a.name, action, { ...facts, model, backend: ranOn, outcome: error === null ? "ok" : "failed", ms, error: error ?? "", queuedMs: ms - ran, ranMs: ran });
         });
       }
