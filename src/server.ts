@@ -546,6 +546,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     });
   }
 
+  /** A request turned away before it was routed: on the rail and in the log, with nothing used. */
+  function logRefused(c: Call, model: string, e: unknown): void {
+    if (model === "") return;
+    logRequest({ enqueuedAt: Date.now(), startedAt: 0 }, { model, target: "refused", ...(c.peer !== null ? { forPeer: c.peer } : { caller: c.caller }) }, false, e instanceof Error ? e.message : e);
+  }
+
   /** Sends a chat completion to a local backend, emulating another server's answers if the route asks. */
   async function sendLocal(to: BackendConfig, model: string, payload: Record<string, unknown>, res: ServerResponse, opts: { signal: AbortSignal; /** Where a stream's usage is counted, for a backend that reports it only when asked. */ count?: Meter } & ReturnType<typeof backendDeadline>, spare = false): Promise<number> {
     const emulate = cfg.models[model]?.emulate ?? null;
@@ -868,10 +874,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     const flowsNow = world.cfg.flows;
     const decision = resolve(asked, world);
     // A name this node does not offer is not found, which is a different answer from one it will not run right now.
-    if (decision.unlisted) throw new Refusal(404, decision.reason);
-    // Nor is one that takes paths of its own a chat model.
     const paths = flowsNow[decision.via[0] ?? ""]?.takes;
-    if (paths) throw new Refusal(404, `"${asked}" is not offered as chat: it takes ${paths.join(", ")}`);
+    const notHere = decision.unlisted ? decision.reason
+      // Nor is one that takes paths of its own a chat model.
+      : paths ? `"${asked}" is not offered as chat: it takes ${paths.join(", ")}` : null;
+    if (notHere !== null) {
+      logRequest({ enqueuedAt: Date.now(), startedAt: 0 }, { model: asked, lane: askedLane, caller, target: "refused" }, false, notHere);
+      throw new Refusal(404, notHere);
+    }
     // What the flow chose, which a fallback from a failed peer may change again.
     let model = decision.model;
     let lane = decision.lane;
@@ -961,7 +971,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
     // A flow that runs a name as itself still needs something here to serve it.
     const instead = decision.target === "local" ? unknownHere(model) : null;
-    if (instead !== null) throw new Refusal(404, `no backend here serves "${model}" (${instead})`);
+    if (instead !== null) {
+      const why = `no backend here serves "${model}" (${instead})`;
+      logRequest({ enqueuedAt: Date.now(), startedAt: 0 }, { model: asked, lane: askedLane, caller, target: "refused" }, false, why);
+      throw new Refusal(404, why);
+    }
     limits?.();
 
     // A model that keeps its answers gives one back to a request identical to the one it answered.
@@ -2439,10 +2453,16 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     try {
       const payload = await readJson(c.req);
       const model = typeof payload.model === "string" ? payload.model : "";
-      const deferred = admit(c, model, true);
-      // Before anything is queued or routed: a degraded seat is out of rotation
-      // for everyone, peers included.
-      refuseDegraded(model);
+      let deferred: boolean;
+      try {
+        deferred = admit(c, model, true);
+        // Before anything is queued or routed: a degraded seat is out of rotation
+        // for everyone, peers included.
+        refuseDegraded(model);
+      } catch (e) {
+        logRefused(c, model, e);
+        throw e;
+      }
       await chat(c, model, payload, deferred);
     } catch (e) {
       fail(c.res, e);
@@ -2456,8 +2476,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     try {
       const body = await readJson(c.req);
       out.model = typeof body.model === "string" ? body.model : "";
-      const deferred = admit(m, out.model, true);
-      refuseDegraded(out.model);
+      let deferred: boolean;
+      try {
+        deferred = admit(m, out.model, true);
+        refuseDegraded(out.model);
+      } catch (e) {
+        logRefused(m, out.model, e);
+        throw e;
+      }
       await chat(m, out.model, chatOf(body), deferred);
     } catch (e) {
       fail(m.res, e);

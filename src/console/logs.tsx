@@ -21,6 +21,8 @@ const s = (v: unknown) => (v === undefined || v === null ? "?" : String(v));
 /** One sentence per kind of line; anything unlisted falls back to its name and fields. */
 const SAY: Record<string, (f: Record<string, unknown>) => string> = {
   request: (f) => {
+    // Turned away before it ran: there is no lane, wait or run time to tell.
+    if (f.target === "refused" || f.target === "unavailable") return `${s(f.model)}${f.forPeer ? ` for ${s(f.forPeer)}` : ""} refused: ${s(f.error)}`;
     const where = f.forPeer ? ` for ${s(f.forPeer)}` : f.target && f.target !== "local" ? ` sent to ${s(f.target)}` : "";
     const how = f.ok ? `ran ${ms(f.runMs)}` : `failed after ${ms(f.runMs)}${f.error ? `: ${s(f.error)}` : f.status ? ` (${s(f.status)})` : ""}`;
     return `${s(f.model)}${where}, ${s(f.lane)} lane: waited ${ms(f.waitedMs)}, ${how}`;

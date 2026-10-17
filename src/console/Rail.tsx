@@ -71,7 +71,8 @@ export function Rail() {
                   from {i.caller} · {where === null ? "did not run" : `${i.live ? "running on" : "ran on"} ${where}`}
                 </div>
                 <div className="text-dim">
-                  {i.live ? `for ${ago(Date.now() - i.at)}` : `${i.ok === false ? "failed after" : "took"} ${(i.ms! / 1000).toFixed(1)} s · ${ago(Date.now() - i.at)} ago`}
+                  {i.live ? `for ${ago(Date.now() - i.at)}` : where === null && i.ok === false ? `refused · ${ago(Date.now() - i.at)} ago`
+                    : `${i.ok === false ? "failed after" : "took"} ${(i.ms! / 1000).toFixed(1)} s · ${ago(Date.now() - i.at)} ago`}
                 </div>
               </button>
             );

@@ -38,6 +38,11 @@ assert.equal(two[0]!.ok, true);
 for (let i = 0; i < 12; i++) await chat("my-model");
 assert.equal((await recent()).length, 12, "a bounded number are kept");
 
+// A request turned away before it runs is listed too, as failed and as having run nowhere.
+await chat("no-such-model");
+const turned = (await recent())[0]!;
+assert.deepEqual([turned.model, turned.ok, turned.backend, turned.peer], ["no-such-model", false, undefined, undefined]);
+
 // An open page hears about a new request: the stream sends it as a change, not only a fresh load.
 {
   const ctrl = new AbortController();
