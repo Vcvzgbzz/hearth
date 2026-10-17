@@ -623,7 +623,8 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
 
 /* ---------------------------------------------------------------- page */
 
-export function Config() {
+/** The config page; `versions` is the published-versions control, shown with the section's own buttons. */
+export function Config({ versions }: { versions?: ReactNode } = {}) {
   const status = useStore((s) => s.data!.config);
   const pending = useEdit(changed);
   const [file, setFile] = useState<File | null>(null);
@@ -734,6 +735,7 @@ export function Config() {
                 <div className="text-[11px] text-dim">{sec?.hint ?? "The whole file, comments and all. ⌘S reviews and saves."}</div>
               </div>
               <div className="ml-auto flex gap-2">
+                {versions}
                 {sec ? (
                   <>
                     <Button disabled={!(tab in drafts)} onClick={() => { const { [tab]: _, ...rest } = drafts; setDrafts(rest); const { [tab]: _r, ...rn } = renames; setRenames(rn); setErr(null); }}><RotateCcw size={13} />revert</Button>

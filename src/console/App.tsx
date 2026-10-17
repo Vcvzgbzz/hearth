@@ -427,7 +427,7 @@ export default function App() {
             {page === "keys" && <Keys />}
             {page === "queue" && <><Queue /><History /></>}
             {/* What has been published, and the way back to it, wherever the file is edited. */}
-            {page === "config" && <><div className="mb-2 flex justify-end"><VersionsHere /></div><Config /></>}
+            {page === "config" && <Config versions={<VersionsHere />} />}
           </div>
         )}
       </main>

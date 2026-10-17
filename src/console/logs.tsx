@@ -132,7 +132,7 @@ export function Logs() {
           {models.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
         <label className="flex items-center gap-1.5 text-[12px] text-dim">
-          <input type="checkbox" checked={requests} onChange={(e) => setRequests(e.target.checked)} />requests
+          <input type="checkbox" className="accent-accent" checked={requests} onChange={(e) => setRequests(e.target.checked)} />requests
         </label>
         <Button onClick={() => void downloadReport()}><Download size={13} />bug report</Button>
       </div>

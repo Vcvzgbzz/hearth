@@ -264,7 +264,7 @@ export function Models() {
                               if (word === "warm" && !confirm(`Evict ${m}? It leaves the card and the next request for it pays the reload.`)) return;
                               act(word === "warm" ? `evict:${m}` : `warm:${m}`, word === "warm" ? () => evict(m) : () => warm(m));
                             }}
-                            className={cx("text-[12px] hover:text-fg disabled:opacity-40", word === "warm" ? "text-dim" : "text-accent")}>
+                            className={cx("h-6 rounded-md border border-line px-2 text-[12px] hover:bg-muted hover:text-fg disabled:opacity-40", word === "warm" ? "text-dim" : "text-accent")}>
                       {word === "warm" ? "evict" : "warm"}
                     </button>
                   ) : <span className="text-dim">—</span>}
@@ -449,7 +449,7 @@ export function Keys() {
               <td className="px-4 py-2 text-dim">—</td>
               <td className="tabular px-4 py-2"><UsedCell used={o.today} /></td>
               <td className="tabular px-4 py-2"><UsedCell used={o.month} /></td>
-              <td /><td />
+              <td className="px-4 py-2 text-right text-dim">—</td><td />
             </tr>
           ))}
         </tbody>
