@@ -341,6 +341,15 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   // A model only a route names (a path with no name in it) is not chat either.
   const filmed = factsOf({ ...withFacts, backends: { ...(withFacts.backends as object), film: { url: "http://127.0.0.1:8", kind: "none", routes: [{ path: "/generate", model: "film-model", lane: "chat" }] } } }, live);
   assert.equal(filmed.kind("film-model"), "paths");
+  // A chat model on that kind of backend (one llama-swap serving image models and an LLM) is still chat when something
+  // says so; one a route names keeps its paths whatever it declares.
+  const mixed = factsOf({
+    ...withFacts,
+    backends: { ...(withFacts.backends as object), swap2: { url: "http://127.0.0.1:7", kind: "none", serves: ["pic", "talk", "talk2", "named"], routes: [{ path: "/upstream/{model}/generate", lane: "batch" }, { path: "/sing", model: "named" }] } },
+    models: { ...(withFacts.models as object), talk: { stats: { context: 81920 } }, talk2: { emulate: "llama-server" }, named: { stats: { context: 4096 } } },
+  }, live);
+  assert.deepEqual([mixed.kind("pic"), mixed.kind("talk"), mixed.kind("talk2"), mixed.kind("named")], ["paths", "chat", "chat", "paths"]);
+  assert.equal(refusal(null, to("talk"), mixed), null, "a chat line may end on the backend's chat model");
   // A rule that takes a path may end at any model here, one whose backend declares no path included, but never at a peer.
   assert.equal(refusal(null, to("paint"), facts, true), null);
   assert.equal(refusal(null, to("chat"), facts, true), null);

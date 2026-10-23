@@ -864,8 +864,18 @@ export function factsOf(doc: Doc, live: UiData): Facts {
   const routesOf = (backend: string): { path: string; model?: string }[] => (Array.isArray(obj(obj(doc.backends)[backend]).routes)
     ? (obj(obj(doc.backends)[backend]).routes as unknown[]).map((r) => ({ path: text(obj(r).path), ...(text(obj(r).model) ? { model: text(obj(r).model) } : {}) }))
     : (self?.backends ?? []).find((b) => b.name === backend)?.routes ?? []);
+  // A model that something says is chat (a context window, declared or seen, or a server it emulates) stays chat
+  // on a backend with paths, unless a route names it: an image backend's llama-swap can also serve a chat model.
+  const chatty = (name: string): boolean => {
+    const m = obj(obj(doc.models)[name]);
+    return text(m.emulate) !== "" || typeof obj(m.stats).context === "number" || typeof self?.stats?.[name]?.context === "number";
+  };
+  const named = (backend: string, name: string): boolean => {
+    const wire = text(obj(obj(doc.models)[name]).as) || name;
+    return routesOf(backend).some((r) => r.model === wire);
+  };
   return {
-    kind: (name) => { const on = owner(name); return on !== undefined && paths(on) ? "paths" : "chat"; },
+    kind: (name) => { const on = owner(name); return on !== undefined && paths(on) && (named(on, name) || !chatty(name)) ? "paths" : "chat"; },
     paths: (name) => {
       const on = owner(name);
       const wire = text(obj(obj(doc.models)[name]).as) || name;

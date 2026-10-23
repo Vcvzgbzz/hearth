@@ -164,7 +164,9 @@ line; **+ type** brings one onto the map.
 - **A line that cannot work is not drawn.** Routing decides chat requests, so
   a name whose backend takes its requests on paths of its own (image
   generation and the like) is marked **not chat** and has no dot, and a chat
-  line cannot end on such a model. A rule that takes one of those paths (its
+  line cannot end on such a model. A model on that backend still counts as
+  chat when something says it is (a `stats.context`, declared or seen, or an
+  `emulate`), unless a route names it. A rule that takes one of those paths (its
   **It takes**) may send to any model here, and never to a peer. A line for
   requests with images, with tools
   or over a size is refused when its target is known not to take them, with the
