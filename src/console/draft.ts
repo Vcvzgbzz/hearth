@@ -108,7 +108,8 @@ export function draftView(doc: Doc, live: UiData): UiData {
   const routing: Record<string, Routing> = {};
   for (const [id, m] of Object.entries(obj(doc.models))) {
     const wire = text(obj(m).as) || id;
-    const backend = text(obj(m).backend) || backends.find((b) => (b.serves ?? []).includes(wire))?.name;
+    // Only a declared `serves` speaks here, as on the server: what a quiet backend discovered can list a model another declares.
+    const backend = text(obj(m).backend) || Object.entries(obj(doc.backends)).find(([, b]) => list(obj(b).serves).includes(wire))?.[0];
     // Where the draft cannot say which backend serves a name, what the running node worked out still stands.
     routing[id] = { ...live.routing?.[id], ...(backend ? { backend } : {}) };
   }

@@ -100,6 +100,11 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.equal(directTo("image", { inputs: ["image"], steps: [{ to: "chat", do: ["note"] }] }), null);
 
   const live = { net: { nodes: [{ name: "me", self: true, up: true, free: 1, slots: 1, queued: 0 }] }, routing: {} } as unknown as UiData;
+  // A model one backend declares is placed there, though a backend that declares nothing discovered it too.
+  const both = { ...live, net: { nodes: [{ ...live.net.nodes[0], backends: [{ name: "big", serves: ["chat", "side"] }, { name: "small", serves: ["side"] }] }] }, routing: { side: { backend: "small" } } } as unknown as UiData;
+  const placedOn = { backends: { big: { url: "http://a" }, small: { url: "http://b", serves: ["side"] } }, models: { side: {}, chat: {} } };
+  assert.equal(draftView(placedOn, both).routing?.side?.backend, "small");
+  assert.equal(draftView({ ...placedOn, backends: { big: { url: "http://a" }, small: { url: "http://b" } } }, both).routing?.side?.backend, "small");
   assert.deepEqual(draftView(acting, live).actions, { note: { kind: "log", says: "{asked} ran as {model}" }, tell: { kind: "call", says: "http://127.0.0.1:9/hook" } });
 
   // Taking an action away takes it off every line that ran it, so what is left still loads.
