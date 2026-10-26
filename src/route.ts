@@ -51,6 +51,8 @@ export interface World {
   noPeers?: boolean;
   /** Models here that have just failed this request, to be passed over. */
   skip?: ReadonlySet<string>;
+  /** Kept on this machine: no peer, and no model this says runs elsewhere (a cloud provider). */
+  keepHere?: (model: string) => boolean;
   /** Where a sticky flow sent the earlier turns of this conversation, if it remembers. */
   pinned?: (flow: string) => FlowEnd | undefined;
 }
@@ -193,8 +195,12 @@ export function resolve(named: string, w: World): Resolution {
 
   /** The target as something that can take this request, or why it cannot. */
   const reach = (to: FlowEnd): Reached | string => {
-    if (!("peer" in to)) return w.skip?.has(to.model) ? `${to.model} just failed` : { model: to.model };
+    if (!("peer" in to)) {
+      if (w.skip?.has(to.model)) return `${to.model} just failed`;
+      return w.keepHere?.(to.model) ? `${to.model} runs off this machine, and this request is kept here` : { model: to.model };
+    }
     const model = to.model ?? asked;
+    if (w.keepHere) return "this request is kept on this machine";
     if (w.noPeers) return "a peer already failed this request";
     if (!w.peers.candidates(model, [to.peer]).includes(to.peer)) return `${to.peer} is not available`;
     // Safe: candidates() only returns peers that map the model.

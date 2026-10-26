@@ -885,6 +885,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     return () => (res.getHeader("content-encoding") ? "" : Buffer.concat(parts).toString("utf8"));
   }
 
+  /** A model that runs at a cloud provider: it would take a request off this machine. */
+  const offHere = (model: string): boolean => pool.for(model).cfg.cloud;
+  /** Where a decision sends a request, as a plugin sees it. */
+  const where = (d: { target: "local" | "peer"; model: string; peer?: string }): Pick<HookRequest, "model" | "target" | "peer" | "backend" | "leaves"> =>
+    d.target === "peer"
+      ? { model: d.model, target: "peer", peer: d.peer ?? null, backend: null, leaves: true }
+      : { model: d.model, target: "local", peer: null, backend: pool.for(d.model).name, leaves: offHere(d.model) };
+
   /** Returns the status a local backend relayed, or 0 when a peer answered. */
   async function route(r: ChatRequest, ended: ((error: string | null) => void)[]): Promise<number> {
     const { payload, asked, lane: askedLane, caller, res, signal, onPosition, id, headers, limits } = r;
@@ -902,8 +910,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       ...worldFor(caller, askedLane, needsOf(payload, cfg.models[asked]?.videoTokens), rulesFor(caller), headers),
       // Only a later turn is held to where the conversation started; an opening turn is decided afresh.
       ...(talk?.later ? { pinned: (flow: string) => { const at = placed.get(`${flow}\0${talk.key}`); return at && at.until > Date.now() ? at.end : undefined; } } : {}),
-      // A plugin asked to keep this request on this machine.
-      ...(kept ? { noPeers: true } : {}),
+      // A plugin asked to keep this request on this machine: no peer, no cloud provider.
+      ...(kept ? { keepHere: offHere } : {}),
     };
     const startedAt = Date.now();
     const flowsNow = world.cfg.flows;
@@ -977,7 +985,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     fire(decision);
     if (r.plugins && decision.target !== "unavailable") {
       const p = r.plugins;
-      p.hook = { ...p.hook, model, target: decision.target, peer: decision.target === "peer" ? decision.peer : null, lane, body: payload };
+      p.hook = { ...p.hook, ...where(decision), lane, body: payload };
       let after;
       try {
         after = await plugins.run("routed", p.active, p.hook);
@@ -995,13 +1003,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       }
       lane = after.req.lane;
       // Changed after routing: routed once more, so a bigger prompt or a request kept here lands where it fits.
-      if (changed || (p.stayLocal && decision.target === "peer")) {
-        const again = resolve(asked, { ...world, need: needsOf(payload, cfg.models[asked]?.videoTokens), ...(p.stayLocal ? { noPeers: true } : {}) });
+      if (changed || (p.stayLocal && p.hook.leaves)) {
+        const again = resolve(asked, { ...world, need: needsOf(payload, cfg.models[asked]?.videoTokens), ...(p.stayLocal ? { keepHere: offHere } : {}) });
         if (again.target === "unavailable" || again.target !== decision.target || again.model !== decision.model) {
           decision = again;
           land(again);
           fire(again);
-          p.hook = { ...p.hook, model, target: again.target === "peer" ? "peer" : "local", peer: again.target === "peer" ? again.peer : null };
+          if (again.target !== "unavailable") p.hook = { ...p.hook, ...where(again) };
         }
       }
     }

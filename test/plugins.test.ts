@@ -97,6 +97,12 @@ plugin("memory", `export default { apiVersion: 1, kinds: { chat: ["request", "ro
   routed: (r) => { globalThis.note("routed", r.target + ":" + r.model); },
   log: (x) => { globalThis.note("log", x.reply); },
 }) };`);
+plugin("where", `export default { apiVersion: 1, kinds: { chat: ["routed"] }, setup: () => ({
+  routed: (r) => { globalThis.note("where", r.model + ":" + r.backend + ":" + r.leaves); },
+}) };`);
+plugin("keeper", `export default { apiVersion: 1, kinds: { chat: ["request"] }, setup: () => ({
+  request: (r) => (r.headers["x-keep"] === "1" ? { stayLocal: true } : undefined),
+}) };`);
 plugin("imageonly", `export default { apiVersion: 1, kinds: { image: ["request"] }, setup: () => ({ request: () => { globalThis.note("imageonly", 1); } }) };`);
 plugin("wrongkind", `export default { apiVersion: 1, kinds: { chat: ["request"] }, setup: () => ({ request: () => {} }) };`);
 plugin("guard", `export default { apiVersion: 1, kinds: { chat: ["request"] }, setup: () => ({
@@ -128,8 +134,10 @@ name: t
 listen: {host: 127.0.0.1, port: ${port}}
 backends:
   main: {url: ${backendUrl}, kind: llama-swap, serves: [m], concurrency: 1}
+  provider: {url: ${backendUrl}, cloud: true, serves: [c]}
 models:
   m: {backend: main}
+  c: {backend: provider}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 routers:
@@ -141,6 +149,8 @@ apiKeys:
   - {key: k-quiet, label: quiet}
 callers: {quiet: quiet}
 plugins:
+  where: {use: "file:./where.mjs", trust: code}
+  keeper: {use: "file:./keeper.mjs", trust: code}
   memory: {use: "file:./memory.mjs", trust: code, integrity: "${integrity("memory")}", config: {fact: "likes tea"}}
   imageonly: {use: "file:./imageonly.mjs", trust: code}
   wrongkind: {use: "file:./wrongkind.mjs", trust: code, kinds: {image: [request]}}
@@ -165,8 +175,8 @@ async function up(opts: { plugins?: boolean } = {}): Promise<{ node: HearthNode;
   await new Promise<void>((r) => node.server.listen(free, "127.0.0.1", r));
   return { node, url: `http://127.0.0.1:${free}` };
 }
-const chat = (url: string, content: string, headers: Record<string, string> = {}, key = "k-app") =>
-  fetch(`${url}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...headers }, body: JSON.stringify({ model: "m", messages: [{ role: "user", content }] }) });
+const chat = (url: string, content: string, headers: Record<string, string> = {}, key = "k-app", model = "m") =>
+  fetch(`${url}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...headers }, body: JSON.stringify({ model, messages: [{ role: "user", content }] }) });
 const settle = () => new Promise((r) => setTimeout(r, 60));
 
 {
@@ -191,6 +201,22 @@ const settle = () => new Promise((r) => setTimeout(r, 60));
     const sent = serviceGot.at(-1)! as { kind: string; request: Record<string, unknown> };
     assert.equal(sent.kind, "chat");
     assert.ok(sent.request.headers && sent.request.body === undefined, "a plugin that reads headers is never sent the messages");
+
+    // A plugin is told when a request leaves this machine: a cloud provider is as far away as a peer.
+    const toCloud = await chat(url, "hi", {}, "k-app", "c");
+    assert.equal(toCloud.status, 200);
+    await toCloud.text();
+    assert.deepEqual(g.pluginLog.where!.slice(-2), ["m:main:false", "c:provider:true"]);
+
+    // Kept here means no cloud provider either: with nothing on this machine to run it, it is refused.
+    const calls = backendCalls;
+    const kept = await chat(url, "hi", { "x-keep": "1" }, "k-app", "c");
+    assert.equal(kept.status, 503);
+    assert.match(await kept.text(), /kept here/);
+    assert.equal(backendCalls, calls, "and the provider never sees it");
+    const keptLocal = await chat(url, "hi", { "x-keep": "1" });
+    assert.equal(keptLocal.status, 200, "a model on this machine still runs");
+    await keptLocal.text();
 
     // A refusal never reaches the backend.
     const before = backendCalls;
@@ -232,7 +258,7 @@ const settle = () => new Promise((r) => setTimeout(r, 60));
 
     const listed = await fetch(`${url}/plugins`, { headers: { Authorization: "Bearer k-app" } });
     assert.equal(listed.status, 200);
-    assert.ok(((await listed.json()) as { plugins: unknown[] }).plugins.length >= 8);
+    assert.ok(((await listed.json()) as { plugins: unknown[] }).plugins.length >= 10);
   } finally {
     await node.close();
   }

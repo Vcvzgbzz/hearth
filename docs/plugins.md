@@ -214,7 +214,8 @@ type Decision =
 - A body that changes after routing is measured again; if it no longer fits where it was routed, it is
   routed once more, and a second change of fit is refused.
 - A changed body must still be a valid chat request, under the size limit.
-- `stayLocal` can only narrow: a request kept local stays local whatever a later plugin says.
+- `stayLocal` can only narrow: a request kept local stays local whatever a later plugin says. Local means
+  this machine: no peer and no cloud provider. With nothing here to run it, it is refused.
 
 ### What a hook sees
 
@@ -225,6 +226,8 @@ interface Routed {
   model: string;                   // the model it runs as
   target: "local" | "peer";
   peer: string | null;
+  backend: string | null;          // the backend here that runs it; null for a peer
+  leaves: boolean;                 // true for a peer, or a backend that is a cloud provider
   caller: string;                  // an api key's label, or "local"
   router: string;
   lane: string;

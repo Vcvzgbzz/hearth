@@ -29,6 +29,10 @@ export interface HookRequest {
   model?: string;
   target?: "local" | "peer";
   peer?: string | null;
+  /** The backend here that will run it; null when a peer will. */
+  backend?: string | null;
+  /** It leaves this machine: for a peer, or a backend that is a cloud provider. */
+  leaves?: boolean;
   caller: string;
   router: string;
   lane: string;
