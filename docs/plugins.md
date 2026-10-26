@@ -274,8 +274,8 @@ hearth sends one POST per hook:
 
 and expects `{ "decision": { … } }` back. An `http` plugin states its kinds and stages at
 `GET {url}/manifest`, which hearth reads at startup and holds it to. Only the fields in `reads` are sent. `log` and `error` calls are
-not answered. `internal.token` lets the plugin call hearth's `/v1` back as internal traffic for the length
-of the hook call.
+not answered. `internal.token` lets the plugin call hearth's `/v1` back as internal traffic, during a hook or later
+(a memory service extracting in the background); it is the plugin's alone and changes when hearth restarts.
 
 A plugin with a page of its own serves it under its URL and declares it; hearth adds a sidebar entry and
 proxies the page at `/plugins/<name>/`, checking the operator's login itself and passing who is viewing
@@ -286,7 +286,7 @@ in headers. The page is shown in a sandboxed frame, so it never runs with the co
 1. **No deadlock.** `request` and `routed` run before a request holds a slot; a plugin's own model calls
    queue on the `plugins` lane; `log` runs after the slot is released.
 2. **No loops.** A plugin's own model calls are internal, and no hook runs on internal traffic. Internal
-   is a property hearth gives the call itself (in-process, or the per-call token), never a header a
+   is a property hearth gives the call itself (the token it hands each plugin), never a header a
    client could send.
 3. **Bounded.** Every blocking hook has a timeout, every plugin an `onError`, every body a size limit.
 4. **Peers' work is private.** Hooks do not run on requests a peer sends here unless the plugin says
@@ -333,7 +333,7 @@ Plugins get their own page, **Pipeline**, because they are about *when* things h
 | C1 | One request context carried through admission, routing, queueing, sending and relaying, in place of the positional arguments passed between those stages today. No behaviour change. | large |
 | C2 | Measure and route again, once, when a hook changes a body after routing. | medium |
 | C3 | Assemble the reply from a relayed stream; `buffer` and `holdback` for `response`. | medium |
-| C4 | Internal model calls: in-process for `code`, a per-call token for `http`; the `plugins` lane; no hooks on internal traffic. | medium |
+| C4 | Internal model calls: a token per plugin, made at startup and gone with a restart; no hooks on internal traffic. | medium |
 | C5 | `stayLocal` as a routing constraint, not a header a flow has to test for. | small |
 | C6 | The runtime: loader, lifecycle, `plugins:` and `routers.<name>.plugins`, timeouts, `onFail` / `onError`, the circuit breaker, metrics, `--no-plugins`. | medium |
 | C7 | Hooks off for peers' requests by default; `peers: true` shown in lending terms. | small |
