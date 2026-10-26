@@ -13,7 +13,7 @@ import { existsSync, readFileSync, renameSync } from "node:fs";
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, inScope, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
-import { ANY, backendAuth, backendBase, ConfigError, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ANY, backendAuth, backendBase, ConfigError, DEFAULT_ROUTER, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
@@ -37,6 +37,7 @@ import { bugReport } from "./report.js";
 import { chatOf, MessagesResponse } from "./messages.js";
 import { troubleSays } from "./backend.js";
 import { getJson, send, UpstreamError, type UpstreamResponse } from "./upstream.js";
+import { PluginRefusal, Plugins, replyText, type Active, type HookRequest } from "./plugins.js";
 
 /** Constant-time compare over sha256 digests, so neither length nor content leaks. */
 function secretEq(a: string, b: string): boolean {
@@ -156,12 +157,19 @@ export interface HearthNode {
   log: Logger;
   /** A newer published hearth, for the console to mention; set by `hearth serve`. */
   update: string | null;
+  /** Loads `plugins:`. Await it before listening, so no request runs before a locked plugin is in place. */
+  startPlugins: () => Promise<void>;
+  plugins: Plugins;
 }
 
-export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
+export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?: boolean } = {}): HearthNode {
   // Every line still goes to stdout; the ring keeps the recent ones for the console's Logs page.
   const logs = new LogRing();
   const log = logs.tap(baseLog);
+  const plugins = new Plugins(cfg, log, {
+    off: opts.plugins === false,
+    selfUrl: () => `http://${cfg.listen.host === "0.0.0.0" || cfg.listen.host === "::" ? "127.0.0.1" : cfg.listen.host}:${cfg.listen.port}`,
+  });
   // ConfigFile swaps the live keys in whole and everything reads those per call; the rest changes
   // only with a restart, so an accidental write throws instead of going stale.
   for (const part of [cfg.listen, cfg.backends, cfg.scheduler, cfg.resources,
@@ -740,7 +748,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
 
   /** What a flow reads about this node, for a request with these needs. */
   /** The router a caller goes by, if not `flows:`: the one `callers:` gives it by its key's label or `local`, else the one it gives everyone. */
-  const routerOf = (caller: string) => cfg.routers[cfg.callers[caller.startsWith("key:") ? caller.slice(4) : caller] ?? cfg.callers["*"] ?? ""];
+  /** The router a caller goes by, or `default` for `flows:`. */
+  const routerNameOf = (caller: string): string => cfg.callers[caller.startsWith("key:") ? caller.slice(4) : caller] ?? cfg.callers["*"] ?? DEFAULT_ROUTER;
+  const routerOf = (caller: string) => cfg.routers[routerNameOf(caller)];
   /** The config as a caller's requests see it: its router's rulebook in place of `flows:`. */
   const rulesFor = (caller: string): HearthConfig => { const r = routerOf(caller); return r ? { ...cfg, flows: r.flows } : cfg; };
 
@@ -830,26 +840,55 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     id?: string | undefined;
     /** The caller's limits, when admit left them to be checked once the flow has decided. */
     limits?: (() => void) | undefined;
+    /** The plugins on this request, what they last saw of it, and whether one asked to keep it here. */
+    plugins?: { active: Active[]; hook: HookRequest; stayLocal: boolean };
   }
 
   /** Route a chat request and run it, then tell the actions that wait for how it ended. */
   async function dispatch(r: ChatRequest): Promise<void> {
     const ended: ((error: string | null) => void)[] = [];
     let error: string | null = null;
+    let status = 0;
+    const startedAt = Date.now();
+    const reply = r.plugins && plugins.wantsReply(r.plugins.active) ? keepCopy(r.res) : null;
     try {
-      const status = await route(r, ended);
+      status = await route(r, ended);
       if (status >= 400) error = `backend answered ${status}`;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+      if (e instanceof Refusal) status = e.status;
       throw e;
     } finally {
       for (const tell of ended) tell(error);
+      if (r.plugins) {
+        plugins.observe(error === null ? "log" : "error", r.plugins.active, {
+          ...r.plugins.hook, status: status || 200, error, reply: reply ? replyText(reply()) : null, ms: Date.now() - startedAt,
+        });
+      }
     }
+  }
+
+  /** A copy of what is written to a response, up to a cap, for plugins that read the reply. Encoded bodies are not kept. */
+  function keepCopy(res: ServerResponse, cap = 2_000_000): () => string {
+    const parts: Buffer[] = [];
+    let size = 0;
+    const keep = (chunk: unknown): void => {
+      if (size > cap || chunk === undefined || chunk === null || typeof chunk === "function") return;
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+      size += b.length;
+      if (size <= cap) parts.push(b);
+    };
+    const write = res.write.bind(res) as (...a: unknown[]) => boolean;
+    const end = res.end.bind(res) as (...a: unknown[]) => ServerResponse;
+    res.write = ((chunk: unknown, ...rest: unknown[]) => { keep(chunk); return write(chunk, ...rest); }) as typeof res.write;
+    res.end = ((chunk?: unknown, ...rest: unknown[]) => { if (typeof chunk !== "function") keep(chunk); return end(chunk, ...rest); }) as typeof res.end;
+    return () => (res.getHeader("content-encoding") ? "" : Buffer.concat(parts).toString("utf8"));
   }
 
   /** Returns the status a local backend relayed, or 0 when a peer answered. */
   async function route(r: ChatRequest, ended: ((error: string | null) => void)[]): Promise<number> {
     const { payload, asked, lane: askedLane, caller, res, signal, onPosition, id, headers, limits } = r;
+    const kept = r.plugins?.stayLocal === true;
     // Refresh peer state only when a decision needs it, and only for requests that may leave.
     if (mayLeave(cfg, asked)) await peers.ensureFresh();
 
@@ -863,10 +902,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       ...worldFor(caller, askedLane, needsOf(payload, cfg.models[asked]?.videoTokens), rulesFor(caller), headers),
       // Only a later turn is held to where the conversation started; an opening turn is decided afresh.
       ...(talk?.later ? { pinned: (flow: string) => { const at = placed.get(`${flow}\0${talk.key}`); return at && at.until > Date.now() ? at.end : undefined; } } : {}),
+      // A plugin asked to keep this request on this machine.
+      ...(kept ? { noPeers: true } : {}),
     };
     const startedAt = Date.now();
     const flowsNow = world.cfg.flows;
-    const decision = resolve(asked, world);
+    let decision = resolve(asked, world);
     // A name this node does not offer is not found, which is a different answer from one it will not run right now.
     const paths = flowsNow[decision.via[0] ?? ""]?.takes;
     const notHere = decision.unlisted ? decision.reason
@@ -934,6 +975,36 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       }
     };
     fire(decision);
+    if (r.plugins && decision.target !== "unavailable") {
+      const p = r.plugins;
+      p.hook = { ...p.hook, model, target: decision.target, peer: decision.target === "peer" ? decision.peer : null, lane, body: payload };
+      let after;
+      try {
+        after = await plugins.run("routed", p.active, p.hook);
+      } catch (e) {
+        if (!(e instanceof PluginRefusal)) throw e;
+        logRequest({ enqueuedAt: Date.now(), startedAt: 0 }, { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+        throw new Refusal(e.status, e.message);
+      }
+      const changed = after.req.body !== p.hook.body;
+      p.hook = after.req;
+      p.stayLocal ||= after.stayLocal;
+      if (changed) {
+        for (const k of Object.keys(payload)) delete payload[k];
+        Object.assign(payload, after.req.body);
+      }
+      lane = after.req.lane;
+      // Changed after routing: routed once more, so a bigger prompt or a request kept here lands where it fits.
+      if (changed || (p.stayLocal && decision.target === "peer")) {
+        const again = resolve(asked, { ...world, need: needsOf(payload, cfg.models[asked]?.videoTokens), ...(p.stayLocal ? { noPeers: true } : {}) });
+        if (again.target === "unavailable" || again.target !== decision.target || again.model !== decision.model) {
+          decision = again;
+          land(again);
+          fire(again);
+          p.hook = { ...p.hook, model, target: again.target === "peer" ? "peer" : "local", peer: again.target === "peer" ? again.peer : null };
+        }
+      }
+    }
     if (model !== asked) {
       refuseDegraded(model);
       log.debug("route.flow", { asked, via: decision.via, as: model, reason: decision.reason });
@@ -1219,6 +1290,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     caller: string;
     /** The ids a scoped key may run, or null for an unscoped caller. */
     models: string[] | null;
+    /** A plugin calling back in with the token hearth gave it: no plugin runs on this request. */
+    internal?: boolean;
   }
 
   /** Who a route lets in, declared per path rather than re-derived in each handler. */
@@ -1281,6 +1354,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
       }
       return { ...base, peer: asPeer, caller: asPeer, models: null };
     }
+
+    // A plugin's own token: a local caller whose requests no plugin sees, so a hook cannot call itself.
+    const plugin = plugins.internalCaller(bearer(req));
+    if (plugin !== null) return { ...base, peer: null, caller: "plugin:" + plugin, models: null, internal: true };
 
     // A live operator session is a full local identity: no scope, so nothing below it can refuse.
     let asLocal = localCaller(req);
@@ -1376,6 +1453,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     { path: "/peers/join", methods: ["POST"], auth: "local", handler: routeJoin },
     { path: "/peers/machine", methods: ["GET"], auth: "local", handler: routePeerMachine },
     { path: "/usage", methods: ["GET"], auth: "local", handler: routeUsage },
+    { path: "/plugins", methods: ["GET"], auth: "local", handler: async (c) => json(c.res, 200, { plugins: plugins.status() }) },
     { path: "/report", methods: ["GET"], auth: "local", handler: routeReport },
     { path: "/backends/probe", methods: ["POST"], auth: "local", handler: routeProbe },
 
@@ -2484,7 +2562,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
   }
 
-  async function chat(c: Call, asked: string, payload: Record<string, unknown>, limitsDeferred = false): Promise<void> {
+  async function chat(c: Call, asked: string, sent: Record<string, unknown>, limitsDeferred = false): Promise<void> {
+    let payload = sent;
     const { res } = c;
     let model = asked;
     // A peer's request gets served here and never routed onward. Two nodes
@@ -2514,10 +2593,31 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     });
 
     if (fromPeer === null) {
+      let headers = headersOf(c.req);
+      // A plugin's own calls, and every request when plugins are off, run none.
+      const active = c.internal ? [] : plugins.forRequest("chat", routerNameOf(caller));
+      let state: ChatRequest["plugins"];
+      if (active.length > 0) {
+        const hook: HookRequest = { id: asking.getStore()?.id ?? "", kind: "chat", asked: model, caller, router: routerNameOf(caller), lane, headers, body: payload };
+        let before;
+        try {
+          before = await plugins.run("request", active, hook);
+        } catch (e) {
+          if (!(e instanceof PluginRefusal)) throw e;
+          logRequest({ enqueuedAt: Date.now(), startedAt: 0 }, { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+          throw new Refusal(e.status, e.message);
+        }
+        payload = before.req.body;
+        headers = before.req.headers;
+        lane = before.req.lane;
+        if (typeof payload.model === "string" && payload.model !== model) model = payload.model;
+        state = { active, hook: before.req, stayLocal: before.stayLocal };
+      }
       await dispatch({
-        payload, asked: model, lane, caller, res, signal: ctrl.signal, headers: headersOf(c.req),
+        payload, asked: model, lane, caller, res, signal: ctrl.signal, headers,
         onPosition: positionStream(c.req, res, payload), id: jobId(c.req),
         limits: limitsDeferred ? () => withinLimits(caller) : undefined,
+        ...(state ? { plugins: state } : {}),
       });
       return;
     }
@@ -3165,6 +3265,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     pool,
     peers,
     history,
+    plugins,
+    startPlugins: () => plugins.start(),
     start: () => {
       loadHistory();
       pool.start();
@@ -3180,6 +3282,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     },
     close: async (graceMs = 0) => {
       canary?.stop();
+      void plugins.stop();
       if (historyTimer) clearInterval(historyTimer);
       clearInterval(sessionSweep);
       sessions.prune();

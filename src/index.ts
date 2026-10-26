@@ -9,4 +9,5 @@ export type { HearthConfig } from "./config.js";
 export { createNode } from "./server.js";
 export type { HearthNode } from "./server.js";
 export { createLogger, silentLogger } from "./log.js";
+export type { Decision, HookExchange, HookRequest, Hooks, PluginContext, PluginModule } from "./plugins.js";
 export type { Logger, Level } from "./log.js";

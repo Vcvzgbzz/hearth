@@ -434,6 +434,8 @@ export interface HearthConfig {
   routers: Record<string, Router>;
   /** Which rulebook a caller goes by: a router's name, or `default` for `flows`. `*` is everyone not named. */
   callers: Record<string, string>;
+  /** Plugins by name, in the order they run within a stage. */
+  plugins: Record<string, PluginDecl>;
   /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
   modelHeader: boolean;
   /** Ask the npm registry once a day whether a newer hearth is out, for the console to say so. */
@@ -732,6 +734,142 @@ export function endsOf(to: FlowTo, asked?: string): FlowEnd[] {
 /** Can this target be passed over when it cannot take the request? Only a peer can be down. */
 const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
 
+/** What a request is, which decides the plugins that may see it. hearth sets it; a client or plugin cannot. */
+export const REQUEST_KINDS = ["chat", "embeddings", "rerank", "image", "video", "speech", "transcription", "other"] as const;
+export type RequestKind = (typeof REQUEST_KINDS)[number];
+/** Points in a request's life a plugin can hook, in the order a request meets them. */
+export const PLUGIN_STAGES = ["request", "routed", "parallel", "stream", "response", "log", "error"] as const;
+export type PluginStage = (typeof PLUGIN_STAGES)[number];
+
+/** Conditions a plugin's `when` may test: the request's own facts, never the node's load. */
+export interface PluginWhen {
+  asked?: string[];
+  askedNot?: string[];
+  caller?: string[];
+  callerNot?: string[];
+  lane?: string[];
+  target?: ("local" | "peer")[];
+  header?: Record<string, string[]>;
+}
+
+/** `plugins.<name>`: code or a service that reads or changes requests at the stages it hooks. */
+export interface PluginDecl {
+  /** `file:<path>` or `npm:<package>@<version>` for code; an http(s) URL for a service. */
+  use: string;
+  trust: "code" | "http";
+  /** For `file:`, the sha256 of the file, as `sha256-<hex>`; a file that differs is not loaded. */
+  integrity: string | null;
+  /** Narrows what the plugin itself declares; absent hooks all of it. */
+  kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
+  when: PluginWhen | null;
+  timeoutMs: number;
+  /** The plugin could not answer: carry on without it, or refuse the request. */
+  onError: "skip" | "refuse";
+  /** The plugin said no: refuse, or let it through marked. */
+  onFail: "refuse" | "flag";
+  /** No router may turn it off. */
+  locked: boolean;
+  /** A plugin that fails to start stops the node instead of being turned off. */
+  required: boolean;
+  /** What a service is sent: the messages, the headers, the reply. Code sees all of it. */
+  reads: ("messages" | "headers" | "reply")[];
+  config: Record<string, unknown>;
+}
+
+/** A router's say over global plugins: turn one off, or give it settings of its own. */
+export type RouterPlugin = "off" | { config: Record<string, unknown> };
+
+const PLUGIN_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+function stringList(v: unknown, at: string): string[] {
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) throw bad(at, "must be a list of names");
+  return v as string[];
+}
+
+function pluginWhen(raw: unknown, at: string): PluginWhen | null {
+  if (raw === undefined || raw === null) return null;
+  const w = asRecord(raw, at);
+  only(w, ["asked", "askedNot", "caller", "callerNot", "lane", "target", "header"], at);
+  const out: PluginWhen = {};
+  for (const k of ["asked", "askedNot", "caller", "callerNot", "lane"] as const) if (w[k] !== undefined) out[k] = stringList(w[k], `${at}.${k}`);
+  if (w.target !== undefined) {
+    const t = stringList(w.target, `${at}.target`);
+    if (t.some((x) => x !== "local" && x !== "peer")) throw bad(`${at}.target`, "takes local and/or peer");
+    out.target = t as ("local" | "peer")[];
+  }
+  if (w.header !== undefined) {
+    out.header = Object.fromEntries(Object.entries(asRecord(w.header, `${at}.header`)).map(([h, v]) => [h.toLowerCase(), stringList(v, `${at}.header.${h}`)]));
+  }
+  return out;
+}
+
+/** `plugins:`. A plugin is code only when its entry says `trust: code`, so copying a line never runs code by accident. */
+function pluginDecls(raw: unknown): Record<string, PluginDecl> {
+  const out: Record<string, PluginDecl> = {};
+  for (const [name, v] of Object.entries(asRecord(raw ?? {}, "plugins"))) {
+    const at = `plugins.${name}`;
+    if (!PLUGIN_NAME.test(name)) throw bad(at, "a plugin's name is lowercase letters, digits and dashes");
+    const r = asRecord(v, at);
+    only(r, ["use", "trust", "integrity", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "config"], at);
+    const use = str(r.use, `${at}.use`);
+    const service = /^https?:\/\//.test(use);
+    if (!service && !/^(file:.+|npm:(@[^/]+\/)?[^@/]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/.test(use)) throw bad(`${at}.use`, "is file:<path>, npm:<package>@<exact version, like 1.2.3>, or an http(s) URL");
+    const trust = r.trust;
+    if (trust !== "code" && trust !== "http") throw bad(`${at}.trust`, service ? "must be http for a service" : "must be code: this plugin runs inside hearth, and saying so is the opt-in");
+    if (service !== (trust === "http")) throw bad(`${at}.trust`, service ? "a URL is a service: trust: http" : "a file or package runs inside hearth: trust: code");
+    if (r.peers !== undefined && r.peers !== false) throw bad(`${at}.peers`, "plugins on requests peers send here are not built yet; leave it unset");
+    let kinds: PluginDecl["kinds"] = null;
+    if (r.kinds !== undefined) {
+      kinds = {};
+      for (const [k, stages] of Object.entries(asRecord(r.kinds, `${at}.kinds`))) {
+        if (!(REQUEST_KINDS as readonly string[]).includes(k)) throw bad(`${at}.kinds.${k}`, `is not a request kind (${REQUEST_KINDS.join(", ")})`);
+        const list = stringList(stages, `${at}.kinds.${k}`);
+        for (const st of list) if (!(PLUGIN_STAGES as readonly string[]).includes(st)) throw bad(`${at}.kinds.${k}`, `"${st}" is not a stage (${PLUGIN_STAGES.join(", ")})`);
+        kinds[k as RequestKind] = list as PluginStage[];
+      }
+    }
+    const reads = r.reads === undefined ? ["messages"] : stringList(r.reads, `${at}.reads`);
+    for (const x of reads) if (!["messages", "headers", "reply"].includes(x)) throw bad(`${at}.reads`, `"${x}" is not messages, headers or reply`);
+    const timeoutMs = r.timeoutMs === undefined ? (service ? 300 : 1000) : r.timeoutMs;
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 1) throw bad(`${at}.timeoutMs`, "must be a number of ms, 1 or more");
+    const pick = <T extends string>(v: unknown, opts: readonly T[], def: T, where: string): T => {
+      if (v === undefined) return def;
+      if (typeof v !== "string" || !(opts as readonly string[]).includes(v)) throw bad(where, `must be ${opts.join(" or ")}`);
+      return v as T;
+    };
+    const integrity = r.integrity === undefined ? null : str(r.integrity, `${at}.integrity`);
+    if (integrity !== null && !/^sha256-[0-9a-f]{64}$/.test(integrity)) throw bad(`${at}.integrity`, "is sha256-<64 hex digits>");
+    out[name] = {
+      use, trust, integrity, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
+      onError: pick(r.onError, ["skip", "refuse"] as const, "skip", `${at}.onError`),
+      onFail: pick(r.onFail, ["refuse", "flag"] as const, "refuse", `${at}.onFail`),
+      locked: bool(r.locked, `${at}.locked`, false),
+      required: bool(r.required, `${at}.required`, false),
+      reads: reads as PluginDecl["reads"],
+      config: r.config === undefined ? {} : asRecord(r.config, `${at}.config`),
+    };
+  }
+  return out;
+}
+
+/** `routers.<name>.plugins`: only global plugins, and never a locked one turned off. */
+function routerPlugins(raw: unknown, at: string, plugins: Record<string, PluginDecl>): Record<string, RouterPlugin> {
+  const out: Record<string, RouterPlugin> = {};
+  for (const [name, v] of Object.entries(asRecord(raw ?? {}, at))) {
+    const p = plugins[name];
+    if (!p) throw bad(`${at}.${name}`, "is not a plugin under plugins:");
+    if (v === "off") {
+      if (p.locked) throw bad(`${at}.${name}`, "is locked: no router can turn it off");
+      out[name] = "off";
+    } else {
+      const r = asRecord(v, `${at}.${name}`);
+      only(r, ["config"], `${at}.${name}`);
+      out[name] = { config: asRecord(r.config ?? {}, `${at}.${name}.config`) };
+    }
+  }
+  return out;
+}
+
 /** The name that stands for `flows:` where a caller is given a rulebook. */
 export const DEFAULT_ROUTER = "default";
 
@@ -744,19 +882,21 @@ export interface Router {
   strict: boolean;
   note?: string;
   flows: Record<string, Flow>;
+  /** Global plugins this router turns off or sets differently. */
+  plugins: Record<string, RouterPlugin>;
 }
 
 /** `routers:`, each checked as `flows:` is. */
-function routerDecls(raw: unknown, flows: (raw: unknown) => Record<string, Flow>): Record<string, Router> {
+function routerDecls(raw: unknown, flows: (raw: unknown) => Record<string, Flow>, plugins: Record<string, PluginDecl> = {}): Record<string, Router> {
   const out: Record<string, Router> = {};
   for (const [name, v] of Object.entries(asRecord(raw ?? {}, "routers"))) {
     const at = `routers.${name}`;
     if (name === DEFAULT_ROUTER) throw bad(at, `is the name flows: goes by; give this router another`);
     const r = asRecord(v, at);
-    only(r, ["strict", "note", "flows"], at);
+    only(r, ["strict", "note", "flows", "plugins"], at);
     const own = flows(r.flows);
     if (!Object.values(own).some((f) => f.inputs.includes(ANY))) throw bad(`${at}.flows`, `needs a flow with inputs: ["${ANY}"], as flows: does, to say what happens to a name no other flow takes`);
-    out[name] = { strict: bool(r.strict, `${at}.strict`, false), ...(typeof r.note === "string" && r.note ? { note: r.note } : {}), flows: own };
+    out[name] = { strict: bool(r.strict, `${at}.strict`, false), ...(typeof r.note === "string" && r.note ? { note: r.note } : {}), flows: own, plugins: routerPlugins(r.plugins, `${at}.plugins`, plugins) };
   }
   return out;
 }
@@ -1776,7 +1916,8 @@ export function parseConfig(raw: unknown): HearthConfig {
 
   const actions = actionDecls(root.actions);
   // A removed key is refused, not ignored: ignoring it would close the page's port with no word why.
-  const routers = routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))));
+  const plugins = pluginDecls(root.plugins);
+  const routers = routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))), plugins);
   return {
     name: str(root.name, "name", "hearth"),
     // Set by loadConfig, which is the only caller that knows one.
@@ -1789,6 +1930,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     flows: flowDecls(root.flows, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path))),
     routers,
     callers: callerDecls(root.callers, routers),
+    plugins,
     actions,
     listen: mainListen,
     resources: resourceDecls,

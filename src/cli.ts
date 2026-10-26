@@ -176,6 +176,7 @@ const USAGE = `usage: hearth [command] [--config path]
 
   -c, --config <path>          the config file (default: ${DEFAULT_CONFIG})
       --check                  with serve: load the config, say whether it is valid, and exit
+      --no-plugins             with serve: start with every plugin off, to recover from a broken one
       --log <level>            debug, info, warn or error
                                invite and join ask the running node, with HEARTH_KEY as its key
                                when it sets apiKeys
@@ -191,6 +192,7 @@ async function main(): Promise<void> {
       options: {
         config: { type: "string", short: "c" },
         check: { type: "boolean", default: false },
+        "no-plugins": { type: "boolean", default: false },
         log: { type: "string" },
         url: { type: "string" },
         as: { type: "string" },
@@ -391,11 +393,18 @@ async function main(): Promise<void> {
     console.error(`--log must be one of: ${LEVELS.join(", ")}`);
     process.exit(1);
   }
-  const node = createNode(cfg, createLogger(level));
+  const node = createNode(cfg, createLogger(level), { plugins: !values["no-plugins"] });
   // The node's logger, so startup and shutdown lines reach the console's Logs page too.
   const log = node.log;
 
   node.start();
+  // Before listening: no request may run before a locked plugin is in place.
+  try {
+    await node.startPlugins();
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  }
   watchUpdates({ name: pkg, current: version, enabled: () => cfg.updateCheck, found: (latest) => { node.update = latest; }, log });
   node.server.listen(cfg.listen.port, cfg.listen.host, () => {
     log.info("listening", {
