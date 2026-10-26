@@ -6,7 +6,7 @@ A plugin changes or watches what passes through hearth: it can rewrite a request
 request on this machine, refuse it, check the reply, or read the finished exchange. Plugins are written
 by anyone, in any language, and run either inside hearth or as their own service.
 
-![The Pipeline page: plugins in the stage they hook, a dry run, and the router view](img/plugins-pipeline.svg)
+![The Pipeline page for chat requests: plugins in the stage they hook, a dry run, and the router view](img/plugins-pipeline.svg)
 
 ## Why
 
@@ -88,6 +88,57 @@ Within a stage, plugins run in the order they are listed. There are no priority 
 whose `request` or `routed` hook ran gets its `log` and `error` hooks, in the reverse order, so a plugin
 that opens something can always close it.
 
+## Request kinds
+
+Not every request is a chat. hearth also serves embeddings, reranking, images, video and speech, and
+passes through requests it does not understand at all. A plugin written for one kind is wrong, or
+harmful, on another: a memory plugin has no business on an image model. So every request has a kind,
+and a plugin only ever sees the kinds it says it handles.
+
+| Kind | Where it comes from |
+|---|---|
+| `chat` | `/v1/chat/completions`, `/v1/messages` |
+| `embeddings` | `/v1/embeddings` |
+| `rerank` | `/v1/rerank` |
+| `image`, `video`, `speech`, `transcription` | the OpenAI paths for them, or a backend route that declares it |
+| `other` | anything hearth passes through without understanding it |
+
+```yaml
+backends:
+  - name: images
+    routes:
+      - { path: /generate, kind: image }     # a custom path, said to carry image requests
+models:
+  my-image-model: { kind: image }            # lets config naming this model be checked
+```
+
+- **hearth decides the kind.** It comes from the path the request arrived on and the route that took it.
+  A client cannot set it, and neither can a plugin.
+- **A plugin's own declaration is the ceiling.** A plugin lists the kinds it handles and the stages it
+  hooks for each. hearth never calls it for any other kind, on every request, whatever the config says.
+- **Config can narrow, never widen, and is checked when it loads:**
+  - `kinds: [image]` on a plugin that handles only chat is refused: *memory handles chat; image is not
+    one of its kinds*.
+  - `when: { asked: [my-image-model] }` on that plugin is refused: *memory handles chat;
+    my-image-model is an image model*.
+- **`other` gets no plugins** unless a plugin declares `other`, and then it gets the raw body and its
+  content type.
+- **Not every stage exists for every kind:**
+
+| | request | routed | parallel | stream | response | log | error |
+|---|---|---|---|---|---|---|---|
+| chat | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| embeddings, rerank | ✓ | ✓ | | | ✓ | ✓ | ✓ |
+| image, video, speech, transcription | ✓ | ✓ | | | ✓ | ✓ | ✓ |
+| other | ✓ | | | | | ✓ | ✓ |
+
+  Requests other than chat are never sent to peers, so for them `routed` is always `local`.
+- **Bodies.** A kind that arrives on a standard path gets a body hearth checks the shape of (messages for
+  chat, `input` for embeddings, a prompt and settings for images). A custom route says only its kind:
+  its body reaches the plugin as sent, and a plugin written for that server can still read it. Image,
+  video and audio replies reach a plugin as their size, type and duration, never their bytes, unless it
+  declares `reads: [output]`.
+
 ## Configuration
 
 Plugins are defined once, under `plugins:`. Each applies everywhere unless a router says otherwise.
@@ -97,7 +148,7 @@ plugins:
   memory:
     use: http://memory:7411/hooks/hearth
     trust: http
-    on: [routed, log]
+    kinds: { chat: [routed, log] }               # within what the plugin itself declares
     when: { asked: [chat, coder] }              # the conditions flow steps use
     reads: [messages, reply]                     # all an http plugin is ever sent
     timeoutMs: 300
@@ -107,7 +158,7 @@ plugins:
   safety:
     use: http://guard:8080/hearth
     trust: http
-    on: [parallel]
+    kinds: { chat: [parallel] }
     locked: true                                 # no router can turn it off
     onFail: refuse                               # it flagged the request
     onError: refuse                              # it could not answer: fail closed
@@ -116,7 +167,7 @@ plugins:
     use: npm:@acme/hearth-redact@1.2.0
     integrity: sha512-…
     trust: code                                  # required to run code inside hearth
-    on: [routed]
+    kinds: { chat: [routed] }
     when: { target: peer }
 
 routers:
@@ -125,6 +176,9 @@ routers:
   local:
     plugins: { memory: off }
 ```
+
+`kinds` may be left out, and the plugin then hooks everything it declares; when given, it may only name
+kinds and stages the plugin declares.
 
 - **Two levels only.** A plugin is global, and a router may turn it `off` or give it different settings
   (`{ config: … }`, which replaces the global settings for that router). It still runs once.
@@ -188,6 +242,7 @@ import { definePlugin } from "@vcvzgbzz/hearth/plugin";
 export default definePlugin({
   name: "redact-emails",
   apiVersion: 1,
+  kinds: { chat: ["routed"] },            // hearth never calls it for anything else
   setup(ctx) {
     return { routed: async (r) => ({ body: redact(r.body) }) };
   },
@@ -206,6 +261,7 @@ hearth sends one POST per hook:
 {
   "apiVersion": 1,
   "hook": "routed",
+  "kind": "chat",
   "dryRun": false,
   "request": { "id": "…", "asked": "chat", "model": "chat", "target": "local", "peer": null,
                "caller": "app", "router": "app", "lane": "interactive",
@@ -214,7 +270,8 @@ hearth sends one POST per hook:
 }
 ```
 
-and expects `{ "decision": { … } }` back. Only the fields in `reads` are sent. `log` and `error` calls are
+and expects `{ "decision": { … } }` back. An `http` plugin states its kinds and stages at
+`GET {url}/manifest`, which hearth reads at startup and holds it to. Only the fields in `reads` are sent. `log` and `error` calls are
 not answered. `internal.token` lets the plugin call hearth's `/v1` back as internal traffic for the length
 of the hook call.
 
@@ -234,7 +291,9 @@ in headers. The page is shown in a sandboxed frame, so it never runs with the co
    `peers: true`, and such a plugin is listed in what this node tells its borrowers.
 5. **Recoverable.** A plugin that fails to start is turned off and logged, and hearth keeps serving unless
    it is `required: true`. Any plugin can be paused live from the console; `--no-plugins` starts with none.
-6. **No secrets in traces.** A trace never records authorization headers or keys, and prompt text is kept
+6. **Kinds are kept apart.** A plugin is only called for the kinds it declares, checked on every
+   request, and config that would attach it to another kind fails to load.
+7. **No secrets in traces.** A trace never records authorization headers or keys, and prompt text is kept
    only if the operator turns that on.
 
 ## In the console
@@ -245,6 +304,9 @@ Plugins get their own page, **Pipeline**, because they are about *when* things h
 - **Stages as columns,** in the order a request meets them, with the fixed steps (admit, route, queue and
   run, done) drawn above them. Each plugin is a card in the stage it hooks; a plugin with two hooks
   appears in both, linked. An On error lane runs underneath.
+- **A tab per kind** (Chat, Embeddings, Images, Video, Speech, Other), each with its count. A tab shows
+  only the stages that kind has and only the plugins that handle it, so an image model's pipeline is
+  visibly its own: a chat-only plugin is never offered there. A plugin's panel lists its kinds.
 - **A router picker.** The page shows the chain for one router: global plugins it runs, its own changes,
   and plugins it turned off (struck through). A line under the stages says how many come from global and
   that locked ones cannot be turned off. **Effective chain** lists exactly what runs, in order, as a
@@ -273,14 +335,17 @@ Plugins get their own page, **Pipeline**, because they are about *when* things h
 | C5 | `stayLocal` as a routing constraint, not a header a flow has to test for. | small |
 | C6 | The runtime: loader, lifecycle, `plugins:` and `routers.<name>.plugins`, timeouts, `onFail` / `onError`, the circuit breaker, metrics, `--no-plugins`. | medium |
 | C7 | Hooks off for peers' requests by default; `peers: true` shown in lending terms. | small |
-| C8 | Console: the Pipeline page, Try, the per-request record, router chips, the Dispatch badge, plugin pages proxied into the sidebar. | large |
+| C9 | Request kinds: on the request context, `kind:` on backend routes and models, the per-request gate, checks at load, body shapes per kind. | medium |
+| C8 | Console: the Pipeline page and its kind tabs, Try, the per-request record, router chips, the Dispatch badge, plugin pages proxied into the sidebar. | large |
 
 ## Order of work
 
-1. C1 and C5, with no plugin API. The existing tests show nothing changed.
+1. C1, C5 and C9, with no plugin API. The existing tests show nothing changed, and every request carries
+   its kind.
 2. C2, C4, C6 and C7 with `request`, `routed`, `log` and `error` for both kinds. Each guarantee gets a test
    that tries to break it: a hook that calls back into the same model, one that never answers, one that
-   throws on start, a client that sends the internal marker itself.
+   throws on start, a client that sends the internal marker itself, a chat plugin attached to an image
+   model in the config and in a hand-built request.
 3. A first real plugin over `http` (memory), in production.
 4. C3 with `parallel`, `response` and `stream`; then C8.
 5. A second, unrelated plugin (a safety check). Then `apiVersion: 1` is frozen, documented with examples,
