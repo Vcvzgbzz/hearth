@@ -3,30 +3,30 @@
 **Status: proposal.** Nothing here is built yet. Comments welcome on the tracking issue.
 
 A plugin changes or watches what passes through hearth: it can rewrite a request before it runs, keep a
-request on this machine, refuse it, or read the finished exchange. Plugins are written by anyone, in any
-language, and run either inside hearth or as their own service.
+request on this machine, refuse it, check the reply, or read the finished exchange. Plugins are written
+by anyone, in any language, and run either inside hearth or as their own service.
 
-![The Topology map with two plugins in the request path](img/plugins-topology.svg)
+![The Pipeline page: plugins in the stage they hook, a dry run, and the router view](img/plugins-pipeline.svg)
 
 ## Why
 
-hearth already decides *where* a request runs (flows, peers, lanes) and can set something off when it
-does (`actions:`). Actions are observers by design: they never change a request, never hold it up, and
-see only facts about it, never the messages. Some jobs need more than that:
+hearth already decides *where* a request runs (flows, routers, peers, lanes) and can set something off
+when it does (`actions:`). Actions are observers by design: they never change a request, never hold it
+up, and see only facts about it, never the messages. Some jobs need more than that:
 
 - **Memory**: recall what a user saved and add it to the prompt, then hand the finished conversation to a
   memory service.
 - **Privacy**: scrub email addresses from a request before it leaves for a peer, or keep it here.
-- **Safety**: refuse a request a policy model flags, before it reaches a backend.
+- **Safety**: refuse a request, or stop a reply, that a policy model flags.
 - **Audit**: record exchanges somewhere of the operator's choosing.
 
-Each of these needs to read the messages, change them, or both, at a point in the request that hearth
-controls. Building each one into hearth does not scale, and every operator wants a different one.
+Each needs to read the messages, change them, or both, at a point hearth controls. Building each into
+hearth does not scale, and every operator wants a different one.
 
 ## Goals
 
 - Anyone can write a plugin, in any language.
-- Plugins are composable: several run on one request, in an order the operator sets.
+- Plugins compose: several run on one request, in an order the operator can see.
 - A plugin cannot break hearth's guarantees: no deadlock, no request loops, no peer's prompts handed to a
   plugin without the operator choosing it, and hearth keeps serving when a plugin fails.
 - Running someone else's code is an explicit choice, visible in the config and the console.
@@ -36,7 +36,7 @@ controls. Building each one into hearth does not scale, and every operator wants
 - Replacing flows. Flows decide where a request runs; plugins decide what happens to it on the way. A
   plugin never picks a backend or a peer, though it can require that a request stays on this machine.
 - Sandboxing in-process code. A `code` plugin can do anything hearth can. The protection is that the
-  operator chooses it, by name and version.
+  operator chooses it, by name, exact version and hash.
 - A marketplace or registry. Plugins are npm packages, files or URLs.
 
 ## Two kinds of plugin
@@ -47,57 +47,99 @@ controls. Building each one into hearth does not scale, and every operator wants
 | Written in | JavaScript or TypeScript | Anything |
 | Trust | Full: it runs inside hearth with hearth's access | Isolated: it sees only what hearth sends it |
 | Cost per hook | A function call | A local HTTP round trip |
-| Source | `npm:@scope/name@1.2.3` (exact version, optional integrity hash) or `file:./plugins/x.js` | `http://host:port/path` |
+| Source | `npm:@scope/name@1.2.3` with `integrity:` (an exact version and its hash), or `file:./plugins/x.js` | `http://host:port/path` |
+| Stages | all | all but `stream` |
 
-Both implement one interface. The `http` kind is a built-in adapter that turns hook calls into requests.
+Both implement one interface; the `http` kind is a built-in adapter. A `code` plugin is loaded only at
+startup, never updated in place, and only with `trust: code` on that plugin.
+
+## Stages
+
+A request passes through fixed steps (admit, route, queue and run, reply). Plugins hook the stages
+between them:
+
+| Stage | When | May | Holds the client? |
+|---|---|---|---|
+| `request` | after admission, before routing | change the body or headers, set the lane, keep it local, refuse | yes, up to `timeoutMs` |
+| `routed` | after routing decides `local` or `peer`, before queueing | the same | yes, up to `timeoutMs` |
+| `parallel` | while the model runs | refuse (the reply is stopped); never change | no |
+| `stream` | each chunk of a streamed reply (`code` only) | read; change only with `transform: true` | only when changing |
+| `response` | the whole reply | refuse or change it, as its `stream` policy allows | see below |
+| `log` | after the last byte | read the exchange | no, runs in the background |
+| `error` | a backend, peer or plugin failed | read | no |
+
+Separately, a plugin may answer `routes` (requests to `/plugins/<name>/*`, its own API or page) and
+`events` (queue, peer and eviction events, a superset of what `actions:` see).
+
+### Streamed replies
+
+A reply that has been streamed to the client cannot be taken back. A plugin with a `response` hook says
+which of these it wants for streamed replies, and the console shows it:
+
+- `audit` (the default): the hook runs after the stream ends and can only record. Shown as *cannot block
+  streamed replies*.
+- `buffer`: the reply is held until the hook passes it. Streaming is lost for that request.
+- `holdback: <characters>`: that many characters are held behind the stream, so the hook can stop the
+  reply before its last part leaves.
+
+### Order
+
+Within a stage, plugins run in the order they are listed. There are no priority numbers. Every plugin
+whose `request` or `routed` hook ran gets its `log` and `error` hooks, in the reverse order, so a plugin
+that opens something can always close it.
 
 ## Configuration
+
+Plugins are defined once, under `plugins:`. Each applies everywhere unless a router says otherwise.
 
 ```yaml
 plugins:
   memory:
     use: http://memory:7411/hooks/hearth
     trust: http
-    when: { asked: [chat, coder], callerNot: [canary] }   # the conditions flow steps use
-    hooks:
-      routed:   { timeoutMs: 300, onError: skip }          # requests go on without it
-      response: {}                                          # after the reply, in the background
-    reads: [messages, reply]                                # what hearth sends an http plugin
-    peers: false                                            # never on requests peers send here
-    config: { userHeader: x-memory-user }                   # the plugin's own settings
+    on: [routed, log]
+    when: { asked: [chat, coder] }              # the conditions flow steps use
+    reads: [messages, reply]                     # all an http plugin is ever sent
+    timeoutMs: 300
+    onError: skip                                # the plugin is down or slow: carry on without it
+    config: { userHeader: x-memory-user }        # the plugin's own settings
+
+  safety:
+    use: http://guard:8080/hearth
+    trust: http
+    on: [parallel]
+    locked: true                                 # no router can turn it off
+    onFail: refuse                               # it flagged the request
+    onError: refuse                              # it could not answer: fail closed
 
   redact-emails:
     use: npm:@acme/hearth-redact@1.2.0
-    trust: code                                             # required for anything that runs in hearth
-    when: { asked: [chat] }
-    hooks:
-      routed: { onError: refuse }                           # a privacy plugin fails closed
+    integrity: sha512-…
+    trust: code                                  # required to run code inside hearth
+    on: [routed]
+    when: { target: peer }
+
+routers:
+  app:
+    plugins: { audit-log: off }                  # this router turns a global plugin off
+  local:
+    plugins: { memory: off }
 ```
 
-- Plugins run in the order they are listed. The first refusal ends the chain.
-- `when` takes the same conditions as a flow step (`asked`, `caller`, `lane`, `header`, `tools`,
-  `tokensOver` and the rest). A request that does not match skips the plugin.
-- `trust: code` is required to load a `code` plugin. hearth refuses to start with a `code` plugin that
-  lacks it, so copying a config line never runs code by accident.
-- `onError` is `skip` (the default: the request continues as if the plugin were not there) or `refuse`
-  (the request fails with the plugin's error).
-- `config` is passed to the plugin as is. A plugin may publish a schema, which the console's config
-  editor uses to check the section.
+- **Two levels only.** A plugin is global, and a router may turn it `off` or give it different settings
+  (`{ config: … }`, which replaces the global settings for that router). It still runs once.
+- `locked: true` means no router can turn it off or weaken it. Safety and privacy plugins are locked.
+- `when` uses the flow-step conditions plus `target: local | peer`. A request that does not match skips
+  the plugin, and the trace says so.
+- **Two failures, two policies.** `onFail` is what happens when a plugin says no (`refuse`, or `flag` to
+  let the request through and mark it). `onError` is what happens when it cannot answer: `skip`
+  (fail open) or `refuse` (fail closed). Every fail-open is counted, shown on the plugin and reported
+  through `error` plugins, so a plugin that keeps failing open is noticed.
+- A plugin that fails `onError` past a threshold is paused for a while (a circuit breaker), then tried
+  again; its policy decides what requests get meanwhile.
 - `hearth serve --no-plugins` starts with every plugin off, for recovering from a broken one.
 
-## Hooks
-
-| Hook | When | May | Holds the client? |
-|---|---|---|---|
-| `request` | After admission, before routing | rewrite the body, set or remove headers, set the lane, keep it local, refuse | yes, up to `timeoutMs` |
-| `routed` | After routing decides `local` or `peer`, before the request is queued | the same as `request` | yes, up to `timeoutMs` |
-| `stream` | For each chunk of a streamed reply | read; transform only with `transform: true` | only when transforming |
-| `response` | After the reply has finished | read the exchange | no |
-| `error` | When the request failed | read | no |
-| `events` | Queue, peer and eviction events | read | no |
-| `routes` | Requests to `/plugins/<name>/*` | answer them (a plugin's own API or page) | n/a |
-
-A `request` or `routed` hook returns a decision:
+## What a hook returns
 
 ```ts
 type Decision =
@@ -108,32 +150,35 @@ type Decision =
       lane?: string;
       stayLocal?: true;                        // this request must not leave this machine
       refuse?: { status: number; message: string };
+      flag?: string;                           // let it through, marked, with a reason
     };
 ```
 
-- A body that changes after routing is measured again. If it no longer fits where it was routed, it is
-  routed once more; a second change of fit is refused rather than routed again.
-- A changed body must still be a valid chat request, under the size limit. hearth checks before using it.
-- `stayLocal` can only narrow. A request already kept local stays local whatever a later plugin says.
+- A refusal before the model runs never reaches the queue, and is one OpenAI-shaped error to the client.
+- A body that changes after routing is measured again; if it no longer fits where it was routed, it is
+  routed once more, and a second change of fit is refused.
+- A changed body must still be a valid chat request, under the size limit.
+- `stayLocal` can only narrow: a request kept local stays local whatever a later plugin says.
 
-### What a `routed` hook sees
+### What a hook sees
 
 ```ts
 interface Routed {
-  id: string;                      // the request id hearth logs
+  id: string;
   asked: string;                   // the model the client asked for
   model: string;                   // the model it runs as
-  target: "local" | "peer";        // where routing sent it
+  target: "local" | "peer";
   peer: string | null;
   caller: string;                  // an api key's label, or "local"
+  router: string;
   lane: string;
-  headers: Record<string, string>; // the client's headers, minus authorization
-  body: Record<string, unknown>;   // the chat request
+  headers: Record<string, string>; // the client's, minus authorization
+  body: Record<string, unknown>;
 }
 ```
 
-`request` sees the same without `model`, `target` and `peer`. `response` adds `reply` (the assistant
-message, assembled from the stream when there was one), `usage`, `status` and timings.
+`request` sees the same without `model`, `target` and `peer`. `response`, `log` and `error` add the reply,
+usage, status and timings.
 
 ## Writing a `code` plugin
 
@@ -144,82 +189,78 @@ export default definePlugin({
   name: "redact-emails",
   apiVersion: 1,
   setup(ctx) {
-    return {
-      routed: async (r) => (r.target === "peer" ? { body: redact(r.body) } : undefined),
-    };
+    return { routed: async (r) => ({ body: redact(r.body) }) };
   },
 });
 ```
 
-`setup` receives a context:
-
-| | |
-|---|---|
-| `ctx.config` | the plugin's `config` section |
-| `ctx.models.chat / embed / rerank` | calls into hearth's own scheduler, on the `plugins` lane, marked internal (below) |
-| `ctx.log` | hearth's logger, prefixed with the plugin's name |
-| `ctx.store` | a small key-value store under hearth's state directory, one per plugin |
-| `ctx.metrics` | counters and timings shown on the plugin's console panel |
-| `ctx.every(ms, fn)` | a timer that stops with the plugin |
+`setup` receives `ctx.config` (its settings), `ctx.models.chat / embed / rerank` (calls into hearth's
+scheduler, marked internal, below), `ctx.log`, `ctx.store` (a small key-value store per plugin),
+`ctx.metrics` and `ctx.every(ms, fn)`.
 
 ## Writing an `http` plugin
 
-hearth sends one POST per hook to the plugin's URL:
+hearth sends one POST per hook:
 
 ```json
 {
   "apiVersion": 1,
   "hook": "routed",
+  "dryRun": false,
   "request": { "id": "…", "asked": "chat", "model": "chat", "target": "local", "peer": null,
-               "caller": "app", "lane": "interactive", "headers": { "x-memory-user": "u1" },
-               "body": { "model": "chat", "messages": [ … ] } },
+               "caller": "app", "router": "app", "lane": "interactive",
+               "headers": { "x-memory-user": "u1" }, "body": { "model": "chat", "messages": [ … ] } },
   "internal": { "url": "http://127.0.0.1:4141", "token": "…" }
 }
 ```
 
-and expects the decision back:
+and expects `{ "decision": { … } }` back. Only the fields in `reads` are sent. `log` and `error` calls are
+not answered. `internal.token` lets the plugin call hearth's `/v1` back as internal traffic for the length
+of the hook call.
 
-```json
-{ "decision": { "body": { "model": "chat", "messages": [ … ] } } }
-```
-
-- Only the fields in `reads` are sent: a plugin that reads `[headers]` never receives a message.
-- For `response`, hearth sends the exchange and ignores the answer.
-- `internal.token` lets the plugin call hearth's `/v1` endpoints back as internal traffic, for the
-  length of the hook call only.
+A plugin with a page of its own serves it under its URL and declares it; hearth adds a sidebar entry and
+proxies the page at `/plugins/<name>/`, checking the operator's login itself and passing who is viewing
+in headers. The page is shown in a sandboxed frame, so it never runs with the console's own access.
 
 ## Guarantees
 
-hearth enforces these whatever a plugin does:
-
-1. **No deadlock.** Blocking hooks run before a request holds a slot. A plugin's own model calls queue
-   on the `plugins` lane. `response` runs after the slot is released.
-2. **No loops.** A plugin's own model calls are internal, and hooks never run on internal traffic.
+1. **No deadlock.** `request` and `routed` run before a request holds a slot; a plugin's own model calls
+   queue on the `plugins` lane; `log` runs after the slot is released.
+2. **No loops.** A plugin's own model calls are internal, and no hook runs on internal traffic. Internal
+   is a property hearth gives the call itself (in-process, or the per-call token), never a header a
+   client could send.
 3. **Bounded.** Every blocking hook has a timeout, every plugin an `onError`, every body a size limit.
-4. **Peers' work is private.** Hooks do not run on requests a peer sends here unless `peers: true`, and a
-   plugin that does is listed in what this node tells its borrowers.
-5. **Recoverable.** A plugin that fails to start is turned off and logged; hearth keeps serving unless the
-   plugin is `required: true`. Any plugin can be turned off live from the console, and
-   `--no-plugins` starts with none.
+4. **Peers' work is private.** Hooks do not run on requests a peer sends here unless the plugin says
+   `peers: true`, and such a plugin is listed in what this node tells its borrowers.
+5. **Recoverable.** A plugin that fails to start is turned off and logged, and hearth keeps serving unless
+   it is `required: true`. Any plugin can be paused live from the console; `--no-plugins` starts with none.
+6. **No secrets in traces.** A trace never records authorization headers or keys, and prompt text is kept
+   only if the operator turns that on.
 
 ## In the console
 
-Plugins are blocks on the Topology map, in the path between routing and Dispatch, in the order they run.
+Plugins get their own page, **Pipeline**, because they are about *when* things happen to a request, not
+*where* it runs (Topology) or *which* model it gets (Routing).
 
-- **Edges.** Requests flow through the blocks. An `http` plugin's service is its own block, with a
-  dashed edge back into Dispatch for its internal calls. A `response` hook is a dotted tap off the
-  return path.
-- **State, by colour.** Green outline: healthy. Amber: near its timeout. Red: failing. Grey and struck
-  through: off, or skipped by `when`.
-- **Badges.** ⚠ for a `code` plugin (it runs inside hearth). 🔒 when it kept a request local.
-- **Panel.** Clicking a block opens its numbers per hook (calls, p50/p95, errors, skips), its `when`, its
-  `onError`, whether it runs on peers' work, its last error, an on/off switch, and the plugin's own
-  page if it serves one under `/plugins/<name>/ui`, shown in a sandboxed frame.
-- **Per request.** The recent-requests rail and the logs show which plugins ran on a request and how
-  long each took.
-
-On the Routing map, a plugin is a chip on each flow whose inputs its `when` matches. It is not a step: it
-does not decide where a request goes.
+- **Stages as columns,** in the order a request meets them, with the fixed steps (admit, route, queue and
+  run, done) drawn above them. Each plugin is a card in the stage it hooks; a plugin with two hooks
+  appears in both, linked. An On error lane runs underneath.
+- **A router picker.** The page shows the chain for one router: global plugins it runs, its own changes,
+  and plugins it turned off (struck through). A line under the stages says how many come from global and
+  that locked ones cannot be turned off. **Effective chain** lists exactly what runs, in order, as a
+  flat list.
+- **Cards** show the kind (`http`, or `code` with ⚠), the scope (`global`, `this router`, `locked`), the
+  failure policy, timing, and health by outline: green healthy, amber near its timeout, red failing,
+  grey off or not matched. Clicking one opens its numbers per hook, its `when`, its last error, a pause
+  switch and its own page if it has one.
+- **Try a request.** Pick a caller and a model, type a message, and see every stage in order: each
+  plugin's verdict and time, what it changed as a diff, what was skipped and why, and where the request
+  would run. It stops before the model unless asked to run it; `parallel` and `log` plugins are listed,
+  not run. Plugins receive `dryRun: true` and must not keep anything from a dry run.
+- **Each logged request** opens the same view as a record of what happened.
+- **Elsewhere.** On the Routing map, each router shows its plugins as chips (its own, a count from
+  global, and any it turned off), linking to Pipeline. Topology keeps only a badge on Dispatch
+  (*5 plugins · 1 slow*). Plugin pages are sidebar entries.
 
 ## Changes to hearth
 
@@ -227,40 +268,44 @@ does not decide where a request goes.
 |---|---|---|
 | C1 | One request context carried through admission, routing, queueing, sending and relaying, in place of the positional arguments passed between those stages today. No behaviour change. | large |
 | C2 | Measure and route again, once, when a hook changes a body after routing. | medium |
-| C3 | Assemble the reply from a relayed stream without delaying it, for `response`. | medium |
-| C4 | Internal model calls: in-process for `code`, a scoped token for `http`; the `plugins` lane; hooks skip internal traffic. | medium |
+| C3 | Assemble the reply from a relayed stream; `buffer` and `holdback` for `response`. | medium |
+| C4 | Internal model calls: in-process for `code`, a per-call token for `http`; the `plugins` lane; no hooks on internal traffic. | medium |
 | C5 | `stayLocal` as a routing constraint, not a header a flow has to test for. | small |
-| C6 | The plugin runtime: loader, lifecycle, `plugins:` config and its fields, timeouts, metrics, `--no-plugins`. | medium |
+| C6 | The runtime: loader, lifecycle, `plugins:` and `routers.<name>.plugins`, timeouts, `onFail` / `onError`, the circuit breaker, metrics, `--no-plugins`. | medium |
 | C7 | Hooks off for peers' requests by default; `peers: true` shown in lending terms. | small |
-| C8 | Console: plugin blocks and panels on the Topology map, chips on the Routing map, a per-request plugin trace. | medium |
+| C8 | Console: the Pipeline page, Try, the per-request record, router chips, the Dispatch badge, plugin pages proxied into the sidebar. | large |
 
 ## Order of work
 
-1. C1 and C5, with no plugin API: the existing tests show nothing changed.
-2. C2 to C4, C6 and C7: `request`, `routed` and `response` for both kinds, each guarantee with a test that
-   tries to break it (a hook that calls back into the same model, a hook that never answers, a plugin
-   that throws on start).
-3. A first real plugin over `http` (memory), run in production.
-4. C8, then `stream`, `events` and `routes`.
-5. A second, unrelated plugin (a safety check). Then `apiVersion: 1` is frozen, documented with
-   examples, and a starter template is published.
+1. C1 and C5, with no plugin API. The existing tests show nothing changed.
+2. C2, C4, C6 and C7 with `request`, `routed`, `log` and `error` for both kinds. Each guarantee gets a test
+   that tries to break it: a hook that calls back into the same model, one that never answers, one that
+   throws on start, a client that sends the internal marker itself.
+3. A first real plugin over `http` (memory), in production.
+4. C3 with `parallel`, `response` and `stream`; then C8.
+5. A second, unrelated plugin (a safety check). Then `apiVersion: 1` is frozen, documented with examples,
+   and a starter template is published.
 
 ## Alternatives considered
 
 - **Extend `actions:`.** Actions are deliberately unable to change or delay a request, and other parts of
   hearth rely on that. Plugins sit beside them; `events` is the superset of what actions observe.
-- **`http` only.** Simpler to make safe, but every hook pays a network hop and plugins cannot use
-  hearth's scheduler in-process. Operators who want in-process code would fork instead.
-- **The plugin service computes embeddings itself, or hearth computes them for it.** The first bypasses
-  hearth's queue for that hardware; the second ties hearth to one plugin's internals. Internal calls (C4)
-  keep both apart.
+- **Plugins on the Topology map.** Topology shows machines, hardware, peers and callers. Plugins are steps
+  in time, and drawing them as places made the map harder to read.
+- **Plugins as steps inside flows.** Flows choose where a request goes; mixing "what happens to it" into
+  the same rules turns them into a program.
+- **More scope levels** (per caller, per model, per key) with precedence rules. Each level adds a way for
+  a plugin to run or not run that nobody can see. Two levels, and `when` for the rest.
+- **Priority numbers** for order. Ties and per-machine differences make the real order hard to know;
+  list order within a stage is what you see.
+- **`http` only.** Simpler to make safe, but every hook pays a network hop and plugins cannot use hearth's
+  scheduler in-process; operators who want that would fork.
 - **A WebAssembly sandbox for `code`.** Real isolation, at the cost of most of the npm ecosystem and a
-  much harder plugin API. Possible later as a third kind; nothing here rules it out.
+  harder API. Possible later as a third kind.
 
 ## Open questions
 
-- Should `code` plugins also need a node-wide `allowCodePlugins: true`, or is `trust: code` per plugin
-  enough?
-- Should a plugin's own page live in hearth's console (a panel) or only at its own address?
-- Should `stream` transforms exist at all, given that an output filter can also run as `response` plus a
-  refusal on the next turn?
+- Should `code` plugins also need a node-wide `allowCodePlugins: true`, or is `trust: code` enough?
+- Should Try be able to run `parallel` plugins against a reply it supplies, so a safety check can be
+  tried without running the model?
+- How long should per-request records keep prompt text, when the operator turns that on?
