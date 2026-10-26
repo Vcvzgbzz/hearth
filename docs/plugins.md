@@ -1,6 +1,8 @@
 # Plugins (RFC)
 
-**Status: proposal.** Nothing here is built yet. Comments welcome on the tracking issue.
+**Status: partly built.** Chat requests run `request`, `routed`, `log` and `error` hooks for both kinds of
+plugin, with the guarantees below. The other stages, the other request kinds, plugins on peers' requests
+and the console are not built yet (tracking: #191); requests of other kinds run no plugins.
 
 A plugin changes or watches what passes through hearth: it can rewrite a request before it runs, keep a
 request on this machine, refuse it, check the reply, or read the finished exchange. Plugins are written
