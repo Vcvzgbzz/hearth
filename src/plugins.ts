@@ -431,7 +431,8 @@ export class Plugins {
 
   private async loadService(_name: string, decl: PluginDecl, internal: PluginContext["internal"]): Promise<{ declared: Declared; hooks: Hooks }> {
     const base = decl.use.replace(/\/$/, "");
-    const res = await fetch(`${base}/manifest`, { signal: AbortSignal.timeout(5_000) });
+    const auth: Record<string, string> = decl.key ? { authorization: `Bearer ${decl.key}` } : {};
+    const res = await fetch(`${base}/manifest`, { headers: auth, signal: AbortSignal.timeout(5_000) });
     if (!res.ok) throw new Error(`${base}/manifest answered ${res.status}`);
     const m = (await res.json()) as { apiVersion?: unknown; kinds?: unknown };
     if (m.apiVersion !== 1) throw new Error(`${base}/manifest is not apiVersion 1`);
@@ -440,7 +441,7 @@ export class Plugins {
     const post = async (hook: PluginStage, payload: Record<string, unknown>, ms: number): Promise<unknown> => {
       const r = await fetch(base, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...auth },
         body: JSON.stringify({ apiVersion: 1, hook, ...payload, internal }),
         signal: AbortSignal.timeout(ms),
       });

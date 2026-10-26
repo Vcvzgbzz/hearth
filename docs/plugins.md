@@ -257,7 +257,7 @@ scheduler, marked internal, below), `ctx.log`, `ctx.store` (a small key-value st
 
 ## Writing an `http` plugin
 
-hearth sends one POST per hook:
+hearth sends one POST per hook, with `Authorization: Bearer <key>` when the plugin sets `key` (`env:NAME`):
 
 ```json
 {

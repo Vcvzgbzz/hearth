@@ -34,6 +34,8 @@ assert.throws(() => parses({ plugins: { p: { use: "npm:some-plugin@^1.0.0", trus
 assert.throws(() => parses({ plugins: { p: { use: "http://x:1/h", trust: "http", kinds: { pictures: ["request"] } } } }), ConfigError, "an unknown kind");
 assert.throws(() => parses({ plugins: { p: { use: "http://x:1/h", trust: "http", kinds: { chat: ["before"] } } } }), ConfigError, "an unknown stage");
 assert.throws(() => parses({ plugins: { p: { use: "http://x:1/h", trust: "http", peers: true } } }), ConfigError, "plugins on peers' requests are not built");
+assert.throws(() => parses({ plugins: { p: { use: "file:./p.js", trust: "code", key: "x" } } }), ConfigError, "a key is for a service");
+assert.throws(() => parses({ plugins: { p: { use: "http://x:1/h", trust: "http", key: "env:NO_SUCH_VAR_SET" } } }), ConfigError, "a key names a variable that is set");
 const flows = { flows: { r: { inputs: ["*"], steps: [{ to: { asked: true } }] } } };
 assert.throws(() => parses({ plugins: { p: { use: "http://x:1/h", trust: "http", locked: true } }, routers: { a: { ...flows, plugins: { p: "off" } } } }), ConfigError, "a locked plugin cannot be turned off");
 assert.throws(() => parses({ routers: { a: { ...flows, plugins: { nope: "off" } } } }), ConfigError, "a router names only plugins that exist");
@@ -72,6 +74,7 @@ const serviceGot: Record<string, unknown>[] = [];
 const service = createServer(async (rq, rs) => {
   let raw = "";
   for await (const c of rq) raw += c;
+  if (rq.headers.authorization !== "Bearer svc-secret") return rs.writeHead(401).end();
   if (rq.url === "/manifest") return rs.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ apiVersion: 1, kinds: { chat: ["request"] } }));
   serviceGot.push(JSON.parse(raw));
   rs.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ decision: { headers: { "x-seen-by": "service" } } }));
@@ -117,6 +120,7 @@ plugin("caller", `export default { apiVersion: 1, kinds: { chat: ["request"] }, 
   },
 }) };`);
 
+process.env.TEST_PLUGIN_KEY = "svc-secret";
 const integrity = (name: string) => "sha256-" + createHash("sha256").update(readFileSync(join(dir, `${name}.mjs`))).digest("hex");
 const cfgPath = join(dir, "hearth.yaml");
 const writeCfg = (port: number, extra = "") => writeFileSync(cfgPath, `version: 3
@@ -144,7 +148,7 @@ plugins:
   flaky: {use: "file:./flaky.mjs", trust: code, timeoutMs: 100}
   strict: {use: "file:./strict.mjs", trust: code, onError: refuse}
   caller: {use: "file:./caller.mjs", trust: code, timeoutMs: 5000}
-  service: {use: "${serviceUrl}", trust: http, reads: [headers]}
+  service: {use: "${serviceUrl}", trust: http, reads: [headers], key: "env:TEST_PLUGIN_KEY"}
 ${extra}`);
 
 /** A port nothing has used, so a pooled connection to an earlier node is never reused against a new one. */

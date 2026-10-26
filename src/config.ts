@@ -759,6 +759,8 @@ export interface PluginDecl {
   trust: "code" | "http";
   /** For `file:`, the sha256 of the file, as `sha256-<hex>`; a file that differs is not loaded. */
   integrity: string | null;
+  /** For a service: sent as a bearer token on every call, so the service can tell hearth from anyone else. */
+  key: string | null;
   /** Narrows what the plugin itself declares; absent hooks all of it. */
   kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
   when: PluginWhen | null;
@@ -810,7 +812,7 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const at = `plugins.${name}`;
     if (!PLUGIN_NAME.test(name)) throw bad(at, "a plugin's name is lowercase letters, digits and dashes");
     const r = asRecord(v, at);
-    only(r, ["use", "trust", "integrity", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "config"], at);
+    only(r, ["use", "trust", "integrity", "key", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "config"], at);
     const use = str(r.use, `${at}.use`);
     const service = /^https?:\/\//.test(use);
     if (!service && !/^(file:.+|npm:(@[^/]+\/)?[^@/]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/.test(use)) throw bad(`${at}.use`, "is file:<path>, npm:<package>@<exact version, like 1.2.3>, or an http(s) URL");
@@ -838,9 +840,11 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
       return v as T;
     };
     const integrity = r.integrity === undefined ? null : str(r.integrity, `${at}.integrity`);
+    if (r.key !== undefined && !service) throw bad(`${at}.key`, "is for a service; code runs inside hearth and needs none");
+    const key = r.key === undefined ? null : resolveSecret(str(r.key, `${at}.key`), `${at}.key`);
     if (integrity !== null && !/^sha256-[0-9a-f]{64}$/.test(integrity)) throw bad(`${at}.integrity`, "is sha256-<64 hex digits>");
     out[name] = {
-      use, trust, integrity, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
+      use, trust, integrity, key, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
       onError: pick(r.onError, ["skip", "refuse"] as const, "skip", `${at}.onError`),
       onFail: pick(r.onFail, ["refuse", "flag"] as const, "refuse", `${at}.onFail`),
       locked: bool(r.locked, `${at}.locked`, false),
