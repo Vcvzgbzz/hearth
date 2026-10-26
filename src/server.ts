@@ -815,23 +815,29 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     }
   }
 
+  /** One chat request on its way through: who sent it, what it asked for, and where its answer goes. */
+  interface ChatRequest {
+    /** The request body; routing writes the model it chose and the route's params into it. */
+    payload: Record<string, unknown>;
+    /** The model the client asked for, and the lane it asked to queue in. */
+    asked: string;
+    lane: string;
+    caller: string;
+    res: ServerResponse;
+    signal: AbortSignal;
+    headers: World["headers"];
+    onPosition?: ((position: number) => void) | undefined;
+    id?: string | undefined;
+    /** The caller's limits, when admit left them to be checked once the flow has decided. */
+    limits?: (() => void) | undefined;
+  }
+
   /** Route a chat request and run it, then tell the actions that wait for how it ended. */
-  async function dispatch(
-    payload: Record<string, unknown>,
-    asked: string,
-    askedLane: string,
-    caller: string,
-    res: ServerResponse,
-    signal: AbortSignal,
-    onPosition?: (position: number) => void,
-    id?: string,
-    headers: World["headers"] = {},
-    limits?: () => void,
-  ): Promise<void> {
+  async function dispatch(r: ChatRequest): Promise<void> {
     const ended: ((error: string | null) => void)[] = [];
     let error: string | null = null;
     try {
-      const status = await route(payload, asked, askedLane, caller, res, signal, ended, onPosition, id, headers, limits);
+      const status = await route(r, ended);
       if (status >= 400) error = `backend answered ${status}`;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -842,20 +848,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
   }
 
   /** Returns the status a local backend relayed, or 0 when a peer answered. */
-  async function route(
-    payload: Record<string, unknown>,
-    asked: string,
-    askedLane: string,
-    caller: string,
-    res: ServerResponse,
-    signal: AbortSignal,
-    ended: ((error: string | null) => void)[],
-    onPosition?: (position: number) => void,
-    id?: string,
-    headers: World["headers"] = {},
-    /** The caller's limits, when admit left them to be checked once the flow has decided. */
-    limits?: () => void,
-  ): Promise<number> {
+  async function route(r: ChatRequest, ended: ((error: string | null) => void)[]): Promise<number> {
+    const { payload, asked, lane: askedLane, caller, res, signal, onPosition, id, headers, limits } = r;
     // Refresh peer state only when a decision needs it, and only for requests that may leave.
     if (mayLeave(cfg, asked)) await peers.ensureFresh();
 
@@ -2520,7 +2514,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger): HearthNode {
     });
 
     if (fromPeer === null) {
-      await dispatch(payload, model, lane, caller, res, ctrl.signal, positionStream(c.req, res, payload), jobId(c.req), headersOf(c.req), limitsDeferred ? () => withinLimits(caller) : undefined);
+      await dispatch({
+        payload, asked: model, lane, caller, res, signal: ctrl.signal, headers: headersOf(c.req),
+        onPosition: positionStream(c.req, res, payload), id: jobId(c.req),
+        limits: limitsDeferred ? () => withinLimits(caller) : undefined,
+      });
       return;
     }
     // A peer running a model here is that model in use.
