@@ -100,6 +100,19 @@ export interface PluginStatus {
   state: "running" | "failed" | "off";
   error: string | null;
   kinds: Declared;
+  /** What the plugin itself declares, before the config narrows it. */
+  declared: Declared;
+  /** Where it comes from: a URL shows only its origin and path. */
+  use: string;
+  when: PluginWhen | null;
+  timeoutMs: number;
+  onError: PluginDecl["onError"];
+  onFail: PluginDecl["onFail"];
+  locked: boolean;
+  required: boolean;
+  reads: PluginDecl["reads"];
+  /** Paused from the console until unpaused or restarted. */
+  paused: boolean;
   pausedUntil: number;
   failOpens: number;
   stages: Partial<Record<PluginStage, { calls: number; errors: number; refused: number; flagged: number; skipped: number; p50: number; p95: number }>>;
@@ -134,7 +147,7 @@ export function widened(name: string, declared: Declared, narrowed: Declared | n
   return null;
 }
 
-function validDeclared(v: unknown): Declared | null {
+export function validDeclared(v: unknown): Declared | null {
   if (typeof v !== "object" || v === null) return null;
   const out: Declared = {};
   for (const [k, stages] of Object.entries(v)) {
@@ -190,6 +203,25 @@ export function replyText(raw: string): string | null {
   return any ? out : null;
 }
 
+/** Why a service could not be reached, said the way an operator can act on it. */
+function unreachable(base: string, e: unknown): string {
+  if (e instanceof Error && e.name === "TimeoutError") return `${base}/manifest gave no answer in 5 s`;
+  const code = (e as { cause?: { code?: string } }).cause?.code;
+  const why: Record<string, string> = { ECONNREFUSED: "nothing is listening there", ENOTFOUND: "that host name does not resolve", EHOSTUNREACH: "that host cannot be reached", ECONNRESET: "the connection was reset" };
+  return `could not reach ${base}: ${(code && why[code]) ?? (code ? code : e instanceof Error ? e.message : String(e))}`;
+}
+
+/** A plugin's source as the console shows it: a URL loses any credentials and query. */
+function shownUse(use: string): string {
+  if (!/^https?:/.test(use)) return use;
+  try {
+    const u = new URL(use);
+    return u.origin + (u.pathname === "/" ? "" : u.pathname);
+  } catch {
+    return "(a URL)";
+  }
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout;
   return Promise.race([
@@ -209,6 +241,7 @@ interface Loaded {
   fails: number;
   pausedUntil: number;
   failOpens: number;
+  paused: boolean;
   stats: Partial<Record<PluginStage, Stat>>;
 }
 
@@ -224,7 +257,7 @@ export class Plugins {
   /** Loads every plugin. One that fails is turned off and logged, unless it is `required`. */
   async start(): Promise<void> {
     for (const [name, decl] of Object.entries(this.cfg.plugins)) {
-      const l: Loaded = { name, decl, declared: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, stats: {} };
+      const l: Loaded = { name, decl, declared: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {} };
       this.loaded.push(l);
       if (this.opts.off) continue;
       try {
@@ -264,11 +297,22 @@ export class Plugins {
     if (!LIVE_KINDS.has(kind)) return [];
     const own = router === null ? {} : this.cfg.routers[router]?.plugins ?? {};
     return this.loaded
-      .filter((l) => l.state === "running" && l.kinds[kind] !== undefined && own[l.name] !== "off")
+      .filter((l) => l.state === "running" && !l.paused && l.kinds[kind] !== undefined && own[l.name] !== "off")
       .map((l) => {
         const o = own[l.name];
         return { name: l.name, config: typeof o === "object" ? o.config : l.decl.config };
       });
+  }
+
+  /** Pauses or resumes a running plugin until the next restart. A locked plugin is never paused. */
+  pause(name: string, paused: boolean): string | null {
+    const l = this.loaded.find((x) => x.name === name);
+    if (!l) return `no plugin named ${name}`;
+    if (l.state !== "running") return `${name} is not running`;
+    if (paused && l.decl.locked) return `${name} is locked: it runs on every request it handles`;
+    if (l.paused !== paused) this.log.info(paused ? "plugin.paused_by_operator" : "plugin.resumed", { plugin: name });
+    l.paused = paused;
+    return null;
   }
 
   private get(name: string): Loaded {
@@ -395,7 +439,9 @@ export class Plugins {
       return s[Math.min(s.length - 1, Math.floor(q * s.length))]!;
     };
     return this.loaded.map((l) => ({
-      name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, pausedUntil: l.pausedUntil, failOpens: l.failOpens,
+      name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, declared: l.declared, use: shownUse(l.decl.use),
+      when: l.decl.when, timeoutMs: l.decl.timeoutMs, onError: l.decl.onError, onFail: l.decl.onFail, locked: l.decl.locked,
+      required: l.decl.required, reads: l.decl.reads, paused: l.paused, pausedUntil: l.pausedUntil, failOpens: l.failOpens,
       stages: Object.fromEntries(Object.entries(l.stats).map(([stage, st]) => [stage, {
         calls: st.calls, errors: st.errors, refused: st.refused, flagged: st.flagged, skipped: st.skipped, p50: pct(st.ms, 0.5), p95: pct(st.ms, 0.95),
       }])),
@@ -433,15 +479,24 @@ export class Plugins {
     return { declared, hooks };
   }
 
+  /** What a service says it handles, read the way startup reads it; for the console, before it is added. */
+  static async manifest(url: string, key: string | null): Promise<Declared> {
+    const base = url.replace(/\/$/, "");
+    const res = await fetch(`${base}/manifest`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(5_000) }).catch((e: unknown) => {
+      throw new Error(unreachable(base, e));
+    });
+    if (!res.ok) throw new Error(`${base}/manifest answered ${res.status}${res.status === 401 || res.status === 403 ? ": it wants a key" : ""}`);
+    const m = (await res.json().catch(() => null)) as { apiVersion?: unknown; kinds?: unknown } | null;
+    if (m?.apiVersion !== 1) throw new Error(`${base}/manifest is not a hearth plugin manifest (apiVersion 1)`);
+    const declared = validDeclared(m.kinds);
+    if (!declared) throw new Error(`${base}/manifest declares kinds or stages hearth does not know`);
+    return declared;
+  }
+
   private async loadService(_name: string, decl: PluginDecl, internal: PluginContext["internal"]): Promise<{ declared: Declared; hooks: Hooks }> {
     const base = decl.use.replace(/\/$/, "");
     const auth: Record<string, string> = decl.key ? { authorization: `Bearer ${decl.key}` } : {};
-    const res = await fetch(`${base}/manifest`, { headers: auth, signal: AbortSignal.timeout(5_000) });
-    if (!res.ok) throw new Error(`${base}/manifest answered ${res.status}`);
-    const m = (await res.json()) as { apiVersion?: unknown; kinds?: unknown };
-    if (m.apiVersion !== 1) throw new Error(`${base}/manifest is not apiVersion 1`);
-    const declared = validDeclared(m.kinds);
-    if (!declared) throw new Error(`${base}/manifest declares kinds hearth does not know`);
+    const declared = await Plugins.manifest(base, decl.key);
     const post = async (hook: PluginStage, payload: Record<string, unknown>, ms: number): Promise<unknown> => {
       const r = await fetch(base, {
         method: "POST",

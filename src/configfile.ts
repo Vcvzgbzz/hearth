@@ -410,6 +410,8 @@ export class ConfigFile {
   private savedAt: string | null = null;
   private error: string | null = null;
   private pending: string[] = [];
+  /** The plugins the file names, once it has been read since startup; null until then. */
+  private onDisk: HearthConfig["plugins"] | null = null;
   private watcher: FSWatcher | null = null;
   private debounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -501,6 +503,18 @@ export class ConfigFile {
     if (!v) throw new ConfigRefusal(404, "no version by that hash is kept", null);
     this.syncFromDisk();
     return this.commit(v.text, dryRun, `back to ${v.name || v.at}`);
+  }
+
+  /** The plugins in the file, where they differ from the running ones: what a restart would add, change or remove. */
+  pluginChanges(): { name: string; change: "added" | "changed" | "removed" }[] {
+    const disk = this.onDisk;
+    const running = this.live.plugins;
+    if (!disk) return [];
+    type Change = { name: string; change: "added" | "changed" | "removed" };
+    return [...new Set([...Object.keys(disk), ...Object.keys(running)])].flatMap((name): Change[] =>
+      !(name in running) ? [{ name, change: "added" }]
+      : !(name in disk) ? [{ name, change: "removed" }]
+      : JSON.stringify(disk[name]) !== JSON.stringify(running[name]) ? [{ name, change: "changed" }] : []);
   }
 
   status(): ConfigStatus {
@@ -686,6 +700,7 @@ export class ConfigFile {
       live[k] = fresh[k];
     }
     this.pending = this.restartPendingFor(next);
+    this.onDisk = next.plugins;
     this.error = null;
     this.onChange();
   }

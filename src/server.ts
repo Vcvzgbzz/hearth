@@ -37,7 +37,7 @@ import { bugReport } from "./report.js";
 import { chatOf, MessagesResponse } from "./messages.js";
 import { troubleSays } from "./backend.js";
 import { getJson, send, UpstreamError, type UpstreamResponse } from "./upstream.js";
-import { PluginRefusal, Plugins, replyText, type Active, type HookRequest } from "./plugins.js";
+import { LIVE_KINDS, LIVE_STAGES, PluginRefusal, Plugins, replyText, type Active, type HookRequest } from "./plugins.js";
 
 /** Constant-time compare over sha256 digests, so neither length nor content leaks. */
 function secretEq(a: string, b: string): boolean {
@@ -1461,7 +1461,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/peers/join", methods: ["POST"], auth: "local", handler: routeJoin },
     { path: "/peers/machine", methods: ["GET"], auth: "local", handler: routePeerMachine },
     { path: "/usage", methods: ["GET"], auth: "local", handler: routeUsage },
-    { path: "/plugins", methods: ["GET"], auth: "local", handler: async (c) => json(c.res, 200, { plugins: plugins.status() }) },
+    { path: "/plugins", methods: ["GET", "POST"], auth: "local", handler: routePlugins },
+    { path: "/plugins/probe", methods: ["POST"], auth: "local", handler: routePluginProbe },
     { path: "/report", methods: ["GET"], auth: "local", handler: routeReport },
     { path: "/backends/probe", methods: ["POST"], auth: "local", handler: routeProbe },
 
@@ -2039,6 +2040,40 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
 
   // Asks a server what it serves before it is a backend, with the key it would be sent: the answer is its
   // model ids, or in a few words why there are none. Nothing is kept.
+  /** GET: every plugin's state and numbers. POST `{name, paused}`: pause or resume one until the next restart. */
+  async function routePlugins(c: Call): Promise<void> {
+    if (c.req.method === "GET") {
+      json(c.res, 200, { plugins: plugins.status() });
+      return;
+    }
+    try {
+      const body = await readJson(c.req);
+      if (typeof body.name !== "string" || typeof body.paused !== "boolean") throw new Refusal(400, "send {name, paused: true|false}");
+      const problem = plugins.pause(body.name, body.paused);
+      if (problem) throw new Refusal(409, problem);
+      json(c.res, 200, { plugins: plugins.status() });
+    } catch (e) {
+      fail(c.res, e);
+    }
+  }
+
+  /** POST `{url, key?}`: what a plugin service declares at its /manifest, before it is added. */
+  async function routePluginProbe(c: Call): Promise<void> {
+    try {
+      const body = await readJson(c.req);
+      if (typeof body.url !== "string" || !/^https?:\/\/[^/]/.test(body.url.trim())) throw new Refusal(400, "url is an http(s) URL");
+      const key = typeof body.key === "string" && body.key.trim() !== "" ? resolveSecret(body.key.trim(), "key") : null;
+      const url = body.url.trim();
+      try {
+        json(c.res, 200, { ok: true, url, kinds: await Plugins.manifest(url, key) });
+      } catch (e) {
+        json(c.res, 200, { ok: false, url, problem: e instanceof Error ? e.message : String(e) });
+      }
+    } catch (e) {
+      fail(c.res, e instanceof ConfigError ? new Refusal(400, e.message) : e);
+    }
+  }
+
   async function routeProbe(c: Call): Promise<void> {
     try {
       const body = await readJson(c.req);
@@ -3224,6 +3259,27 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     update: () => node.update,
     // A copy, so the page's last frame keeps what it had and the next change is seen as one.
     recent: () => [...recent],
+    pipeline: () => {
+      // The callers the console draws everywhere: everyone else, this machine, and each labelled key.
+      const callers = ["*", "local", ...cfg.apiKeyLabels.filter(Boolean)];
+      const routerOfCaller = (c: string) => cfg.callers[c] ?? cfg.callers["*"] ?? DEFAULT_ROUTER;
+      /** The settings a router's own entry changes, by name only: a value can be a secret. */
+      const changed = (plugin: string, own: Record<string, unknown>) => {
+        const global = cfg.plugins[plugin]?.config ?? {};
+        return [...new Set([...Object.keys(global), ...Object.keys(own)])].filter((k) => JSON.stringify(global[k]) !== JSON.stringify(own[k])).sort();
+      };
+      return {
+        plugins: plugins.status(),
+        liveKinds: [...LIVE_KINDS],
+        liveStages: [...LIVE_STAGES],
+        pending: config.pluginChanges(),
+        routers: Object.fromEntries([DEFAULT_ROUTER, ...Object.keys(cfg.routers).filter((n) => n !== DEFAULT_ROUTER)].map((name) => [name, {
+          plugins: Object.fromEntries(Object.entries(cfg.routers[name]?.plugins ?? {}).map(([p, v]) => [p, v === "off" ? "off" : "own"])),
+          changes: Object.fromEntries(Object.entries(cfg.routers[name]?.plugins ?? {}).flatMap(([p, v]) => (v === "off" ? [] : [[p, changed(p, v.config)]]))),
+          callers: callers.filter((c) => routerOfCaller(c) === name),
+        }])),
+      };
+    },
   });
 
   /** Expired sessions, swept like any other in-memory state; unref'd so it never holds the process. */

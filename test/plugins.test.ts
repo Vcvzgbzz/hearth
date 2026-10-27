@@ -8,6 +8,7 @@
  *   - a plugin's own call back into the node runs no plugins, and does not deadlock a one-slot backend
  *   - a router can turn a plugin off; `--no-plugins` starts with none; a required plugin that fails stops startup
  *   - a service is sent only what it reads
+ *   - the console can pause a plugin until a restart, never a locked one, and reads a service's manifest before it is added
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -154,7 +155,7 @@ plugins:
   memory: {use: "file:./memory.mjs", trust: code, integrity: "${integrity("memory")}", config: {fact: "likes tea"}}
   imageonly: {use: "file:./imageonly.mjs", trust: code}
   wrongkind: {use: "file:./wrongkind.mjs", trust: code, kinds: {image: [request]}}
-  guard: {use: "file:./guard.mjs", trust: code}
+  guard: {use: "file:./guard.mjs", trust: code, locked: true}
   flaky: {use: "file:./flaky.mjs", trust: code, timeoutMs: 100}
   strict: {use: "file:./strict.mjs", trust: code, onError: refuse}
   caller: {use: "file:./caller.mjs", trust: code, timeoutMs: 5000}
@@ -259,6 +260,40 @@ const settle = () => new Promise((r) => setTimeout(r, 60));
     const listed = await fetch(`${url}/plugins`, { headers: { Authorization: "Bearer k-app" } });
     assert.equal(listed.status, 200);
     assert.ok(((await listed.json()) as { plugins: unknown[] }).plugins.length >= 10);
+
+    // The console pauses a plugin until a restart; a locked one runs on regardless.
+    const pause = (name: string, paused: boolean) => fetch(`${url}/plugins`, { method: "POST", headers: { Authorization: "Bearer k-app", "Content-Type": "application/json" }, body: JSON.stringify({ name, paused }) });
+    assert.equal((await pause("guard", true)).status, 409, "a locked plugin is never paused");
+    assert.equal((await pause("memory", true)).status, 200);
+    const paused = await chat(url, "hi");
+    await paused.text();
+    assert.equal(seen.at(-1)!.messages[0]!.role, "user", "a paused plugin does not run");
+    const shown = node.plugins.status().find((p) => p.name === "memory")!;
+    assert.equal(shown.paused, true);
+    assert.equal(shown.use, "file:./memory.mjs");
+    assert.equal(node.plugins.status().find((p) => p.name === "service")!.use, serviceUrl, "a service shows its address and nothing it was given");
+    assert.equal((await pause("memory", false)).status, 200);
+    const back2 = await chat(url, "hi");
+    await back2.text();
+    assert.deepEqual(seen.at(-1)!.messages[0], { role: "system", content: "remembered: likes tea" }, "and runs again once resumed");
+
+    // The page's view: who goes by each router, and nothing waiting on a restart.
+    const ui = (await (await fetch(`${url}/ui/data`)).json()) as { pipeline: { pending: unknown[]; routers: Record<string, { callers: string[]; plugins: Record<string, string> }> } };
+    assert.deepEqual(ui.pipeline.pending, []);
+    assert.deepEqual(ui.pipeline.routers.quiet, { plugins: { memory: "off" }, changes: {}, callers: ["quiet"] });
+    assert.ok(ui.pipeline.routers.default!.callers.includes("*") && ui.pipeline.routers.default!.callers.includes("local"));
+    // A plugin written to the file waits for a restart, and the page says so.
+    const added = await fetch(`${url}/config`, { method: "PATCH", headers: { Authorization: "Bearer k-app", "Content-Type": "application/json" }, body: JSON.stringify({ ops: [{ path: ["plugins", "later"], value: { use: serviceUrl, trust: "http", key: "env:TEST_PLUGIN_KEY" } }] }) });
+    assert.equal(added.status, 200, await added.text());
+    const after = (await (await fetch(`${url}/ui/data`)).json()) as { pipeline: { pending: unknown[] } };
+    assert.deepEqual(after.pipeline.pending, [{ name: "later", change: "added" }]);
+
+    // The console checks a service before adding it: what it declares, or why it cannot be read.
+    const probe = (body: unknown) => fetch(`${url}/plugins/probe`, { method: "POST", headers: { Authorization: "Bearer k-app", "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json() as Promise<{ ok: boolean; kinds?: unknown; problem?: string }>);
+    assert.deepEqual(await probe({ url: serviceUrl, key: "env:TEST_PLUGIN_KEY" }), { ok: true, url: serviceUrl, kinds: { chat: ["request"] } });
+    const keyless = await probe({ url: serviceUrl });
+    assert.equal(keyless.ok, false);
+    assert.match(keyless.problem ?? "", /wants a key/);
   } finally {
     await node.close();
   }
