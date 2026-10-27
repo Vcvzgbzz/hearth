@@ -37,6 +37,22 @@ Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   published versions, and fitting the picture in view.
 - **Routing**: every model name, the rules some pass through, and where each
   ends up, as a map you edit. See [Editing on the graph](#editing-on-the-graph).
+- **Pipeline**: what runs on a request, in the order it runs: one list, stage
+  by stage, with hearth's own steps (route, queue and call the model, return
+  the reply) between the stages. Pick a request kind, and pick a router under
+  **Viewing as** to see the chain its callers get: plugins it turns off stay in
+  place, muted, and the rest are numbered in run order; ones it gives settings
+  of its own are marked. A row shows a problem (did not start, erroring, slow,
+  resting after failures) only when there is one. Kinds and stages a plugin
+  declares that this version does not run are shown dashed, apart from the
+  rest. Clicking a plugin opens its numbers, where it runs, what each router
+  does with it and its settings; the switch pauses it everywhere until resumed
+  or restarted. A locked plugin cannot be paused. **Add plugin** adds a
+  service: hearth reads what it handles from its `/manifest`, you choose what
+  it is sent, what happens when it fails, and whether it is locked, and the
+  entry is written to `hearth.yaml` after the usual review; it starts on the
+  next restart. Code that runs inside hearth is added in the file by hand. See
+  [Plugins](plugins.md).
 - **Models**: every model on one row: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or

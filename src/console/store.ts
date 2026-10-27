@@ -18,7 +18,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "models", "lending", "keys", "queue", "logs", "config"] as const;
+export const PAGE_IDS = ["topology", "routing", "pipeline", "models", "lending", "keys", "queue", "logs", "config"] as const;
 export type Page = (typeof PAGE_IDS)[number];
 /** The page the address names; anything else is the first one. */
 export const pageOf = (): Page => PAGE_IDS.find((p) => p === location.hash.slice(1)) ?? "topology";
@@ -391,5 +391,16 @@ export async function control(body: Record<string, unknown>, done: string): Prom
   } catch (e) {
     toast("bad", e instanceof Error ? e.message : String(e));
     return false;
+  }
+}
+
+/** Pause or resume a plugin until the next restart. */
+export async function pausePlugin(name: string, paused: boolean): Promise<void> {
+  try {
+    await request("POST", "/plugins", { name, paused });
+    await refresh();
+    toast("ok", paused ? `${name} paused until resumed or restarted` : `${name} resumed`);
+  } catch (e) {
+    toast("bad", e instanceof Error ? e.message : String(e));
   }
 }

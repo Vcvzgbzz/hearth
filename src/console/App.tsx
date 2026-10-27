@@ -1,5 +1,5 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, Workflow, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
@@ -11,6 +11,7 @@ import type { UiData } from "./types.js";
 import { go, login, logout, pageOf, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
+import { Pipeline } from "./Pipeline.js";
 import { Routing } from "./Routing.js";
 import { Lending } from "./Lending.js";
 import { Topology } from "./Topology.js";
@@ -19,6 +20,7 @@ import { Button, Card, cx, Dialog, Pill } from "./ui.js";
 const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "routing", label: "Routing", icon: Split },
+  { id: "pipeline", label: "Pipeline", icon: Workflow },
   { id: "models", label: "Models", icon: Boxes },
   { id: "lending", label: "Lending", icon: Handshake },
   { id: "keys", label: "Keys", icon: KeyRound },
@@ -167,9 +169,42 @@ function findings(d: UiData): Finding[] {
       });
     }
   }
+  for (const p of d.pipeline?.plugins ?? []) {
+    if (p.state === "failed") out.push({ tone: "bad", text: `plugin ${p.name} did not start`, go: () => go("pipeline") });
+    else if (p.pausedUntil > now) out.push({ tone: "bad", text: `plugin ${p.name} is resting after repeated failures`, go: () => go("pipeline") });
+  }
   if (d.config.restartPending.length) out.push({ tone: "warn", text: `restart to apply ${d.config.restartPending.join(", ")}`, go: () => go("config") });
   if (d.update) out.push({ tone: "warn", text: `hearth ${d.update} is out`, go: () => { window.open("https://github.com/Vcvzgbzz/hearth/releases", "_blank", "noopener"); } });
   return out;
+}
+
+/** The findings past the worst one, listed on a click, each going where it is fixed. */
+function MoreFindings({ rest }: { rest: Finding[] }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", key);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", key); };
+  }, [open]);
+  return (
+    <>
+      <button aria-expanded={open} onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+              className="shrink-0 rounded-md px-1.5 py-0.5 text-[12px] text-dim hover:bg-muted hover:text-fg">+{rest.length} more</button>
+      {open && (
+        <div role="menu" className="absolute left-0 top-full z-30 mt-1 w-max max-w-[min(32rem,90vw)] rounded-lg border border-line bg-panel py-1 shadow-lg">
+          {rest.map((x) => (
+            <button key={x.text} role="menuitem" onClick={x.go}
+                    className={cx("flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-muted", x.tone === "bad" ? "text-bad" : "text-warn")}>
+              {x.tone === "bad" ? <XCircle size={13} className="shrink-0" /> : <AlertTriangle size={13} className="shrink-0" />}{x.text}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
 }
 
 /** One sentence answering "is anything wrong?": the worst finding, or what is working when nothing is. */
@@ -192,12 +227,14 @@ function Health() {
   const [worst, ...rest] = f;
   const Icon = worst!.tone === "bad" ? XCircle : AlertTriangle;
   return (
-    <button onClick={worst!.go} title={f.map((x) => x.text).join("\n")}
-            className={cx("flex min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-[12px] hover:bg-muted", worst!.tone === "bad" ? "text-bad" : "text-warn")}>
-      <Icon size={14} className="shrink-0" />
-      <span className="truncate">{worst!.text}</span>
-      {rest.length > 0 && <span className="shrink-0 text-dim">+{rest.length} more</span>}
-    </button>
+    <span className="relative flex min-w-0 items-center gap-1">
+      <button onClick={worst!.go} title={worst!.text}
+              className={cx("flex min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-[12px] hover:bg-muted", worst!.tone === "bad" ? "text-bad" : "text-warn")}>
+        <Icon size={14} className="shrink-0" />
+        <span className="truncate">{worst!.text}</span>
+      </button>
+      {rest.length > 0 && <MoreFindings rest={rest} />}
+    </span>
   );
 }
 
@@ -377,7 +414,7 @@ export default function App() {
             ? <span title="This node is not answering. The page shows what it last said, and keeps trying."><Pill tone="bad">unreachable</Pill></span>
             : <span title={live ? "Updates are pushed as they happen." : polling ? "The live stream is not getting through, so the page asks every few seconds." : "Waiting for the live stream."}><Pill tone={live ? "ok" : "warn"} pulse={live}>{live ? "live" : polling ? "polling" : "reconnecting…"}</Pill></span>}
           {data?.operator && <span className="max-sm:hidden"><Pill tone="ok">signed in as {data.operator}</Pill></span>}
-          <div className="ml-2 min-w-0 flex-1 overflow-hidden"><Health /></div>
+          <div className="ml-2 min-w-0 flex-1"><Health /></div>
           <div className="flex shrink-0 items-center gap-3">
             {data && <button onClick={() => setEndpoints(true)} className="flex items-center gap-1.5 text-[12px] text-dim hover:text-fg" title="the addresses to point apps at"><Globe size={14} /> endpoints</button>}
             {data?.operator && (
@@ -434,6 +471,7 @@ export default function App() {
           <div className="relative flex min-h-0 flex-1 flex-col">
             {page !== "config" && <NodeSmoke />}
             <div className="relative min-h-0 flex-1 overflow-auto p-5" data-smoke="floor">
+              {page === "pipeline" && <Pipeline />}
               {page === "models" && <Models />}
               {page === "lending" && <Lending />}
               {page === "keys" && <Keys />}

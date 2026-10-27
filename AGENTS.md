@@ -29,7 +29,8 @@ comment is read by strangers. Write for them.
   notice (`updateCheck`)
 - `src/console/`: the React status page and config editor (built to `dist/`).
   The Lending page is `Lending.tsx`; the recent-requests rail beside the
-  Topology map is `Rail.tsx`; the ASCII smoke behind the Queue, Models,
+  Topology map is `Rail.tsx`; the Pipeline page (plugins in run order) is
+  `Pipeline.tsx` and its Add plugin dialog `AddPlugin.tsx`; the ASCII smoke behind the Queue, Models,
   Keys and Lending pages, and behind the sidebar beside the maps, is
   `Smoke.tsx`, and what the node's load does to its fire is `fire.ts`. The
   routing map is `Routing.tsx` (layout),

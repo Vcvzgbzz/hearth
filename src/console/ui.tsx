@@ -55,7 +55,7 @@ export function Dialog({ title, label, head, size = "md", firm = false, onClose,
     return () => { window.removeEventListener("keydown", key); before?.focus(); };
   }, []);
   return createPortal(
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-6 max-sm:p-2" onMouseDown={(e) => { if (e.target === e.currentTarget && !firm) onClose(); }}>
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-6 max-sm:p-2" onMouseDown={(e) => { if (e.target === e.currentTarget && !firm) onClose(); }}>
       <div ref={panel} role="dialog" aria-modal="true" aria-label={label ?? (typeof title === "string" ? title : undefined)} tabIndex={-1}
            className={cx("flex max-h-full w-full flex-col rounded-xl border border-line bg-panel text-fg shadow-2xl outline-none", DIALOG[size])}>
         <div className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-3">
