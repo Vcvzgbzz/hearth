@@ -464,13 +464,14 @@ export function withDo(doc: Doc, flow: string, i: number, action: string, on: bo
 /** A plugin placed on a step, as the file writes it: its name, or `{ use, models }` with the models this line wires. */
 export type Placed = { name: string; models: Record<string, string> };
 
-/** The plugins a step places, in the order they run. */
+/** The plugins a step places, in the order they run: as the file writes them, or as the node reports them (`{ name, models }`). */
 export function placedOn(step: { plugins?: unknown }): Placed[] {
   if (!Array.isArray(step.plugins)) return [];
   return step.plugins.flatMap((p): Placed[] => {
     if (typeof p === "string") return [{ name: p, models: {} }];
     const o = obj(p);
-    return typeof o.use === "string" ? [{ name: o.use, models: Object.fromEntries(Object.entries(obj(o.models)).filter((e): e is [string, string] => typeof e[1] === "string")) }] : [];
+    const name = typeof o.use === "string" ? o.use : typeof o.name === "string" ? o.name : null;
+    return name === null ? [] : [{ name, models: Object.fromEntries(Object.entries(obj(o.models)).filter((e): e is [string, string] => typeof e[1] === "string")) }];
   });
 }
 

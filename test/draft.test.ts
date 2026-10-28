@@ -547,6 +547,7 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   const off = withPlugin(withPlugin(wired, "r", 0, "a", false)!, "r", 0, "b", false)!;
   assert.equal(step(off).plugins, undefined, "none left takes the key away");
   assert.equal(directTo("x", { inputs: ["x"], steps: [{ to: "m", plugins: ["a"] }] }), null, "a line with plugins is drawn as a rule");
+  assert.deepEqual(placedOn({ plugins: [{ name: "a", models: { embed: "e" } }] }), [{ name: "a", models: { embed: "e" } }], "the node's own report of a line reads the same");
 }
 
 console.log("draft.test.ts ok");
