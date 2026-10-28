@@ -55,7 +55,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     historyFile: { type: "text", desc: "A file that keeps the console's day of history, recent logs and the month of usage per caller across restarts. Unset keeps them in memory." },
     tailscaleSocket: { type: "text", desc: "Where this machine's tailscaled answers, for checking a peer that sets `tailnet`.", def: "/var/run/tailscale/tailscaled.sock" },
     routers: { type: "raw", desc: "Rulebooks besides `flows:`: `routers.<name>` has `flows` in the same shape, `plugins` to turn a global plugin `off` or give it its own `config`, and `strict` so a request runs on the model its line names or fails: no next line after a failure, no route fallback. `callers:` says who goes by one." },
-    plugins: { type: "raw", desc: "Code or services that read or change requests at the stages they hook: `plugins.<name>` with `use` (file:, npm: or a URL), `trust` (code or http), `key` (a service's bearer token, `env:NAME`), `kinds`, `when`, `timeoutMs`, `onError`, `onFail`, `locked`, `reads` and `config`. Read once at startup. See docs/plugins.md." },
+    plugins: { type: "raw", desc: "Code or services that read or change requests: `plugins.<name>` with `use` (file:, npm: or a URL), `trust` (code or http), `key` (a service's bearer token, `env:NAME`), `kinds`, `when`, `timeoutMs`, `onError`, `onFail`, `locked`, `reads`, `models` (its model slots, wired), `everyLine` (run on every request rather than where a flow step places it) and `config`. Read once at startup. See docs/plugins.md." },
     callers: { type: "raw", desc: "Which rulebook a caller goes by: an api key's label, `local`, or `*` for everyone else, each to a name under `routers:` or `default` for `flows:`. Unset, everyone goes by `flows:`." },
     layout: { type: "raw", desc: "Where the console's topology draws the nodes you have placed. Written by its editor." },
     stateFile: { type: "raw", desc: "A pre-2.0 console sidecar, folded into this file once at startup." },
@@ -110,7 +110,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     takes: { type: "list", desc: "Request paths this flow answers besides chat, each as a backend declares it under routes: (image generation and the like). Unset is chat." },
     sticky: { type: "ms", min: 1000, desc: "How long a conversation stays where this flow first sent it, so later turns keep the same model. Unset decides every turn afresh." },
     inputs: { type: "refs", ref: "models", desc: "The ids whose requests enter this flow. An id enters at most one." },
-    steps: { type: "raw", desc: "Tried in order, first match wins: `when: {…}`, `to:` a model, `{ peer }`, `{ flow }`, `{ fastest: […] }` or `{ refuse }`, with optional `lane`, `params`, `max` (requests in flight at once) and `do:` (actions to set off). The last has no `when`." },
+    steps: { type: "raw", desc: "Tried in order, first match wins: `when: {…}`, `to:` a model, `{ peer }`, `{ flow }`, `{ fastest: […] }` or `{ refuse }`, with optional `lane`, `params`, `max` (requests in flight at once), `do:` (actions to set off) and `plugins:` (plugins run, in order, on what it sends to a model; `{ use, models }` wires this line's own models). The last has no `when`." },
   },
   action: {
     on: { type: "enum", options: ["decided", "finished", "failed"], desc: "When it runs: as the step decides, once the request has finished (either way), or only when it failed.", def: "decided" },
@@ -136,6 +136,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
   },
   model: {
     note: { type: "text", desc: "What the model is for, shown to borrowers and as description on /v1/models." },
+    kind: { type: "enum", options: ["chat", "embeddings", "rerank", "image", "video", "speech", "transcription", "other"], desc: "What kind of request it takes. A plugin's model slot is offered only models of the kind it needs.", def: "chat" },
     as: { type: "ref", ref: "models", desc: "The id this one goes out as: an alias for another model." },
     backend: { type: "ref", ref: "backends", desc: "Pin to a backend instead of resolving it from the catalogs." },
     follow: { type: "bool", desc: "Go out as whatever the pinned backend has loaded, else as `as`. Needs backend and as.", def: false },

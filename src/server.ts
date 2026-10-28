@@ -37,7 +37,7 @@ import { bugReport } from "./report.js";
 import { chatOf, MessagesResponse } from "./messages.js";
 import { troubleSays } from "./backend.js";
 import { getJson, send, UpstreamError, type UpstreamResponse } from "./upstream.js";
-import { LIVE_KINDS, LIVE_STAGES, PluginRefusal, Plugins, replyText, type Active, type HookRequest } from "./plugins.js";
+import { LIVE_KINDS, LIVE_STAGES, placements, PluginRefusal, Plugins, replyText, type Active, type HookRequest } from "./plugins.js";
 
 /** Constant-time compare over sha256 digests, so neither length nor content leaks. */
 function secretEq(a: string, b: string): boolean {
@@ -850,7 +850,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     let error: string | null = null;
     let status = 0;
     const startedAt = Date.now();
-    const reply = r.plugins && plugins.wantsReply(r.plugins.active) ? keepCopy(r.res) : null;
+    // Kept before routing has said which line's plugins join, so any plugin that may read the reply has it.
+    const reply = r.plugins && plugins.anyWantsReply() ? keepCopy(r.res) : null;
     try {
       status = await route(r, ended);
       if (status >= 400) error = `backend answered ${status}`;
@@ -986,6 +987,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     if (r.plugins && decision.target !== "unavailable") {
       const p = r.plugins;
       p.hook = { ...p.hook, ...where(decision), lane, body: payload };
+      // The step that sent it to a model places its own plugins, after those that run on every line.
+      const step = decision.path.at(-1);
+      if (step) p.active = [...p.active, ...plugins.forLine("chat", flowsNow[step.flow]?.steps[step.step]?.plugins ?? [], { router: routerNameOf(caller), flow: step.flow, step: step.step })];
       let after;
       try {
         after = await plugins.run("routed", p.active, p.hook);
@@ -2065,7 +2069,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       const key = typeof body.key === "string" && body.key.trim() !== "" ? resolveSecret(body.key.trim(), "key") : null;
       const url = body.url.trim();
       try {
-        json(c.res, 200, { ok: true, url, kinds: await Plugins.manifest(url, key) });
+        json(c.res, 200, { ok: true, url, ...(await Plugins.manifest(url, key)) });
       } catch (e) {
         json(c.res, 200, { ok: false, url, problem: e instanceof Error ? e.message : String(e) });
       }
@@ -2640,7 +2644,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       // A plugin's own calls, and every request when plugins are off, run none.
       const active = c.internal ? [] : plugins.forRequest("chat", routerNameOf(caller));
       let state: ChatRequest["plugins"];
-      if (active.length > 0) {
+      // A request any plugin might see carries their state: plugins on the line it takes join once routing has decided.
+      if (!c.internal && plugins.any()) {
         const hook: HookRequest = { id: asking.getStore()?.id ?? "", kind: "chat", asked: model, caller, router: routerNameOf(caller), lane, headers, body: payload };
         let before;
         try {
@@ -3259,7 +3264,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     update: () => node.update,
     // A copy, so the page's last frame keeps what it had and the next change is seen as one.
     recent: () => [...recent],
-    pipeline: () => {
+    plugins: () => {
       // The callers the console draws everywhere: everyone else, this machine, and each labelled key.
       const callers = ["*", "local", ...cfg.apiKeyLabels.filter(Boolean)];
       const routerOfCaller = (c: string) => cfg.callers[c] ?? cfg.callers["*"] ?? DEFAULT_ROUTER;
@@ -3270,6 +3275,10 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       };
       return {
         plugins: plugins.status(),
+        // Where each plugin is placed, and what each line wires into its slots.
+        placed: placements(cfg).map((x) => ({ plugin: x.plugin.name, ...x.line, kind: x.kind, models: x.plugin.models })),
+        // What each model takes, for the slot pickers; a model not listed is chat.
+        modelKinds: cfg.modelKinds,
         liveKinds: [...LIVE_KINDS],
         liveStages: [...LIVE_STAGES],
         pending: config.pluginChanges(),

@@ -112,14 +112,14 @@ export interface ViewDeps {
   update: () => string | null;
   /** The requests this node made most recently, newest first. */
   recent: () => readonly RecentCall[];
-  /** Plugins and what each router does with them, for the Pipeline page. */
-  pipeline: () => unknown;
+  /** Plugins, where they are placed and what each router does with them, for the Plugins page and the Routing map. */
+  plugins: () => unknown;
 }
 
 /** Which console this node serves. A page that was loaded from another one reloads itself when it sees this change. */
 const build = createHash("sha256").update(CONSOLE_HTML).digest("hex").slice(0, 12);
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults, update, recent, pipeline }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults, update, recent, plugins }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -182,7 +182,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       lendDefaults: lendDefaults(),
       update: update(),
       recent: recent(),
-      pipeline: pipeline(),
+      plugins: plugins(),
       // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
       actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
       // Where the operator placed topology nodes; the page lays out the rest.

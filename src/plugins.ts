@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { PLUGIN_STAGES, REQUEST_KINDS, type HearthConfig, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind } from "./config.js";
+import { DEFAULT_ROUTER, PLUGIN_STAGES, REQUEST_KINDS, type Flow, type HearthConfig, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "./config.js";
 import type { Logger } from "./log.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */
@@ -20,6 +20,12 @@ export const LIVE_KINDS: ReadonlySet<RequestKind> = new Set(["chat"]);
 
 /** What a plugin says it handles, by kind; hearth holds it to this on every request. */
 export type Declared = Partial<Record<RequestKind, PluginStage[]>>;
+
+/** The models a plugin needs, as named slots, each taking one kind of model. */
+export type Needs = Record<string, { kind: RequestKind; optional?: boolean }>;
+
+/** Where a plugin was placed: a step of a flow, in a router's rules or the default ones. */
+export interface Line { router: string; flow: string; step: number }
 
 /** A request as a hook sees it. `model`, `target` and `peer` exist once routing has decided. */
 export interface HookRequest {
@@ -38,6 +44,10 @@ export interface HookRequest {
   lane: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  /** The model wired into each of this plugin's slots for this request; an empty optional slot is null. */
+  models?: Record<string, string | null>;
+  /** The line this plugin was placed on; null for a plugin that runs on every line. */
+  line?: Line | null;
 }
 
 /** A finished request, for `log` and `error`. */
@@ -82,6 +92,7 @@ export interface PluginModule {
   name?: string;
   apiVersion: 1;
   kinds: Declared;
+  needs?: Needs;
   setup: (ctx: PluginContext) => Promise<Hooks> | Hooks;
 }
 
@@ -102,6 +113,12 @@ export interface PluginStatus {
   kinds: Declared;
   /** What the plugin itself declares, before the config narrows it. */
   declared: Declared;
+  /** The model slots it declares. */
+  needs: Needs;
+  /** The models wired into its slots on the plugin itself. */
+  models: Record<string, string>;
+  /** Runs on every line; otherwise only where a step places it. */
+  everyLine: boolean;
   /** Where it comes from: a URL shows only its origin and path. */
   use: string;
   when: PluginWhen | null;
@@ -154,6 +171,20 @@ export function validDeclared(v: unknown): Declared | null {
     if (!(REQUEST_KINDS as readonly string[]).includes(k) || !Array.isArray(stages)) return null;
     if (stages.some((s) => !(PLUGIN_STAGES as readonly string[]).includes(s))) return null;
     out[k as RequestKind] = stages as PluginStage[];
+  }
+  return out;
+}
+
+/** A manifest's `needs`: slot name to the kind of model it takes. Absent is none; null when it is not that shape. */
+export function validNeeds(v: unknown): Needs | null {
+  if (v === undefined || v === null) return {};
+  if (typeof v !== "object" || Array.isArray(v)) return null;
+  const out: Needs = {};
+  for (const [slot, n] of Object.entries(v as Record<string, unknown>)) {
+    const need = n as { kind?: unknown; optional?: unknown } | null;
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(slot) || typeof need !== "object" || need === null) return null;
+    if (!(REQUEST_KINDS as readonly string[]).includes(need.kind as string)) return null;
+    out[slot] = { kind: need.kind as RequestKind, ...(need.optional === true ? { optional: true } : {}) };
   }
   return out;
 }
@@ -234,6 +265,7 @@ interface Loaded {
   name: string;
   decl: PluginDecl;
   declared: Declared;
+  needs: Needs;
   kinds: Declared;
   hooks: Hooks;
   state: PluginStatus["state"];
@@ -245,8 +277,24 @@ interface Loaded {
   stats: Partial<Record<PluginStage, Stat>>;
 }
 
-/** One plugin as it applies to one request: its hooks and the settings its router gives it. */
-export interface Active { name: string; config: Record<string, unknown> }
+/** One plugin as it applies to one request: its hooks, the settings its router gives it, its models and its line. */
+export interface Active { name: string; config: Record<string, unknown>; models: Record<string, string | null>; line: Line | null }
+
+/** What kind of request a flow's lines carry: chat, or what its routes are, which hearth does not know yet. */
+export const lineKind = (flow: Flow): RequestKind => (flow.takes !== undefined ? "other" : "chat");
+
+/** Every placement in the config: each step of each flow, in the default rules and every router's. */
+export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; plugin: StepPlugin }[] {
+  const out: { line: Line; kind: RequestKind; plugin: StepPlugin }[] = [];
+  const walk = (router: string, flows: Record<string, Flow>) => {
+    for (const [flow, f] of Object.entries(flows)) {
+      f.steps.forEach((st, step) => { for (const plugin of st.plugins ?? []) out.push({ line: { router, flow, step }, kind: lineKind(f), plugin }); });
+    }
+  };
+  walk(DEFAULT_ROUTER, cfg.flows);
+  for (const [name, r] of Object.entries(cfg.routers)) if (name !== DEFAULT_ROUTER) walk(name, r.flows);
+  return out;
+}
 
 export class Plugins {
   private loaded: Loaded[] = [];
@@ -257,22 +305,28 @@ export class Plugins {
   /** Loads every plugin. One that fails is turned off and logged, unless it is `required`. */
   async start(): Promise<void> {
     for (const [name, decl] of Object.entries(this.cfg.plugins)) {
-      const l: Loaded = { name, decl, declared: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {} };
+      const l: Loaded = { name, decl, declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {} };
       this.loaded.push(l);
       if (this.opts.off) continue;
       try {
         const token = randomBytes(24).toString("base64url");
         this.tokens.set(token, name);
         const internal = { url: this.opts.selfUrl(), token };
-        const { declared, hooks } = decl.trust === "code" ? await this.loadCode(name, decl, internal) : await this.loadService(name, decl, internal);
+        const { declared, needs, hooks } = decl.trust === "code" ? await this.loadCode(name, decl, internal) : await this.loadService(name, decl, internal);
         const wider = widened(name, declared, decl.kinds);
         if (wider) throw new Error(wider);
         l.declared = declared;
+        l.needs = needs;
         l.kinds = effectiveKinds(declared, decl.kinds);
+        const misplaced = this.misplaced(name, l.kinds, needs);
+        if (misplaced) throw new Error(misplaced);
         l.hooks = hooks;
         l.state = "running";
         const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
         this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
+        if (!decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+          this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
+        }
       } catch (e) {
         l.state = "failed";
         l.error = e instanceof Error ? e.message : String(e);
@@ -292,16 +346,70 @@ export class Plugins {
     return name ?? null;
   }
 
-  /** The plugins that apply to a request of this kind from this router, in config order. */
+  /** Why this plugin's placements or wired models do not fit it, said the way an operator can fix it; null when they do. */
+  private misplaced(name: string, kinds: Declared, needs: Needs): string | null {
+    const decl = this.cfg.plugins[name]!;
+    for (const x of placements(this.cfg).filter((p) => p.plugin.name === name)) {
+      if (!kinds[x.kind]) return `${name} is placed on ${x.line.flow} line ${x.line.step + 1}, which carries ${x.kind} requests; it handles ${Object.keys(kinds).join(", ") || "nothing"}`;
+    }
+    const wired = [decl.models, ...placements(this.cfg).filter((p) => p.plugin.name === name).map((p) => p.plugin.models)];
+    for (const models of wired) {
+      for (const [slot, id] of Object.entries(models)) {
+        const need = needs[slot];
+        if (!need) return `${name} has no model slot "${slot}" (it has ${Object.keys(needs).join(", ") || "none"})`;
+        const is = this.cfg.modelKinds[id] ?? "chat";
+        if (is !== need.kind) return `${name}'s ${slot} slot takes ${need.kind} models; ${id} is a ${is} model (set models.${id}.kind if that is wrong)`;
+      }
+    }
+    return null;
+  }
+
+  private running(l: Loaded, kind: RequestKind): boolean {
+    return l.state === "running" && !l.paused && l.kinds[kind] !== undefined;
+  }
+
+  /** The models a plugin uses on a line: the line's wiring over its own. null when a slot it needs is empty there. */
+  private slots(l: Loaded, onLine: Record<string, string>): Record<string, string | null> | null {
+    const wired = { ...l.decl.models, ...onLine };
+    const out: Record<string, string | null> = {};
+    for (const [slot, need] of Object.entries(l.needs)) {
+      const id = wired[slot];
+      if (id === undefined && !need.optional) return null;
+      out[slot] = id ?? null;
+    }
+    return out;
+  }
+
+  /** The plugins that run on every line for a request of this kind from this router, in config order. */
   forRequest(kind: RequestKind, router: string | null): Active[] {
     if (!LIVE_KINDS.has(kind)) return [];
     const own = router === null ? {} : this.cfg.routers[router]?.plugins ?? {};
     return this.loaded
-      .filter((l) => l.state === "running" && !l.paused && l.kinds[kind] !== undefined && own[l.name] !== "off")
-      .map((l) => {
+      .filter((l) => l.decl.everyLine && this.running(l, kind) && own[l.name] !== "off")
+      .flatMap((l) => {
         const o = own[l.name];
-        return { name: l.name, config: typeof o === "object" ? o.config : l.decl.config };
+        const models = this.slots(l, {});
+        return models ? [{ name: l.name, config: typeof o === "object" ? o.config : l.decl.config, models, line: null }] : [];
       });
+  }
+
+  /** The plugins a step places, for a request of this kind, in the step's order; one with an empty slot there is left out. */
+  forLine(kind: RequestKind, placed: readonly StepPlugin[], line: Line): Active[] {
+    if (!LIVE_KINDS.has(kind)) return [];
+    const own = this.cfg.routers[line.router]?.plugins ?? {};
+    return placed.flatMap((x) => {
+      const l = this.loaded.find((y) => y.name === x.name);
+      if (!l || !this.running(l, kind)) return [];
+      const models = this.slots(l, x.models);
+      if (!models) return [];
+      const o = own[l.name];
+      return [{ name: l.name, config: typeof o === "object" ? o.config : l.decl.config, models, line }];
+    });
+  }
+
+  /** Whether any plugin could run on a request at all, so the request carries what a line's plugins will need. */
+  any(): boolean {
+    return this.loaded.some((l) => l.state === "running");
   }
 
   /** Pauses or resumes a running plugin until the next restart. A locked plugin is never paused. */
@@ -343,7 +451,7 @@ export class Plugins {
       let d: Decision | void;
       try {
         if (Date.now() < l.pausedUntil) throw new Error("paused after repeated failures");
-        d = await withTimeout(Promise.resolve(fn(structuredClone(cur))), l.decl.timeoutMs, `plugin ${l.name}`);
+        d = await withTimeout(Promise.resolve(fn({ ...structuredClone(cur), models: a.models, line: a.line })), l.decl.timeoutMs, `plugin ${l.name}`);
         l.fails = 0;
       } catch (e) {
         st.errors++;
@@ -412,7 +520,7 @@ export class Plugins {
       const st = this.stat(l, stage);
       st.calls++;
       const t0 = Date.now();
-      void withTimeout(Promise.resolve(fn(structuredClone(x))), OBSERVE_MS, `plugin ${l.name}`)
+      void withTimeout(Promise.resolve(fn({ ...structuredClone(x), models: a.models, line: a.line })), OBSERVE_MS, `plugin ${l.name}`)
         .catch((e) => {
           st.errors++;
           this.log.warn("plugin.observe_failed", { plugin: l.name, stage, error: e instanceof Error ? e.message : String(e) });
@@ -422,6 +530,11 @@ export class Plugins {
           if (st.ms.length > 200) st.ms.shift();
         });
     }
+  }
+
+  /** Whether any running plugin may read a reply, so one is worth keeping before the line is known. */
+  anyWantsReply(): boolean {
+    return this.loaded.some((l) => l.state === "running" && (l.hooks.log !== undefined || l.hooks.error !== undefined) && (l.decl.trust === "code" || l.decl.reads.includes("reply")));
   }
 
   /** Whether any active plugin wants the reply, so it is worth keeping a copy of the answer. */
@@ -439,7 +552,7 @@ export class Plugins {
       return s[Math.min(s.length - 1, Math.floor(q * s.length))]!;
     };
     return this.loaded.map((l) => ({
-      name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, declared: l.declared, use: shownUse(l.decl.use),
+      name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, declared: l.declared, needs: l.needs, models: l.decl.models, everyLine: l.decl.everyLine, use: shownUse(l.decl.use),
       when: l.decl.when, timeoutMs: l.decl.timeoutMs, onError: l.decl.onError, onFail: l.decl.onFail, locked: l.decl.locked,
       required: l.decl.required, reads: l.decl.reads, paused: l.paused, pausedUntil: l.pausedUntil, failOpens: l.failOpens,
       stages: Object.fromEntries(Object.entries(l.stats).map(([stage, st]) => [stage, {
@@ -448,7 +561,7 @@ export class Plugins {
     }));
   }
 
-  private async loadCode(name: string, decl: PluginDecl, internal: PluginContext["internal"]): Promise<{ declared: Declared; hooks: Hooks }> {
+  private async loadCode(name: string, decl: PluginDecl, internal: PluginContext["internal"]): Promise<{ declared: Declared; needs: Needs; hooks: Hooks }> {
     let url: string;
     if (decl.use.startsWith("file:")) {
       const rel = decl.use.slice(5);
@@ -475,28 +588,32 @@ export class Plugins {
     if (!m || m.apiVersion !== 1 || typeof m.setup !== "function") throw new Error("its default export is not a plugin (definePlugin with apiVersion 1)");
     const declared = validDeclared(m.kinds);
     if (!declared) throw new Error("it declares kinds hearth does not know");
+    const needs = validNeeds(m.needs);
+    if (!needs) throw new Error("its needs name a kind of model hearth does not know");
     const hooks = await withTimeout(Promise.resolve(m.setup({ name, config: decl.config, log: this.log, internal })), 10_000, `plugin ${name} setup`);
-    return { declared, hooks };
+    return { declared, needs, hooks };
   }
 
   /** What a service says it handles, read the way startup reads it; for the console, before it is added. */
-  static async manifest(url: string, key: string | null): Promise<Declared> {
+  static async manifest(url: string, key: string | null): Promise<{ kinds: Declared; needs: Needs }> {
     const base = url.replace(/\/$/, "");
     const res = await fetch(`${base}/manifest`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(5_000) }).catch((e: unknown) => {
       throw new Error(unreachable(base, e));
     });
     if (!res.ok) throw new Error(`${base}/manifest answered ${res.status}${res.status === 401 || res.status === 403 ? ": it wants a key" : ""}`);
-    const m = (await res.json().catch(() => null)) as { apiVersion?: unknown; kinds?: unknown } | null;
+    const m = (await res.json().catch(() => null)) as { apiVersion?: unknown; kinds?: unknown; needs?: unknown } | null;
     if (m?.apiVersion !== 1) throw new Error(`${base}/manifest is not a hearth plugin manifest (apiVersion 1)`);
     const declared = validDeclared(m.kinds);
     if (!declared) throw new Error(`${base}/manifest declares kinds or stages hearth does not know`);
-    return declared;
+    const needs = validNeeds(m.needs);
+    if (!needs) throw new Error(`${base}/manifest needs a kind of model hearth does not know`);
+    return { kinds: declared, needs };
   }
 
-  private async loadService(_name: string, decl: PluginDecl, internal: PluginContext["internal"]): Promise<{ declared: Declared; hooks: Hooks }> {
+  private async loadService(_name: string, decl: PluginDecl, internal: PluginContext["internal"]): Promise<{ declared: Declared; needs: Needs; hooks: Hooks }> {
     const base = decl.use.replace(/\/$/, "");
     const auth: Record<string, string> = decl.key ? { authorization: `Bearer ${decl.key}` } : {};
-    const declared = await Plugins.manifest(base, decl.key);
+    const { kinds: declared, needs } = await Plugins.manifest(base, decl.key);
     const post = async (hook: PluginStage, payload: Record<string, unknown>, ms: number): Promise<unknown> => {
       const r = await fetch(base, {
         method: "POST",
@@ -529,6 +646,6 @@ export class Plugins {
     if (all.has("routed")) hooks.routed = decide("routed");
     if (all.has("log")) hooks.log = observe("log");
     if (all.has("error")) hooks.error = observe("error");
-    return { declared, hooks };
+    return { declared, needs, hooks };
   }
 }
