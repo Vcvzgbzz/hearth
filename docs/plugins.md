@@ -1,15 +1,18 @@
 # Plugins (RFC)
 
 **Status: partly built.** Chat requests run `request`, `routed`, `log` and `error` hooks for both kinds of
-plugin, with the guarantees below. The console's Pipeline page shows them in run order, pauses one live, and adds a service. The other stages,
-the other request kinds, plugins on peers' requests, and Try, request records and router chips in the
-console are not built yet (tracking: #191); requests of other kinds run no plugins.
+plugin, with the guarantees below, on every chat request (what this page now calls `everyLine`).
+Placing plugins on routing lines, model slots, the Plugins page and blocks on the Routing map are the
+next step (C10, C11, C8). The other stages, the other request kinds and plugins on peers' requests are
+not built yet (tracking: #191); requests of other kinds run no plugins.
 
 A plugin changes or watches what passes through hearth: it can rewrite a request before it runs, keep a
 request on this machine, refuse it, check the reply, or read the finished exchange. Plugins are written
 by anyone, in any language, and run either inside hearth or as their own service.
 
-![The Pipeline page for chat requests: plugins in the stage they hook, a dry run, and the router view](img/plugins-pipeline.svg)
+A plugin is a block on a routing line: the request goes in, the changed request comes out and carries
+on to the model. It says which kinds of request it takes, so it can only be placed on a line that
+carries them, and which models it needs, which the operator wires in.
 
 ## Why
 
@@ -142,9 +145,55 @@ models:
   video and audio replies reach a plugin as their size, type and duration, never their bytes, unless it
   declares `reads: [output]`.
 
+## Where a plugin runs
+
+A plugin runs where it is placed: on the steps of a flow, the lines of the Routing map.
+
+```
+type chat ──► rule ──► [ memory ] ──► my-model ┄┄► [ audit ]
+                         ▲      ▲                    after the reply
+              my-embed ──┘      └── my-rerank
+```
+
+- **On a line.** A flow step lists plugins under `plugins:`. They run, in that order, on every request
+  that step sends to a model: each one's `routed` hook gets the request and passes its changed request
+  to the next, and the last one's goes to the model. Their `log` and `error` hooks run after the reply,
+  in the reverse order, drawn as a dashed tap after the model. A plugin that only watches (only `log`
+  or `error`) is drawn only there. A step that refuses, or hands the request to another flow, runs none
+  of its own: the flow that takes the request decides.
+- **On every line.** A plugin with `everyLine: true` runs on every request of its kinds, on every line,
+  and is the only kind whose `request` hook runs: before routing there is no line yet. Safety and
+  privacy checks belong here, usually with `locked: true` so no router can turn them off. On the map
+  they are a badge on the router, not a block.
+- **A line takes only the kinds it carries.** A flow that answers chat carries `chat`; one that answers
+  backend `routes:` carries the kinds those routes declare (`other` when they declare none). Placing a
+  plugin on a line it cannot take is refused when the config loads, and the console refuses the drop.
+- **A plugin placed nowhere runs nowhere.** It is still loaded, checked and listed, and the console says
+  *on no line*.
+
+## Model slots
+
+A plugin that needs models says so in its manifest, as named slots with the kind of model each takes:
+
+```json
+{ "apiVersion": 1,
+  "kinds": { "chat": ["routed", "log"] },
+  "needs": { "embed": { "kind": "embeddings" }, "rerank": { "kind": "rerank", "optional": true } } }
+```
+
+- **The operator wires them**, once on the plugin (the default everywhere) and, where a line needs a
+  different one, on that line's step. A slot takes only a model of its kind: `models.<id>.kind` says
+  what a model is (`chat` when unset), and a model of the wrong kind is refused at load.
+- **The plugin is told which model to use.** Every hook gets `models: { embed: "my-embed", … }` and calls
+  hearth for it with its internal token (C4), so the call queues like any other, never triggers hooks,
+  and goes wherever that model's own routing sends it.
+- **An empty slot skips the plugin on that line.** A required slot with no model means the plugin does
+  not run there: the request carries on unchanged and the console shows the block as *needs a model*.
+  An `optional` slot left empty is `null` in `models`.
+
 ## Configuration
 
-Plugins are defined once, under `plugins:`. Each applies everywhere unless a router says otherwise.
+Plugins are defined once, under `plugins:`, and placed on flow steps or on every line.
 
 ```yaml
 plugins:
@@ -156,12 +205,14 @@ plugins:
     reads: [messages, reply]                     # all an http plugin is ever sent
     timeoutMs: 300
     onError: skip                                # the plugin is down or slow: carry on without it
+    models: { embed: my-embed, rerank: my-rerank }   # its model slots, wired
     config: { userHeader: x-memory-user }        # the plugin's own settings
 
   safety:
     use: http://guard:8080/hearth
     trust: http
     kinds: { chat: [parallel] }
+    everyLine: true                              # runs on every chat request, on every line
     locked: true                                 # no router can turn it off
     onFail: refuse                               # it flagged the request
     onError: refuse                              # it could not answer: fail closed
@@ -173,18 +224,28 @@ plugins:
     kinds: { chat: [routed] }
     when: { target: peer }
 
+flows:
+  chat:
+    inputs: [chat]
+    steps:
+      - to: { model: my-model }
+        plugins: [redact-emails, memory]         # run in this order, then the model
+      - to: { model: my-other-model }
+        plugins:
+          - { use: memory, models: { rerank: my-other-rerank } }   # this line wires its own
+
 routers:
   app:
-    plugins: { audit-log: off }                  # this router turns a global plugin off
-  local:
-    plugins: { memory: off }
+    plugins: { safety: off }                     # refused: safety is locked
 ```
 
 `kinds` may be left out, and the plugin then hooks everything it declares; when given, it may only name
 kinds and stages the plugin declares.
 
-- **Two levels only.** A plugin is global, and a router may turn it `off` or give it different settings
-  (`{ config: … }`, which replaces the global settings for that router). It still runs once.
+- **Placement is the scope.** A plugin on a line runs for that line's requests; a router's lines are its
+  own, so a router that should not have a plugin simply does not place it. `routers.<name>.plugins` turns
+  an `everyLine` plugin `off` for that router, or gives it different settings (`{ config: … }`, which
+  replaces the plugin's own for that router).
 - `locked: true` means no router can turn it off or weaken it. Safety and privacy plugins are locked.
 - `when` uses the flow-step conditions plus `target: local | peer`. A request that does not match skips
   the plugin, and the trace says so.
@@ -238,7 +299,8 @@ interface Routed {
 ```
 
 `request` sees the same without `model`, `target` and `peer`. `response`, `log` and `error` add the reply,
-usage, status and timings.
+usage, status and timings. Every hook also gets `models`, the model wired into each of its slots for
+this request, and `line`, the flow and step it was placed on (`null` for an `everyLine` plugin).
 
 ## Writing a `code` plugin
 
@@ -304,31 +366,26 @@ in headers. The page is shown in a sandboxed frame, so it never runs with the co
 
 ## In the console
 
-Plugins get their own page, **Pipeline**, because they are about *when* things happen to a request, not
-*where* it runs (Topology) or *which* model it gets (Routing).
+Plugins are managed on their own page and placed on the Routing map, because a plugin is part of where a
+request goes: the same page that decides the model shows what happens to the request on its way there.
 
-- **Stages as columns,** in the order a request meets them, with the fixed steps (admit, route, queue and
-  run, done) drawn above them. Each plugin is a card in the stage it hooks; a plugin with two hooks
-  appears in both, linked. An On error lane runs underneath.
-- **A tab per kind** (Chat, Embeddings, Images, Video, Speech, Other), each with its count. A tab shows
-  only the stages that kind has and only the plugins that handle it, so an image model's pipeline is
-  visibly its own: a chat-only plugin is never offered there. A plugin's panel lists its kinds.
-- **A router picker.** The page shows the chain for one router: global plugins it runs, its own changes,
-  and plugins it turned off (struck through). A line under the stages says how many come from global and
-  that locked ones cannot be turned off. **Effective chain** lists exactly what runs, in order, as a
-  flat list.
-- **Cards** show the kind (`http`, or `code` with ⚠), the scope (`global`, `this router`, `locked`), the
-  failure policy, timing, and health by outline: green healthy, amber near its timeout, red failing,
-  grey off or not matched. Clicking one opens its numbers per hook, its `when`, its last error, a pause
-  switch and its own page if it has one.
-- **Try a request.** Pick a caller and a model, type a message, and see every stage in order: each
-  plugin's verdict and time, what it changed as a diff, what was skipped and why, and where the request
-  would run. It stops before the model unless asked to run it; `parallel` and `log` plugins are listed,
-  not run. Plugins receive `dryRun: true` and must not keep anything from a dry run.
+- **The Plugins page** lists every plugin: what it runs as (in-process or HTTP), the kinds it handles,
+  the models it needs and what is wired into them, the lines it is placed on, and how it is doing. A
+  plugin's panel has its model slots (each offering only models of its kind), the lines it is on with a
+  link to each on the Routing map, what it is sent, its failure policy, a pause switch, and a settings
+  form drawn from the settings its manifest describes. **Add plugin** checks a service's `/manifest`,
+  then writes the entry through the usual review; code plugins are added in the file by hand.
+- **On the Routing map** a plugin is a block on a line, between the rule and the model: request in on
+  the left, changed request out on the right, its model slots underneath with lines to the models wired
+  into them. Plugins that only watch hang off a dashed tap after the model. `everyLine` plugins are a
+  badge on the router. Plugins are dragged from a palette onto a line; lines that cannot take the plugin
+  dim while it is dragged, and a drop on one is refused with the reason.
+- **A block shows its state**: ready; *needs a model* (amber, requests pass by it); paused (dashed,
+  requests pass by it); failing (red, with what its failure policy does).
+- **Try a request** on the Routing map shows each plugin on the line the request takes: its verdict, its
+  time and what it changed, as a diff. Plugins receive `dryRun: true` and must not keep anything from a
+  dry run.
 - **Each logged request** opens the same view as a record of what happened.
-- **Elsewhere.** On the Routing map, each router shows its plugins as chips (its own, a count from
-  global, and any it turned off), linking to Pipeline. Topology keeps only a badge on Dispatch
-  (*5 plugins · 1 slow*). Plugin pages are sidebar entries.
 
 ## Changes to hearth
 
@@ -342,7 +399,9 @@ Plugins get their own page, **Pipeline**, because they are about *when* things h
 | C6 | The runtime: loader, lifecycle, `plugins:` and `routers.<name>.plugins`, timeouts, `onFail` / `onError`, the circuit breaker, metrics, `--no-plugins`. | medium |
 | C7 | Hooks off for peers' requests by default; `peers: true` shown in lending terms. | small |
 | C9 | Request kinds: on the request context, `kind:` on backend routes and models, the per-request gate, checks at load, body shapes per kind. | medium |
-| C8 | Console: the Pipeline page and its kind tabs, Try, the per-request record, router chips, the Dispatch badge, plugin pages proxied into the sidebar. | large |
+| C10 | Placement: `plugins:` on flow steps, run on the requests the step decides; `everyLine`; the line's kind checked against the plugin's when the config loads. | medium |
+| C11 | Model slots: `needs` in the manifest, `models` on the plugin and the step, `kind:` on models, `models` in every hook. | medium |
+| C8 | Console: the Plugins page, plugin blocks and model slots on the Routing map, the palette and refused drops, plugin effects in Try, the per-request record, plugin pages proxied into the sidebar. | large |
 
 ## Order of work
 
@@ -353,22 +412,30 @@ Plugins get their own page, **Pipeline**, because they are about *when* things h
    throws on start, a client that sends the internal marker itself, a chat plugin attached to an image
    model in the config and in a hand-built request.
 3. A first real plugin over `http` (memory), in production.
-4. C3 with `parallel`, `response` and `stream`; then C8.
-5. A second, unrelated plugin (a safety check). Then `apiVersion: 1` is frozen, documented with examples,
+4. C10 and C11, then C8: plugins placed on lines, model slots, the Plugins page and blocks on the map.
+   Plugins written before C10 run on every line: add `everyLine: true`, or place them, when upgrading.
+5. C3 with `parallel`, `response` and `stream`.
+6. A second, unrelated plugin (a safety check). Then `apiVersion: 1` is frozen, documented with examples,
    and a starter template is published.
 
 ## Alternatives considered
 
 - **Extend `actions:`.** Actions are deliberately unable to change or delay a request, and other parts of
   hearth rely on that. Plugins sit beside them; `events` is the superset of what actions observe.
-- **Plugins on the Topology map.** Topology shows machines, hardware, peers and callers. Plugins are steps
-  in time, and drawing them as places made the map harder to read.
-- **Plugins as steps inside flows.** Flows choose where a request goes; mixing "what happens to it" into
-  the same rules turns them into a program.
+- **Plugins on the Topology map.** Topology shows machines, hardware, peers and callers, not what happens
+  to a request.
+- **A separate Pipeline page** listing plugins by stage, with a router picker to see one router's chain.
+  Built and tried: it told a second story about the same request, apart from the Routing map where
+  the operator decides it, and "which plugins run for this request" took a picker and a computed list
+  to answer. On the map the answer is the line itself.
+- **Plugins only as global hooks.** Every plugin on every request, with routers turning some off. Simple,
+  but per-line choices (memory on one line, not another) became lists of exceptions, and a plugin's
+  models were its own business, out of the operator's sight.
 - **More scope levels** (per caller, per model, per key) with precedence rules. Each level adds a way for
-  a plugin to run or not run that nobody can see. Two levels, and `when` for the rest.
+  a plugin to run or not run that nobody can see. Placement on a line, `everyLine`, and `when` for the
+  rest.
 - **Priority numbers** for order. Ties and per-machine differences make the real order hard to know;
-  list order within a stage is what you see.
+  the order on the line is what you see.
 - **`http` only.** Simpler to make safe, but every hook pays a network hop and plugins cannot use hearth's
   scheduler in-process; operators who want that would fork.
 - **A WebAssembly sandbox for `code`.** Real isolation, at the cost of most of the npm ecosystem and a
@@ -376,6 +443,9 @@ Plugins get their own page, **Pipeline**, because they are about *when* things h
 
 ## Open questions
 
+- Should a line be able to place a plugin twice (before and after another), or is once per line enough?
+- Should `everyLine` plugins run before or after a line's own plugins at `routed`? (Proposed: before,
+  so a safety check sees the request as the client sent it.)
 - Should `code` plugins also need a node-wide `allowCodePlugins: true`, or is `trust: code` enough?
 - Should Try be able to run `parallel` plugins against a reply it supplies, so a safety check can be
   tried without running the model?
