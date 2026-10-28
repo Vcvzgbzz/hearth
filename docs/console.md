@@ -36,23 +36,19 @@ Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   does, where the pointer is: a new backend, hardware, machine or provider, the
   published versions, and fitting the picture in view.
 - **Routing**: every model name, the rules some pass through, and where each
-  ends up, as a map you edit. See [Editing on the graph](#editing-on-the-graph).
-- **Pipeline**: what runs on a request, in the order it runs: one list, stage
-  by stage, with hearth's own steps (route, queue and call the model, return
-  the reply) between the stages. Pick a request kind, and pick a router under
-  **Viewing as** to see the chain its callers get: plugins it turns off stay in
-  place, muted, and the rest are numbered in run order; ones it gives settings
-  of its own are marked. A row shows a problem (did not start, erroring, slow,
-  resting after failures) only when there is one. Kinds and stages a plugin
-  declares that this version does not run are shown dashed, apart from the
-  rest. Clicking a plugin opens its numbers, where it runs, what each router
-  does with it and its settings; the switch pauses it everywhere until resumed
-  or restarted. A locked plugin cannot be paused. **Add plugin** adds a
-  service: hearth reads what it handles from its `/manifest`, you choose what
-  it is sent, what happens when it fails, and whether it is locked, and the
-  entry is written to `hearth.yaml` after the usual review; it starts on the
-  next restart. Code that runs inside hearth is added in the file by hand. See
-  [Plugins](plugins.md).
+  ends up, as a map you edit. Plugins on a line are blocks between its
+  conditions and where it sends the request; plugins that run on every line
+  are a badge on the router. See [Editing on the graph](#editing-on-the-graph).
+- **Plugins**: every plugin, what it runs as (in-process or a service), the
+  kinds of request it handles, the models wired into its slots, the lines it
+  runs on and how it is doing. A plugin's panel wires its model slots (each
+  offering only models of its kind), lists its lines with a link to each on
+  the Routing map, says what it is sent and how it fails, and pauses it until
+  resumed or restarted; a locked plugin cannot be paused. **Add plugin** adds
+  a service: hearth reads what it handles and the models it needs from its
+  `/manifest`, you wire its models and choose where it runs, and the entry is
+  written after the usual review; it starts on the next restart. Code that
+  runs inside hearth is added in the file by hand. See [Plugins](plugins.md).
 - **Models**: every model on one row: which nodes hold it, whether it is loaded
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
@@ -170,6 +166,11 @@ line; **+ type** brings one onto the map.
   off a busy model, give one caller its own model) or from a blank. A new
   rule is left on the map, picked out and in view; its pencil opens it to be
   edited line by line.
+- **Plugins on a line** are added from the line's ⋯ menu (*run plugins*),
+  which offers only plugins that handle what the line carries. A block's own
+  menu wires its model slots for this line, moves it earlier or later, or takes
+  it off. A block with an empty model slot is amber and requests pass by it; a
+  plugin that only watches the finished exchange is drawn dashed.
 - **A line's conditions are changed where they stand.** Click the sentence a
   line reads as, or **choose a condition** on a new one, and its conditions
   open in the box; the line's first word closes them again. Under a heading

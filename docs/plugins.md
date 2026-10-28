@@ -1,9 +1,9 @@
 # Plugins (RFC)
 
 **Status: partly built.** Chat requests run `request`, `routed`, `log` and `error` hooks for both kinds of
-plugin, with the guarantees below, on every chat request (what this page now calls `everyLine`).
-Placing plugins on routing lines, model slots, the Plugins page and blocks on the Routing map are the
-next step (C10, C11, C8). The other stages, the other request kinds and plugins on peers' requests are
+plugin, with the guarantees below.
+Plugins are placed on routing lines or on every line, with model slots, and the console has a Plugins
+page and plugin blocks on the Routing map (C10, C11, C8; Try and per-request records are not built). The other stages, the other request kinds and plugins on peers' requests are
 not built yet (tracking: #191); requests of other kinds run no plugins.
 
 A plugin changes or watches what passes through hearth: it can rewrite a request before it runs, keep a
@@ -156,13 +156,13 @@ type chat ──► rule ──► [ memory ] ──► my-model ┄┄► [ aud
 ```
 
 - **On a line.** A flow step lists plugins under `plugins:`. They run, in that order, on every request
-  that step sends to a model: each one's `routed` hook gets the request and passes its changed request
-  to the next, and the last one's goes to the model. Their `log` and `error` hooks run after the reply,
+  that step sends to a model: each one's `routed` hook (or its `request` hook, if that is the one it
+  has) gets the request and passes its changed request to the next, and the last one's goes to the model. Their `log` and `error` hooks run after the reply,
   in the reverse order, drawn as a dashed tap after the model. A plugin that only watches (only `log`
   or `error`) is drawn only there. A step that refuses, or hands the request to another flow, runs none
   of its own: the flow that takes the request decides.
 - **On every line.** A plugin with `everyLine: true` runs on every request of its kinds, on every line,
-  and is the only kind whose `request` hook runs: before routing there is no line yet. Safety and
+  and the only kind whose `request` hook runs before routing: there is no line yet. Safety and
   privacy checks belong here, usually with `locked: true` so no router can turn them off. On the map
   they are a badge on the router, not a block.
 - **A line takes only the kinds it carries.** A flow that answers chat carries `chat`; one that answers

@@ -292,6 +292,12 @@ export interface PluginView {
   /** What runs, by request kind: the plugin's own declaration narrowed by the config. */
   kinds: Partial<Record<string, PluginStage[]>>;
   declared: Partial<Record<string, PluginStage[]>>;
+  /** Its model slots, each with the kind of model it takes. */
+  needs: Record<string, { kind: string; optional?: boolean }>;
+  /** The models wired into its slots on the plugin itself. */
+  models: Record<string, string>;
+  /** Runs on every line rather than where a step places it. */
+  everyLine: boolean;
   use: string;
   when: { asked?: string[]; askedNot?: string[]; caller?: string[]; callerNot?: string[]; lane?: string[]; target?: string[]; header?: Record<string, string[]> } | null;
   timeoutMs: number;
@@ -306,8 +312,12 @@ export interface PluginView {
   stages: Partial<Record<PluginStage, StageNumbers>>;
 }
 
-export interface Pipeline {
+export interface PluginsView {
   plugins: PluginView[];
+  /** Every placement on a line, as the running config has it. */
+  placed: { plugin: string; router: string; flow: string; step: number; kind: string; models: Record<string, string> }[];
+  /** Models that take something other than chat, by id. */
+  modelKinds: Record<string, string>;
   /** The kinds and stages this build runs plugins for. */
   liveKinds: string[];
   liveStages: PluginStage[];
@@ -367,6 +377,6 @@ export interface UiData {
   update?: string | null;
   /** The requests this node made most recently, newest first; neither `backend` nor `peer` when it never ran. */
   recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }[];
-  /** Plugins, for the Pipeline page. Absent on an older server's payload. */
-  pipeline?: Pipeline;
+  /** Plugins, for the Plugins page and the Routing map. Absent on an older server's payload. */
+  plugins?: PluginsView;
 }

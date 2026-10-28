@@ -307,6 +307,22 @@ menu switches between them and starts a new one, from the rules shown or from
 one that refuses everything. With a router shown, the buttons beside it say
 whose requests go by it, set **never fall back**, and delete it.
 
+### Plugins on a line
+
+A step can run plugins on the requests it sends to a model: each gets the
+request and passes it on changed, in the order listed, and the last one's goes
+to the model. On the Routing map they are blocks on the line, added from the
+line's ⋯ menu. See [Plugins](plugins.md#where-a-plugin-runs).
+
+```yaml
+flows:
+  chat:
+    inputs: [chat]
+    steps:
+      - to: { model: my-model }
+        plugins: [memory]
+```
+
 ### Actions
 
 An action is something a step sets off beside routing: a line in the log, or a

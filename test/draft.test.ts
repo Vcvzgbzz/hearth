@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
+import { addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -528,6 +528,25 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.doesNotThrow(() => parseConfig(home));
   // Let go on the machine it is on, or hardware nothing sits in, nothing is written.
   assert.deepEqual([movedHardware(two, "gpu0", "", ""), movedHardware(two, "gpu0", "box", "other")], [two, two]);
+}
+
+// Plugins on a line: added last, moved, wired per line in the file's shortest form, and taken off.
+{
+  const doc: Doc = { version: 3, name: "t", backends: { main: { url: "http://127.0.0.1:1", serves: ["m"] } }, models: { m: { backend: "main" }, e: { kind: "embeddings" } },
+    plugins: { a: { use: "http://x:1/a", trust: "http" }, b: { use: "http://x:1/b", trust: "http" } },
+    flows: { r: { inputs: ["*"], steps: [{ to: { asked: true } }] } } };
+  const one = withPlugin(withPlugin(doc, "r", 0, "a", true)!, "r", 0, "b", true)!;
+  const step = (d: Doc) => (d.flows as Record<string, { steps: Doc[] }>).r!.steps[0]!;
+  assert.deepEqual(placedOn(step(one)), [{ name: "a", models: {} }, { name: "b", models: {} }]);
+  assert.equal(withPlugin(one, "r", 0, "a", true), null, "once per line");
+  const moved = movePlugin(one, "r", 0, "b", -1)!;
+  const wired = wireSlot(moved, "r", 0, "a", "embed", "e")!;
+  assert.deepEqual(step(wired).plugins, ["b", { use: "a", models: { embed: "e" } }]);
+  assert.doesNotThrow(() => parseConfig(wired));
+  assert.deepEqual(step(wireSlot(wired, "r", 0, "a", "embed", null)!).plugins, ["b", "a"], "back to the plugin's own: the short form again");
+  const off = withPlugin(withPlugin(wired, "r", 0, "a", false)!, "r", 0, "b", false)!;
+  assert.equal(step(off).plugins, undefined, "none left takes the key away");
+  assert.equal(directTo("x", { inputs: ["x"], steps: [{ to: "m", plugins: ["a"] }] }), null, "a line with plugins is drawn as a rule");
 }
 
 console.log("draft.test.ts ok");

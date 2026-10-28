@@ -167,12 +167,12 @@ export function pointEnd(doc: Doc, flow: string, i: number, k: number | null, to
  * A flow that only says "requests for this name run there": one input, its own name, and one
  * line with no conditions. The canvas draws it as a line from the name, not as a rule.
  */
-export function directTo(name: string, flow: { inputs: string[]; steps: { when?: unknown; to?: unknown; lane?: unknown; params?: unknown; do?: unknown }[] }): End | null {
+export function directTo(name: string, flow: { inputs: string[]; steps: { when?: unknown; to?: unknown; lane?: unknown; params?: unknown; do?: unknown; plugins?: unknown }[] }): End | null {
   if (flow.inputs.length !== 1 || flow.inputs[0] !== name || flow.steps.length !== 1) return null;
   const [step] = flow.steps;
   const to = toOf(step!.to);
   const bare = !isObj(step!.when) || Object.keys(step!.when).length === 0;
-  return bare && !step!.lane && !isObj(step!.params) && list(step!.do).length === 0 && (to.kind === "model" || to.kind === "peer") ? to : null;
+  return bare && !step!.lane && !isObj(step!.params) && list(step!.do).length === 0 && placedOn(step!).length === 0 && (to.kind === "model" || to.kind === "peer") ? to : null;
 }
 
 /**
@@ -180,12 +180,12 @@ export function directTo(name: string, flow: { inputs: string[]; steps: { when?:
  * anything, so each line is where the request goes when the one above fails. The canvas draws it
  * as a node beside the first line that hands to it, not as a rule.
  */
-export function orderOf(flow: { inputs: string[]; off?: boolean; sticky?: number; steps: { when?: unknown; to?: unknown; lane?: unknown; params?: unknown; do?: unknown; max?: unknown }[] }): End[] | null {
+export function orderOf(flow: { inputs: string[]; off?: boolean; sticky?: number; steps: { when?: unknown; to?: unknown; lane?: unknown; params?: unknown; do?: unknown; max?: unknown; plugins?: unknown }[] }): End[] | null {
   if (flow.inputs.length !== 0 || flow.steps.length < 2 || flow.off === true || flow.sticky !== undefined) return null;
   const ends: End[] = [];
   for (const s of flow.steps) {
     const to = toOf(s.to);
-    const bare = (!isObj(s.when) || Object.keys(s.when).length === 0) && !s.lane && !isObj(s.params) && list(s.do).length === 0 && s.max === undefined;
+    const bare = (!isObj(s.when) || Object.keys(s.when).length === 0) && !s.lane && !isObj(s.params) && list(s.do).length === 0 && s.max === undefined && placedOn(s).length === 0;
     if (!bare || (to.kind !== "model" && to.kind !== "peer")) return null;
     ends.push(to);
   }
@@ -459,6 +459,56 @@ export function withDo(doc: Doc, flow: string, i: number, action: string, on: bo
   if (!step || list(step.do).includes(action) === on) return null;
   const doing = on ? [...list(step.do), action] : list(step.do).filter((a) => a !== action);
   return editStep(doc, flow, i, ({ do: _, ...s }) => (doing.length ? { ...s, do: doing } : s));
+}
+
+/** A plugin placed on a step, as the file writes it: its name, or `{ use, models }` with the models this line wires. */
+export type Placed = { name: string; models: Record<string, string> };
+
+/** The plugins a step places, in the order they run. */
+export function placedOn(step: { plugins?: unknown }): Placed[] {
+  if (!Array.isArray(step.plugins)) return [];
+  return step.plugins.flatMap((p): Placed[] => {
+    if (typeof p === "string") return [{ name: p, models: {} }];
+    const o = obj(p);
+    return typeof o.use === "string" ? [{ name: o.use, models: Object.fromEntries(Object.entries(obj(o.models)).filter((e): e is [string, string] => typeof e[1] === "string")) }] : [];
+  });
+}
+
+/** A step with these plugins on it, each written in its shortest form; none takes the key away. */
+const withPlaced = (doc: Doc, flow: string, i: number, placed: Placed[]): Doc =>
+  editStep(doc, flow, i, ({ plugins: _, ...s }) => (placed.length ? { ...s, plugins: placed.map((p) => (Object.keys(p.models).length ? { use: p.name, models: p.models } : p.name)) } : s));
+
+/** Put a plugin on a line, last in its order, or take it off. Null when there is nothing to change. */
+export function withPlugin(doc: Doc, flow: string, i: number, plugin: string, on: boolean): Doc | null {
+  const step = stepsOf(doc, flow)?.[i];
+  if (!step) return null;
+  const placed = placedOn(step);
+  if (placed.some((p) => p.name === plugin) === on) return null;
+  return withPlaced(doc, flow, i, on ? [...placed, { name: plugin, models: {} }] : placed.filter((p) => p.name !== plugin));
+}
+
+/** Run a plugin earlier (-1) or later (1) on its line. */
+export function movePlugin(doc: Doc, flow: string, i: number, plugin: string, by: -1 | 1): Doc | null {
+  const step = stepsOf(doc, flow)?.[i];
+  if (!step) return null;
+  const placed = placedOn(step);
+  const at = placed.findIndex((p) => p.name === plugin);
+  const to = at + by;
+  if (at < 0 || to < 0 || to >= placed.length) return null;
+  [placed[at], placed[to]] = [placed[to]!, placed[at]!];
+  return withPlaced(doc, flow, i, placed);
+}
+
+/** Wire a model into one of a placed plugin's slots on this line; null goes back to the plugin's own. */
+export function wireSlot(doc: Doc, flow: string, i: number, plugin: string, slot: string, model: string | null): Doc | null {
+  const step = stepsOf(doc, flow)?.[i];
+  if (!step) return null;
+  const placed = placedOn(step).map((p) => {
+    if (p.name !== plugin) return p;
+    const { [slot]: _, ...rest } = p.models;
+    return { ...p, models: model === null ? rest : { ...rest, [slot]: model } };
+  });
+  return withPlaced(doc, flow, i, placed);
 }
 
 /** What a line can be let go on: somewhere to send work, or an action to run on the way. */

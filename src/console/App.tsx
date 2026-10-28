@@ -1,5 +1,5 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, ScrollText, Split, Sun, Workflow, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
@@ -8,10 +8,10 @@ import { CanaryAlert, History, Inspector, KeyOnce, Keys, Models, Queue } from ".
 import { NodeSmoke } from "./Smoke.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
-import { go, login, logout, pageOf, restartNode, select, useStore, type Page } from "./store.js";
+import { go, login, logout, openPlugin, pageOf, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
-import { Pipeline } from "./Pipeline.js";
+import { Plugins } from "./Plugins.js";
 import { Routing } from "./Routing.js";
 import { Lending } from "./Lending.js";
 import { Topology } from "./Topology.js";
@@ -20,7 +20,7 @@ import { Button, Card, cx, Dialog, Pill } from "./ui.js";
 const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "routing", label: "Routing", icon: Split },
-  { id: "pipeline", label: "Pipeline", icon: Workflow },
+  { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "models", label: "Models", icon: Boxes },
   { id: "lending", label: "Lending", icon: Handshake },
   { id: "keys", label: "Keys", icon: KeyRound },
@@ -169,9 +169,9 @@ function findings(d: UiData): Finding[] {
       });
     }
   }
-  for (const p of d.pipeline?.plugins ?? []) {
-    if (p.state === "failed") out.push({ tone: "bad", text: `plugin ${p.name} did not start`, go: () => go("pipeline") });
-    else if (p.pausedUntil > now) out.push({ tone: "bad", text: `plugin ${p.name} is resting after repeated failures`, go: () => go("pipeline") });
+  for (const p of d.plugins?.plugins ?? []) {
+    if (p.state === "failed") out.push({ tone: "bad", text: `plugin ${p.name} did not start`, go: () => openPlugin(p.name) });
+    else if (p.pausedUntil > now) out.push({ tone: "bad", text: `plugin ${p.name} is resting after repeated failures`, go: () => openPlugin(p.name) });
   }
   if (d.config.restartPending.length) out.push({ tone: "warn", text: `restart to apply ${d.config.restartPending.join(", ")}`, go: () => go("config") });
   if (d.update) out.push({ tone: "warn", text: `hearth ${d.update} is out`, go: () => { window.open("https://github.com/Vcvzgbzz/hearth/releases", "_blank", "noopener"); } });
@@ -471,7 +471,7 @@ export default function App() {
           <div className="relative flex min-h-0 flex-1 flex-col">
             {page !== "config" && <NodeSmoke />}
             <div className="relative min-h-0 flex-1 overflow-auto p-5" data-smoke="floor">
-              {page === "pipeline" && <Pipeline />}
+              {page === "plugins" && <Plugins />}
               {page === "models" && <Models />}
               {page === "lending" && <Lending />}
               {page === "keys" && <Keys />}

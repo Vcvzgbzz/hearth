@@ -6,7 +6,7 @@
 import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, list, nodeOf, ordered, orderOf, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, list, nodeOf, ordered, orderOf, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, selectMany } from "./editStore.js";
 import { contextMenu } from "./editor.js";
 import { HUE, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
@@ -48,8 +48,8 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   // A flow that only says "this name runs there" is a line from the name; the rest are rules, drawn as nodes.
   const direct = new Map<string, End>();
   // The flow for every other name, while it only says "run it" or "refuse it", is a line on the router and not a rule of its own.
-  const plainRest = ([, f]: [string, { inputs: string[]; steps: { when?: unknown; to?: unknown; do?: unknown }[] }]) =>
-    f.inputs.includes(ANY) && f.steps.length === 1 && ["asked", "refuse"].includes(toOf(f.steps[0]!.to).kind) && list(f.steps[0]!.do).length === 0;
+  const plainRest = ([, f]: [string, { inputs: string[]; steps: { when?: unknown; to?: unknown; do?: unknown; plugins?: unknown }[] }]) =>
+    f.inputs.includes(ANY) && f.steps.length === 1 && ["asked", "refuse"].includes(toOf(f.steps[0]!.to).kind) && list(f.steps[0]!.do).length === 0 && placedOn(f.steps[0]!).length === 0;
   // A flow that is only an order to try places in is a node of its own and not a rule: beside the first line that hands to it.
   const orders = new Map<string, End[]>();
   for (const [name, f] of Object.entries(d.flows ?? {})) { const ends = orderOf(f); if (ends) orders.set(name, ends); }

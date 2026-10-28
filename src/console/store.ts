@@ -18,7 +18,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "pipeline", "models", "lending", "keys", "queue", "logs", "config"] as const;
+export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "queue", "logs", "config"] as const;
 export type Page = (typeof PAGE_IDS)[number];
 /** The page the address names; anything else is the first one. */
 export const pageOf = (): Page => PAGE_IDS.find((p) => p === location.hash.slice(1)) ?? "topology";
@@ -40,6 +40,8 @@ interface State {
   toast: Toast;
   /** A pending key request from a write, resolved by the key dialog. */
   askKey: ((key: string | null) => void) | null;
+  /** The plugin open on the Plugins page. */
+  plugin: string | null;
   /** A key just minted or rotated: its plaintext, to be shown once and then let go. */
   fresh: { label: string; key: string; rotated?: boolean } | null;
 }
@@ -53,6 +55,7 @@ export const useStore = create<State>(() => ({
   setupRequired: false,
   page: pageOf(),
   sel: null,
+  plugin: null,
   fresh: null,
   toast: null,
   askKey: null,
@@ -63,6 +66,8 @@ export const go = (page: Page) => {
   useStore.setState({ page, sel: null });
 };
 export const select = (sel: Sel) => useStore.setState({ sel });
+/** Open a plugin on the Plugins page, from wherever it was named. */
+export const openPlugin = (name: string) => { go("plugins"); useStore.setState({ plugin: name }); };
 
 let toastSeq = 0;
 export function toast(tone: "ok" | "bad", text: string): void {

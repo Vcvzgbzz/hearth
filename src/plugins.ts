@@ -441,8 +441,10 @@ export class Plugins {
     const ran: string[] = [];
     for (const a of active) {
       const l = this.get(a.name);
-      const fn = l.hooks[stage];
-      if (!fn || !l.kinds[cur.kind]?.includes(stage)) continue;
+      // On a line, a plugin's one turn before the model is its `routed` hook, or its `request` hook if that is all it has.
+      const hook = stage === "routed" && a.line !== null && !l.kinds[cur.kind]?.includes("routed") ? "request" : stage;
+      const fn = l.hooks[hook];
+      if (!fn || !l.kinds[cur.kind]?.includes(hook)) continue;
       const st = this.stat(l, stage);
       if (!matches(l.decl.when, cur)) { st.skipped++; continue; }
       ran.push(l.name);

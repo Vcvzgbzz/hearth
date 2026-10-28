@@ -7,13 +7,16 @@ import { CircleDashed, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Review, type File, type Plan } from "./config.js";
-import { LockedOpen } from "./Pipeline.js";
+import { modelsOfKind } from "./flowNodes.js";
+import { LockedOpen } from "./Plugins.js";
 import type { PluginStage } from "./types.js";
 import { refresh, request, toast, useStore } from "./store.js";
 import { Button, cx, Dialog, mono } from "./ui.js";
 
 type Declared = Partial<Record<string, PluginStage[]>>;
+type Needs = Record<string, { kind: string; optional?: boolean }>;
 
+const NO_MODELS: string[] = [];
 const STAGE_WORDS: Record<string, string> = {
   request: "before routing", routed: "after routing", parallel: "beside the model", stream: "while streaming",
   response: "on the reply", log: "after the reply", error: "on error",
@@ -50,12 +53,15 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 export function AddPlugin({ onClose }: { onClose: () => void }) {
-  const pl = useStore((s) => s.data?.pipeline);
+  const pl = useStore((s) => s.data?.plugins);
+  const catalog = useStore((s) => s.data?.catalog) ?? NO_MODELS;
   const [how, setHow] = useState<"http" | "code">("http");
   const [url, setUrl] = useState("");
   const [keyVar, setKeyVar] = useState("");
   const [checking, setChecking] = useState(false);
-  const [found, setFound] = useState<{ url: string; kinds: Declared } | null>(null);
+  const [found, setFound] = useState<{ url: string; kinds: Declared; needs: Needs } | null>(null);
+  const [slots, setSlots] = useState<Record<string, string>>({});
+  const [everyLine, setEveryLine] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [reads, setReads] = useState<Set<string>>(new Set(["messages"]));
@@ -71,6 +77,7 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
   useEffect(() => { void request<File>("GET", "/config").then(setFile, (e: Error) => setErr(e.message)); }, []);
 
   const taken = new Set([...Object.keys((file?.doc?.plugins as Record<string, unknown> | undefined) ?? {}), ...(pl?.plugins ?? []).map((p) => p.name)]);
+  const unwired = found ? Object.entries(found.needs).filter(([slot, n]) => !n.optional && !slots[slot]).map(([slot]) => slot) : [];
   const nameProblem = !name ? "give it a name" : !/^[a-z0-9][a-z0-9-]{0,63}$/.test(name) ? "lowercase letters, digits and dashes" : taken.has(name) ? `${name} is already a plugin` : null;
   const all = found ? Object.entries(found.kinds).flatMap(([k, st]) => (st ?? []).map((s) => `${k}:${s}`)) : [];
   const blocking = all.some((h) => h.endsWith(":request") || h.endsWith(":routed") || h.endsWith(":parallel") || h.endsWith(":response"));
@@ -81,9 +88,11 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
     setProblem(null);
     setFound(null);
     try {
-      const r = await request<{ ok: boolean; url: string; kinds?: Declared; problem?: string }>("POST", "/plugins/probe", { url: url.trim(), ...(keyVar.trim() ? { key: `env:${keyVar.trim()}` } : {}) });
+      const r = await request<{ ok: boolean; url: string; kinds?: Declared; needs?: Needs; problem?: string }>("POST", "/plugins/probe", { url: url.trim(), ...(keyVar.trim() ? { key: `env:${keyVar.trim()}` } : {}) });
       if (!r.ok) { setProblem(r.problem ?? "it did not answer"); return; }
-      setFound({ url: r.url, kinds: r.kinds! });
+      setFound({ url: r.url, kinds: r.kinds!, needs: r.needs ?? {} });
+      // A slot with exactly one model of its kind is wired to it; the operator can change it.
+      setSlots(Object.fromEntries(Object.entries(r.needs ?? {}).flatMap(([slot, n]) => { const m = modelsOfKind(pl, catalog, n.kind); return m.length === 1 ? [[slot, m[0]!]] : []; })));
       setHooks(new Set(Object.entries(r.kinds!).flatMap(([k, st]) => (st ?? []).map((s) => `${k}:${s}`))));
       if (!name) setName(nameFrom(r.url));
       if (Object.values(r.kinds!).some((st) => st?.includes("log") || st?.includes("error"))) setReads((x) => new Set([...x, "reply"]));
@@ -109,6 +118,8 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
     if (onError !== "skip") out.onError = onError;
     if (onFail !== "refuse") out.onFail = onFail;
     if (locked) out.locked = true;
+    if (everyLine) out.everyLine = true;
+    if (Object.keys(slots).length) out.models = { ...slots };
     return out;
   };
 
@@ -124,12 +135,14 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
           `adds ${name}, a service at ${found!.url}`,
           `runs on ${[...hooks].map(hookWords).join(", ")}`,
           `is sent ${[...reads].join(", ") || "only the request's facts"}`,
+          ...Object.entries(slots).map(([slot, m]) => `wires ${m} into its ${slot} slot`),
+          everyLine ? "runs on every line" : "runs where you put it on the Routing map",
           "settings left at their defaults are not written to the file",
         ],
         commit: async () => {
           try {
             await request("PATCH", "/config", body);
-            toast("ok", `${name} added — restart hearth to start it`);
+            toast("ok", everyLine ? `${name} added — restart hearth to start it` : `${name} added — restart hearth, then put it on a line on the Routing map`);
             await refresh();
             onClose();
           } catch (e) {
@@ -171,7 +184,7 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
       ) : (
         <form className="flex flex-col gap-4 overflow-auto p-4" onSubmit={(e) => { e.preventDefault(); if (!found) void check(); else if (!nameProblem && hooks.size) void review(); }}>
           <section className="flex flex-col gap-3">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">1 · Where it is</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">Where it is</div>
             <div className="grid gap-3 sm:grid-cols-[1fr_14rem]">
               <Field label="Address" hint="hearth reads what it handles from <address>/manifest, and calls the address once per hook.">
                 <input autoFocus className={cx(input, mono)} value={url} placeholder="http://127.0.0.1:9000/hook" onChange={(e) => { setUrl(e.target.value); setFound(null); setProblem(null); }} />
@@ -192,7 +205,7 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
           {found && (
             <>
               <section className="flex flex-col gap-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">2 · What it runs on</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">What it runs on</div>
                 <p className="text-[12px] text-dim">What it declares. Untick any you do not want; hearth never calls it for anything it does not declare.</p>
                 <div className="flex flex-wrap gap-2">
                   {all.map((h) => (
@@ -206,8 +219,40 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
                 {all.some((h) => !liveHook(h)) && <p className="text-[11px] text-dim">Dashed: declared, but this version of hearth does not run it yet.</p>}
               </section>
 
+              {Object.keys(found.needs).length > 0 && (
+                <section className="flex flex-col gap-2">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">Models it needs</div>
+                  <p className="text-[12px] text-dim">It asks hearth for these, which queues them like any other request. Wired here, a model is its default on every line; a line can wire its own.</p>
+                  {Object.entries(found.needs).map(([slot, n]) => {
+                    const options = modelsOfKind(pl, catalog, n.kind);
+                    return (
+                      <label key={slot} className="flex items-center gap-2 text-[12px]">
+                        <span className="w-32 shrink-0">{slot} <span className="text-dim">· {n.kind}</span></span>
+                        <select className={cx(input, !slots[slot] && !n.optional && "border-warn")} value={slots[slot] ?? ""} onChange={(e) => setSlots((x) => { const { [slot]: _, ...rest } = x; return e.target.value ? { ...rest, [slot]: e.target.value } : rest; })}>
+                          <option value="">{n.optional ? "none (optional)" : "pick a model"}</option>
+                          {options.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </label>
+                    );
+                  })}
+                  {unwired.length > 0 && <p className="text-[11px] text-warn">Until {unwired.join(" and ")} {unwired.length === 1 ? "has" : "have"} a model, it is skipped on every line. A model's kind is set under Models (<code className={mono}>kind: embeddings</code>).</p>}
+                </section>
+              )}
+
               <section className="flex flex-col gap-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">3 · What it is sent</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">Where it runs</div>
+                <label className="flex items-start gap-2 text-[12px]">
+                  <input type="radio" name="where" className="mt-0.5" checked={!everyLine} onChange={() => setEveryLine(false)} />
+                  <span><b className="font-medium">Where I put it</b> <span className="text-dim">— a block on the lines you choose on the Routing map.</span></span>
+                </label>
+                <label className="flex items-start gap-2 text-[12px]">
+                  <input type="radio" name="where" className="mt-0.5" checked={everyLine} onChange={() => setEveryLine(true)} />
+                  <span><b className="font-medium">On every line</b> <span className="text-dim">— every request it handles, before routing too. For safety and privacy checks.</span></span>
+                </label>
+              </section>
+
+              <section className="flex flex-col gap-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">What it is sent</div>
                 <p className="text-[12px] text-dim">It always gets the request's facts: its id, kind, model, caller and where it runs. Anything else leaves hearth only if ticked.</p>
                 {READS.map((r) => (
                   <label key={r.id} className="flex items-start gap-2 text-[12px]">
@@ -218,7 +263,7 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
               </section>
 
               <section className="flex flex-col gap-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">4 · When things go wrong</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">When things go wrong</div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="If it can't answer" hint="down, slow or erroring">
                     <select className={input} value={onError} onChange={(e) => setOnError(e.target.value as "skip" | "refuse")}>
@@ -244,7 +289,7 @@ export function AddPlugin({ onClose }: { onClose: () => void }) {
               </section>
 
               <section className="flex flex-col gap-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">5 · Name</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dim">Name</div>
                 <Field label="Name" hint={nameProblem ?? "how hearth.yaml, routers and the logs refer to it"}>
                   <input className={cx(input, mono, nameProblem && name && "border-bad")} value={name} onChange={(e) => setName(e.target.value.toLowerCase())} />
                 </Field>

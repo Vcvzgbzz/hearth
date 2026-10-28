@@ -5,6 +5,7 @@
  *   - a plugin on a line runs for that line's requests and no other; a router without it never runs it
  *   - each hook is told the models wired into its slots (the line's over the plugin's) and the line it is on
  *   - a plugin whose required slot is empty on a line does not run there; the request carries on
+ *   - on a line, a plugin with only a `request` hook runs it as its turn before the model
  *   - a slot wired to a model of the wrong kind, or a plugin placed on a line of a kind it does not handle, stops that plugin
  */
 import assert from "node:assert/strict";
@@ -59,6 +60,8 @@ code("liner", `export default { apiVersion: 1, kinds: { chat: ["routed", "log"] 
     log: (x) => { (globalThis.lines.log ??= []).push(x.line.flow); },
   }) };`);
 code("misfit", `export default { apiVersion: 1, kinds: { chat: ["routed"] }, needs: { embed: { kind: "embeddings" } }, setup: () => ({ routed: () => {} }) };`);
+// Hooks only `request`: placed on a line, that is its turn before the model.
+code("early", `export default { apiVersion: 1, kinds: { chat: ["request"] }, setup: () => ({ request: (r) => ({ body: { ...r.body, messages: [{ role: "system", content: "early" }, ...r.body.messages] } }) }) };`);
 code("pictures", `export default { apiVersion: 1, kinds: { image: ["request"] }, setup: () => ({ request: () => {} }) };`);
 
 const free = await new Promise<number>((r) => { const s = createServer().listen(0, "127.0.0.1", () => { const p = (s.address() as AddressInfo).port; s.close(() => r(p)); }); });
@@ -85,16 +88,20 @@ routers:
     flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}}]}}
   bare:
     flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}, plugins: [unwired]}]}}
+  early:
+    flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}, plugins: [early]}]}}
 apiKeys:
   - {key: k-app, label: app}
   - {key: k-quiet, label: quiet}
   - {key: k-bare, label: bare}
-callers: {quiet: quiet, bare: bare}
+  - {key: k-early, label: early}
+callers: {quiet: quiet, bare: bare, early: early}
 plugins:
   liner: {use: "file:./liner.mjs", trust: code, models: {embed: e, rerank: r}}
   unwired: {use: "file:./liner.mjs", trust: code}
   misfit: {use: "file:./misfit.mjs", trust: code, models: {embed: m}}
   pictures: {use: "file:./pictures.mjs", trust: code}
+  early: {use: "file:./early.mjs", trust: code}
 `);
 const node = createNode(loadConfig(cfgPath), silentLogger);
 node.start();
@@ -134,6 +141,10 @@ try {
   assert.match(r, /"ok"/);
   assert.equal(g.lines.routed!.length, before);
   assert.equal(seen.at(-1)!.messages[0]!.role, "user");
+
+  // A plugin with only a request hook, placed on a line, runs it there.
+  await chat("k-early");
+  assert.equal(seen.at(-1)!.messages[0]!.content, "early");
 } finally {
   await node.close();
   backend.close();

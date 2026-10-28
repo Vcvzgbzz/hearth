@@ -5,12 +5,129 @@
  * them by node type; how each behaves when a line is drawn is NODES in draft.ts.
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
-import { ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, MoreHorizontal, Pencil, Plus, Split, Trash2, X, Zap } from "lucide-react";
+import { ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, MoreHorizontal, Pencil, Plus, Puzzle, Split, Trash2, X, Zap } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 
-import { ACTIONS, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, moveStep, NODES, obj, put, raisePlace, rawTo, text, toOf, toText, withDo, withRest, type Doc, type End } from "./draft.js";
+import { ACTIONS, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
 import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
+import { openPlugin, useStore } from "./store.js";
+import type { PluginView, PluginsView } from "./types.js";
 import { cx } from "./ui.js";
+
+/* ---------------------------------------------------------------- plugins on a line */
+
+const NONE: string[] = [];
+
+/** What kind of request a rule's lines carry: chat, or what its routes are, which hearth does not know yet. */
+const lineKind = (takes: string[] | undefined) => ((takes ?? []).length ? "other" : "chat");
+
+/** The models a slot can take: those whose kind is the slot's; a model with no kind of its own is chat. */
+export function modelsOfKind(pv: PluginsView | undefined, catalog: string[], kind: string): string[] {
+  const kinds = pv?.modelKinds ?? {};
+  const ids = new Set([...catalog, ...Object.keys(kinds)]);
+  return [...ids].filter((id) => (kinds[id] ?? "chat") === kind).sort();
+}
+
+/** How a plugin placed on a line is doing there, worst first: the word, and how its block is drawn. */
+export function placedState(p: PluginView | undefined, placed: Placed, kind: string): { tone: "ok" | "warn" | "bad" | "dim"; word: string } {
+  if (!p) return { tone: "dim", word: "not loaded: starts after a restart" };
+  if (p.state === "failed") return { tone: "bad", word: `did not start: ${p.error ?? "unknown"}` };
+  if (p.state === "off") return { tone: "dim", word: "off: hearth started with --no-plugins" };
+  if (!p.kinds[kind]) return { tone: "bad", word: `handles ${Object.keys(p.declared).join(", ") || "nothing"}, not ${kind}` };
+  const empty = Object.entries(p.needs).filter(([slot, n]) => !n.optional && !(placed.models[slot] ?? p.models[slot])).map(([slot]) => slot);
+  if (empty.length) return { tone: "warn", word: `needs a model: ${empty.join(", ")} — requests pass by it` };
+  if (p.paused) return { tone: "dim", word: "paused — requests pass by it" };
+  if (p.pausedUntil > Date.now()) return { tone: "bad", word: "resting after repeated failures" };
+  return { tone: "ok", word: "runs on this line" };
+}
+
+/** Only watches: it has no hook that runs before the model, so it is drawn as a tap after it. */
+const watches = (p: PluginView | undefined, kind: string) => !!p && (p.kinds[kind] ?? []).every((s) => s === "log" || s === "error");
+
+const BLOCK: Record<string, string> = { ok: "border-accent/70 text-fg", warn: "border-warn text-warn", bad: "border-bad text-bad", dim: "border-dashed border-line text-dim" };
+
+/** The plugins a line runs, as blocks between its conditions and where it sends the request. */
+function LinePlugins({ flow, step, s, takes, editable }: { flow: string; step: number; s: Doc; takes?: string[]; editable?: boolean }) {
+  const pv = useStore((x) => x.data?.plugins);
+  const catalog = useStore((x) => x.data?.catalog) ?? NONE;
+  const placed = placedOn(s);
+  if (!placed.length) return null;
+  const kind = lineKind(takes);
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {placed.map((pl, k) => {
+        const p = pv?.plugins.find((x) => x.name === pl.name);
+        const st = placedState(p, pl, kind);
+        const tap = watches(p, kind);
+        const menu = (e: { currentTarget: Element }) => {
+          const items: Choice[] = [{ label: pl.name, head: true }, { label: st.word, still: true }];
+          for (const [slot, n] of Object.entries(p?.needs ?? {})) {
+            const own = p!.models[slot];
+            const here = pl.models[slot];
+            items.push({ label: `${slot} slot · ${n.kind} model${n.optional ? " (optional)" : ""}`, head: true });
+            items.push({ label: own ? `the plugin's own: ${own}` : "the plugin's own: none wired", value: `slot:${slot}:`, on: here === undefined });
+            for (const m of modelsOfKind(pv, catalog, n.kind)) items.push({ label: m, value: `slot:${slot}:${m}`, mono: true, on: here === m });
+          }
+          items.push({ label: "", head: true });
+          if (placed.length > 1) items.push({ label: "Run earlier", value: "up", off: k === 0 }, { label: "Run later", value: "down", off: k === placed.length - 1 });
+          items.push({ label: "Open on the Plugins page", value: "open" }, { label: "Take it off this line", value: "off", danger: true });
+          choose(e, items, (v) => {
+            if (v === "open") openPlugin(pl.name);
+            else if (v === "off") change((d) => withPlugin(d, flow, step, pl.name, false) ?? d);
+            else if (v === "up" || v === "down") change((d) => movePlugin(d, flow, step, pl.name, v === "up" ? -1 : 1) ?? d);
+            else if (v.startsWith("slot:")) { const [, slot, model] = v.split(":"); change((d) => wireSlot(d, flow, step, pl.name, slot!, model || null) ?? d); }
+          });
+        };
+        const body = (
+          <>
+            <Puzzle size={10} className="shrink-0" />
+            <span className="max-w-[88px] truncate font-mono">{pl.name}</span>
+            {st.tone === "warn" && <span aria-hidden="true">▲</span>}
+          </>
+        );
+        const look = cx("nodrag nopan flex h-6 items-center gap-1 rounded-md border bg-panel px-1.5 text-[10px]", BLOCK[st.tone], tap && "border-dashed");
+        const title = `${pl.name} — ${tap ? "watches the finished exchange; changes nothing. " : "gets the request and passes it on changed. "}${st.word}`;
+        return editable
+          ? <button key={pl.name} type="button" className={cx(look, "hover:bg-muted")} title={title} aria-label={`plugin ${pl.name} on this line`} onClick={menu}>{body}</button>
+          : <span key={pl.name} className={look} title={title}>{body}</span>;
+      })}
+      <span className="text-dim" aria-hidden="true">→</span>
+    </span>
+  );
+}
+
+/** Plugins that run on every line, as a badge on the router: they are on no one line, so no block is drawn for them. */
+function EveryLine() {
+  const pv = useStore((x) => x.data?.plugins);
+  const all = (pv?.plugins ?? []).filter((p) => p.everyLine);
+  if (!all.length) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-dim" title="these run on every request of their kinds, on every line, before and after routing">
+      <span>every line:</span>
+      {all.map((p) => (
+        <button key={p.name} type="button" className="nodrag nopan flex items-center gap-0.5 rounded border border-line px-1 font-mono hover:bg-muted hover:text-fg" onClick={() => openPlugin(p.name)}>
+          {p.locked && <Lock size={9} aria-label="locked" />}{p.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The plugins a line can run, for its menu: those for its kind first, the rest shown with why not. */
+function pluginChoices(pv: PluginsView | undefined, s: Doc, takes: string[] | undefined): Choice[] {
+  const kind = lineKind(takes);
+  const placed = placedOn(s).map((p) => p.name);
+  const all = (pv?.plugins ?? []).filter((p) => !p.everyLine);
+  if (!all.length) return [{ label: "run plugins", head: true }, { label: "no plugins yet: add one on the Plugins page", off: true }];
+  return [
+    { label: "run plugins", head: true },
+    ...all.map((p): Choice => {
+      const fits = p.state !== "failed" ? p.kinds[kind] !== undefined : true;
+      const aside = p.state === "failed" ? "did not start" : fits ? undefined : `handles ${Object.keys(p.declared).join(", ") || "nothing"}`;
+      return { label: p.name, value: `plugin:${p.name}`, mono: true, on: placed.includes(p.name), off: !fits && !placed.includes(p.name), ...(aside ? { aside } : {}) };
+    }),
+  ];
+}
 
 type About = "the request" | "where it would go" | "this node";
 type Cond =
@@ -312,6 +429,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
             ) : (
               <span className="min-w-0 flex-1 truncate">{sentence(group ? mine : when) || (group?.to === i ? "" : "it can take it")}</span>
             )}
+            {(to.kind === "model" || to.kind === "peer" || to.kind === "asked" || to.kind === "fastest" || order) && <LinePlugins flow={data.name} step={i} s={s} takes={data.takes} editable={data.editable} />}
             <span className="flex w-[200px] min-w-0 shrink-0 items-center gap-1.5">
               <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", (order ? hue("fastest") : worn(to)).dot)} title={(order ? hue("fastest") : worn(to)).says} />
               {to.kind !== "refuse" && <span className="shrink-0 text-dim">send to</span>}
@@ -336,6 +454,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                         { label: "queue it in", head: true },
                         { label: "the model's own lane", value: "lane:", on: text(s.lane) === "" },
                         ...data.lanes.map((l) => ({ label: `the ${l} lane`, value: `lane:${l}`, on: text(s.lane) === l })),
+                        ...(to.kind !== "refuse" && to.kind !== "flow" ? pluginChoices(useStore.getState().data?.plugins, s, data.takes) : []),
                         { label: "also run", head: true },
                         ...(data.actions.length ? data.actions.map((a) => ({ label: a, value: `do:${a}`, mono: true, on: list(s.do).includes(a) })) : [{ label: "no actions yet: + action makes one", off: true }]),
                         { label: "more", head: true },
@@ -348,6 +467,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                         else if (v === "delete") edit(i, () => null);
                         else if (v === "more") openRule(data.name, i);
                         else if (v.startsWith("do:")) change((d) => withDo(d, data.name, i, v.slice(3), !list(s.do).includes(v.slice(3))) ?? d);
+                        else if (v.startsWith("plugin:")) change((d) => withPlugin(d, data.name, i, v.slice(7), !placedOn(s).some((p) => p.name === v.slice(7))) ?? d);
                         else if (v.startsWith("lane:")) edit(i, ({ lane: _, ...r }) => (v === "lane:" ? r : { ...r, lane: v.slice(5) }));
                       }); }}>
                 <MoreHorizontal size={13} />
@@ -490,6 +610,7 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
       <div className="border-b border-line px-3 py-2">
         <div className="flex items-center gap-2"><Split size={14} className="text-accent" /><span className="truncate font-medium">{data.title}</span></div>
         <div className="mt-0.5 truncate text-[11px] text-dim">{data.sub}</div>
+        <EveryLine />
       </div>
       {data.rows.length > 0 && <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wide text-dim" title="the names callers may ask for">types</div>}
       {data.rows.map((r) => (
