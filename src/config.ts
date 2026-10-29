@@ -261,7 +261,7 @@ export type FlowEnd = { model: string } | { peer: string; model: string | null }
  * Where a step sends a request: to run, into another flow, to whichever of several would start
  * it soonest, nowhere, or here as the very id that was asked for.
  */
-export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true };
+export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true } | { plugin: string };
 
 /** The input that stands for every name no other flow takes: the flow that has it decides what happens to those. */
 export const ANY = "*";
@@ -683,23 +683,24 @@ const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 function flowTo(raw: unknown, at: string): FlowTo {
   if (typeof raw === "string" && raw.trim() !== "") return { model: raw.trim() };
   const o = asRecord(raw, at);
-  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked"], at);
-  const said = ["peer", "flow", "fastest", "refuse", "asked"].filter((k) => o[k] !== undefined);
+  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked", "plugin"], at);
+  const said = ["peer", "flow", "fastest", "refuse", "asked", "plugin"].filter((k) => o[k] !== undefined);
   if (said.length > 1 || (said.length === 1 && said[0] !== "peer" && o.model !== undefined)) {
-    throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse or asked");
+    throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse, asked or a plugin");
   }
   if (o.asked !== undefined) {
     if (o.asked !== true) throw bad(`${at}.asked`, "must be true: run it here as the id that was asked for");
     return { asked: true };
   }
   if (o.refuse !== undefined) return { refuse: str(o.refuse, `${at}.refuse`) };
+  if (o.plugin !== undefined) return { plugin: str(o.plugin, `${at}.plugin`) };
   if (o.flow !== undefined) return { flow: str(o.flow, `${at}.flow`) };
   if (o.fastest !== undefined) {
     if (!Array.isArray(o.fastest) || o.fastest.length < 2) throw bad(`${at}.fastest`, "must list at least two places to choose between");
     return {
       fastest: o.fastest.map((e, i) => {
         const end = flowTo(e, `${at}.fastest[${i}]`);
-        if ("flow" in end || "fastest" in end || "refuse" in end || "asked" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
+        if ("flow" in end || "fastest" in end || "refuse" in end || "asked" in end || "plugin" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
         return end;
       }),
     };
@@ -719,7 +720,7 @@ export function rawFlow(flow: Flow): Record<string, unknown> {
     inputs: [...flow.inputs],
     steps: flow.steps.map((s) => ({
       ...(s.when !== null ? { when: s.when } : {}),
-      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to || "asked" in s.to ? s.to : end(s.to),
+      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to || "asked" in s.to || "plugin" in s.to ? s.to : end(s.to),
       ...(s.max !== undefined ? { max: s.max } : {}),
       ...(s.lane !== null ? { lane: s.lane } : {}),
       ...(s.params !== null ? { params: s.params } : {}),
@@ -733,11 +734,11 @@ export function rawFlow(flow: Flow): Record<string, unknown> {
 export function endsOf(to: FlowTo, asked?: string): FlowEnd[] {
   if ("fastest" in to) return to.fastest;
   if ("asked" in to) return asked === undefined ? [] : [{ model: asked }];
-  return "flow" in to || "refuse" in to ? [] : [to];
+  return "flow" in to || "refuse" in to || "plugin" in to ? [] : [to];
 }
 
-/** Can this target be passed over when it cannot take the request? Only a peer can be down. */
-const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
+/** Can this target be passed over when it cannot take the request? A peer can be down, and a plugin takes no model request. */
+const skippable = (to: FlowTo): boolean => "peer" in to || "plugin" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
 
 /** What a request is, which decides the plugins that may see it. hearth sets it; a client or plugin cannot. */
 export const REQUEST_KINDS = ["chat", "embeddings", "rerank", "image", "video", "speech", "transcription", "other"] as const;
@@ -763,6 +764,10 @@ export interface PluginDecl {
   use: string | null;
   /** A service's own API, answered at `/plugins/<name>/*`; null when it has none. */
   serves: string | null;
+  /** The path under `serves` where an MCP endpoint answers (`/mcp` for a plugin that runs one); null when it speaks no MCP. */
+  mcp: string | null;
+  /** An MCP server hearth starts and speaks to over stdin and stdout, answered at `/plugins/<name>/mcp`; null when it has none. */
+  run: PluginRun | null;
   trust: "code" | "http";
   /** For `file:`, the sha256 of the file, as `sha256-<hex>`; a file that differs is not loaded. */
   integrity: string | null;
@@ -788,6 +793,9 @@ export interface PluginDecl {
   models: Record<string, string>;
   config: Record<string, unknown>;
 }
+
+/** A program hearth starts as an MCP server. `env` values may be `env:NAME`; the program sees these, and of hearth's own only what it needs to find and cache its files (PATH, HOME, TMPDIR). */
+export interface PluginRun { command: string; args: string[]; env: Record<string, string>; cwd: string | null }
 
 /** A plugin placed on a flow step, with the models this line wires into its slots over the plugin's own. */
 export interface StepPlugin { name: string; models: Record<string, string> }
@@ -827,6 +835,18 @@ function pluginWhen(raw: unknown, at: string): PluginWhen | null {
   return out;
 }
 
+/** `plugins.<name>.run`: the program an MCP server is, started by hearth and spoken to over its stdin and stdout. */
+function pluginRun(raw: unknown, at: string): PluginRun | null {
+  if (raw === undefined) return null;
+  const r = asRecord(raw, at);
+  only(r, ["command", "args", "env", "cwd"], at);
+  const command = str(r.command, `${at}.command`);
+  const args = r.args === undefined ? [] : stringList(r.args, `${at}.args`);
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(asRecord(r.env ?? {}, `${at}.env`))) env[k] = resolveSecret(str(v, `${at}.env.${k}`), `${at}.env.${k}`);
+  return { command, args, env, cwd: r.cwd === undefined ? null : str(r.cwd, `${at}.cwd`) };
+}
+
 /** `plugins:`. A plugin is code only when its entry says `trust: code`, so copying a line never runs code by accident. */
 function pluginDecls(raw: unknown): Record<string, PluginDecl> {
   const out: Record<string, PluginDecl> = {};
@@ -834,19 +854,26 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const at = `plugins.${name}`;
     if (!PLUGIN_NAME.test(name)) throw bad(at, "a plugin's name is lowercase letters, digits and dashes");
     const r = asRecord(v, at);
-    only(r, ["use", "serves", "trust", "integrity", "key", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
+    only(r, ["use", "serves", "mcp", "run", "trust", "integrity", "key", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
     const serves = r.serves === undefined ? null : str(r.serves, `${at}.serves`).replace(/\/$/, "");
     if (serves !== null && !/^https?:\/\/[^/]/.test(serves)) throw bad(`${at}.serves`, "is the http(s) URL of the service's own API");
+    const run = pluginRun(r.run, `${at}.run`);
+    if (run !== null && serves !== null) throw bad(`${at}.run`, "starts an MCP server here, so the plugin serves nothing else: leave serves out");
     // `/plugins/probe` is the console's own route, so a plugin of that name could never be reached.
-    if (serves !== null && name === "probe") throw bad(at, "a plugin that serves cannot be named probe: /plugins/probe is taken");
-    if (r.use === undefined && serves === null) throw bad(`${at}.use`, "is required, unless the plugin only serves an API (serves: <url>)");
+    if ((serves !== null || run !== null) && name === "probe") throw bad(at, "a plugin that serves cannot be named probe: /plugins/probe is taken");
+    if (r.use === undefined && serves === null && run === null) throw bad(`${at}.use`, "is required, unless the plugin only serves an API (serves: <url>) or runs an MCP server (run: { command })");
+    if (r.use !== undefined && run !== null) throw bad(`${at}.run`, "is a plugin of its own: an MCP server hearth starts; leave use out");
+    // `mcp` on a served API names the path its MCP endpoint answers at; a plugin that runs one is an MCP server.
+    if (r.mcp !== undefined && serves === null) throw bad(`${at}.mcp`, run !== null ? "is implied by run" : "says a served API speaks MCP: it needs serves");
+    const mcp = run !== null ? "/mcp" : r.mcp === undefined || r.mcp === false ? null : r.mcp === true ? "/mcp" : str(r.mcp, `${at}.mcp`);
+    if (mcp !== null && !mcp.startsWith("/")) throw bad(`${at}.mcp`, "is true, or the path its MCP endpoint answers at, like /mcp");
     const use = r.use === undefined ? null : str(r.use, `${at}.use`);
-    const service = use === null || /^https?:\/\//.test(use);
+    const service = run === null && (use === null || /^https?:\/\//.test(use));
     if (use !== null && !service && !/^(file:.+|npm:(@[^/]+\/)?[^@/]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/.test(use)) throw bad(`${at}.use`, "is file:<path>, npm:<package>@<exact version, like 1.2.3>, or an http(s) URL");
     if (serves !== null && !service) throw bad(`${at}.serves`, "is for a service; code answers its own routes inside hearth");
     const trust = r.trust;
-    if (trust !== "code" && trust !== "http") throw bad(`${at}.trust`, service ? "must be http for a service" : "must be code: this plugin runs inside hearth, and saying so is the opt-in");
-    if (service !== (trust === "http")) throw bad(`${at}.trust`, service ? "a URL is a service: trust: http" : "a file or package runs inside hearth: trust: code");
+    if (trust !== "code" && trust !== "http") throw bad(`${at}.trust`, run !== null ? "must be code: run starts a program on this machine, and saying so is the opt-in" : service ? "must be http for a service" : "must be code: this plugin runs inside hearth, and saying so is the opt-in");
+    if (service !== (trust === "http")) throw bad(`${at}.trust`, run !== null ? "run starts a program on this machine: trust: code" : service ? "a URL is a service: trust: http" : "a file or package runs inside hearth: trust: code");
     if (r.peers !== undefined && r.peers !== false) throw bad(`${at}.peers`, "plugins on requests peers send here are not built yet; leave it unset");
     let kinds: PluginDecl["kinds"] = null;
     if (r.kinds !== undefined) {
@@ -872,7 +899,7 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const key = r.key === undefined ? null : resolveSecret(str(r.key, `${at}.key`), `${at}.key`);
     if (integrity !== null && !/^sha256-[0-9a-f]{64}$/.test(integrity)) throw bad(`${at}.integrity`, "is sha256-<64 hex digits>");
     out[name] = {
-      use, serves, trust, integrity, key, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
+      use, serves, mcp, run, trust, integrity, key, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
       onError: pick(r.onError, ["skip", "refuse"] as const, "skip", `${at}.onError`),
       onFail: pick(r.onFail, ["refuse", "flag"] as const, "refuse", `${at}.onFail`),
       locked: bool(r.locked, `${at}.locked`, false),

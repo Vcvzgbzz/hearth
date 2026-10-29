@@ -4,7 +4,7 @@
  * request against the draft.
  */
 import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Redo2, RefreshCw, Split, RotateCcw, Save, Search, Trash2, Undo2, Users, X, Zap } from "lucide-react";
-import { useContext, useEffect, useState } from "react";
+import { Fragment, useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
@@ -335,6 +335,11 @@ export function Picker() {
   const models = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => [...list(obj(b).serves), ...(Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).model)).filter(Boolean)]).concat(Object.keys(obj(draft.models))))].filter(hit)
     .filter((m) => !chat || q.trim() !== "" || known?.kind(m) !== "paths");
   const peers = Object.keys(obj(draft.peers)).filter(hit);
+  // Plugins that serve: where a rule sends the requests made to /plugins/<name>/*.
+  const serving = Object.entries(obj(draft.plugins)).filter(([p, v]) => hit(p) && (obj(v).serves !== undefined || obj(v).run !== undefined))
+    .map(([p, v]) => ({ name: p, kind: obj(v).run !== undefined || (obj(v).mcp !== undefined && obj(v).mcp !== false) ? "MCP" : "API" }));
+  // Grouped by what they are, each kind under its own heading.
+  const servingKinds = [{ kind: "MCP", head: "an MCP server on this node" }, { kind: "API", head: "an API on this node" }].map((g) => ({ ...g, items: serving.filter((p) => p.kind === g.kind) })).filter((g) => g.items.length > 0);
   // A flow that only says where one name runs is a line on the map, not a rule to hand work to.
   const flows = Object.entries(obj(draft.flows)).filter(([f, v]) => f !== self && hit(f) && !list(obj(v).inputs).includes("*")
     && directTo(f, { inputs: list(obj(v).inputs), steps: (Array.isArray(obj(v).steps) ? (obj(v).steps as unknown[]) : []).map(obj) }) === null).map(([f]) => f);
@@ -342,6 +347,8 @@ export function Picker() {
   const entering = self ? list(obj(obj(draft.flows)[self]).inputs) : [];
   // With several names entering, "its own model" is whichever of them was asked for.
   const own = entering.length === 1 ? entering[0]! : entering.length > 1 ? "whichever was asked for" : null;
+  // A rule that takes MCP or API takes plugin requests: as asked, each goes to the plugin it names.
+  const forPlugins = entering.some((n) => n === "MCP" || n === "API");
   const row = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-line/60";
   const head = "px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-dim";
   return (
@@ -359,7 +366,20 @@ export function Picker() {
                  className="h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         </div>
         <div className="max-h-72 overflow-auto p-1.5">
-          {!ends && (
+          {forPlugins && (
+            <>
+              {hit("as asked") && <button className={row} onClick={() => send({ kind: "asked" })}><span className="size-2 rounded-full bg-info" />As asked<span className="ml-auto text-[11px] text-dim">the plugin it names</span></button>}
+              {servingKinds.map((g) => (
+                <Fragment key={g.kind}>
+                  <div className={head}>{g.head}</div>
+                  {g.items.map((p) => <button key={p.name} className={cx(row, mono)} onClick={() => send({ kind: "plugin", plugin: p.name })}>{p.name}<span className="ml-auto rounded border border-line px-1 font-sans text-[10px] text-dim">{p.kind}</span></button>)}
+                </Fragment>
+              ))}
+              {hit("refuse it") && <button className={row} onClick={() => send({ kind: "refuse", why: "not open to this caller" })}><span className="size-2 rounded-full bg-bad" />Refuse it<span className="ml-auto text-[11px] text-dim">tell the caller why</span></button>}
+              <p className="px-2 pb-1 pt-2 text-[11px] text-dim">This rule takes plugin requests, which a model or a peer is passed over for.</p>
+            </>
+          )}
+          {!ends && !forPlugins && (
             <>
               {(hit("fastest of several") || hit("refuse it")) && <div className={head}>something other than one model</div>}
               {hit("fastest of several") && <button className={row} onClick={() => send({ kind: "fastest", of: [{ kind: "model", model: models[0] ?? anyModel(draft) }, { kind: "model", model: models[1] ?? anyModel(draft) }] })}><span className="size-2 rounded-full bg-ok" />Fastest of several<span className="ml-auto text-[11px] text-dim">whichever starts soonest</span></button>}
@@ -367,17 +387,17 @@ export function Picker() {
             </>
           )}
           {/* Leaving a name alone is a choice too, and the one most lines end on. */}
-          {own && hit("its own model") && <button className={row} onClick={() => send(entering.length === 1 ? { kind: "model", model: own } : { kind: "asked" })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
-          {models.length > 0 && <div className={head}>a model on this node</div>}
-          {models.map((m) => {
+          {own && !forPlugins && hit("its own model") && <button className={row} onClick={() => send(entering.length === 1 ? { kind: "model", model: own } : { kind: "asked" })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
+          {!forPlugins && models.length > 0 && <div className={head}>a model on this node</div>}
+          {!forPlugins && models.map((m) => {
             const shut = chat && known?.kind(m) === "paths";
             const on = text(obj(obj(draft.models)[m]).backend) || Object.entries(obj(draft.backends)).find(([, b]) => list(obj(b).serves).includes(m) || (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).some((r) => text(obj(r).model) === m))?.[0];
             const hw = on ? list(obj(obj(draft.backends)[on]).resources) : [];
             return <button key={m} disabled={shut} title={shut ? `${m} is not a chat model, and this rule takes chat requests. To send it requests on its own path, open the rule and set "It takes" to that path.` : undefined} className={cx(row, mono, "disabled:opacity-40")} onClick={() => send({ kind: "model", model: m })}>{m}{shut ? <span className="ml-auto font-sans text-[10px] text-dim">not chat: set what the rule takes</span>
               : hw.length > 0 && <span className="ml-auto shrink-0 font-sans text-[10px] uppercase text-dim" title={`runs on ${hw.join(", ")}, behind the ${on} backend`}>{hw.join(" · ")}</span>}</button>;
           })}
-          {peers.length > 0 && <div className={head}>a peer</div>}
-          {peers.map((p) => <button key={p} className={row} onClick={() => send({ kind: "peer", peer: p, model: null })}>{p}</button>)}
+          {!forPlugins && peers.length > 0 && <div className={head}>a peer</div>}
+          {!forPlugins && peers.map((p) => <button key={p} className={row} onClick={() => send({ kind: "peer", peer: p, model: null })}>{p}</button>)}
           {!ends && flows.length > 0 && <div className={head}>another routing rule</div>}
           {!ends && flows.map((f) => <button key={f} className={cx(row, mono)} onClick={() => send({ kind: "flow", flow: f })}>{f}</button>)}
         </div>
@@ -645,7 +665,7 @@ function Lines({ name, flow, at }: { name: string; flow: Doc; /** The line it wa
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
               <span className="text-dim">{to.kind === "refuse" ? "then" : "send to"}</span>
               <button type="button" className={cx(PICK, mono, to.kind === "unset" && "border-warn text-warn")} onClick={(e) => from(e, `flow:${name}`, `step-${i}`)}>
-                <span className="truncate">{to.kind === "unset" ? "choose where" : to.kind === "asked" || (to.kind === "model" && list(flow.inputs).includes(to.model)) ? "its own model" : toText(to)}</span><ChevronDown size={12} className="shrink-0 text-dim" />
+                <span className="truncate">{to.kind === "unset" ? "choose where" : to.kind === "asked" && list(flow.inputs).some((n) => n === "MCP" || n === "API") ? "as asked: its plugin" : to.kind === "asked" || (to.kind === "model" && list(flow.inputs).includes(to.model)) ? "its own model" : toText(to)}</span><ChevronDown size={12} className="shrink-0 text-dim" />
               </button>
               {i < last && to.kind !== "refuse" && (
                 <label className="flex items-center gap-1.5" title="The most requests this line takes at once. Past it, requests go on down the list. Empty is no limit.">

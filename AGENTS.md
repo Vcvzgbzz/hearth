@@ -13,6 +13,8 @@ comment is read by strangers. Write for them.
   caller is, for peers bound with `tailnet`
 - `src/actions.ts`: what a flow step can set off beside routing; one entry
   per kind
+- `src/mcp.ts`: MCP for plugins: checking a served MCP endpoint, and running an
+  MCP server over stdin and stdout behind `/plugins/<name>/mcp`
 - `src/plugins.ts`: loading plugins and running their hooks: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, the
   tokens that mark a plugin's own calls as internal

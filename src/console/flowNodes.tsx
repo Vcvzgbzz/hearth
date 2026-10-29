@@ -311,9 +311,13 @@ export const HUE: Record<string, { dot: string; stroke: string; says: string }> 
   fastest: { dot: "!bg-pick", stroke: "var(--pick)", says: "the fastest of several, or several in order" },
   refuse: { dot: "!bg-bad", stroke: "var(--bad)", says: "a refusal" },
   action: { dot: "!bg-warn", stroke: "var(--warn)", says: "an action" },
+  mcp: { dot: "!bg-mcp", stroke: "var(--mcp)", says: "a plugin that is an MCP server" },
+  api: { dot: "!bg-api", stroke: "var(--api)", says: "a plugin that serves an API" },
   unset: { dot: "!bg-dim", stroke: "var(--dim)", says: "nowhere yet" },
 };
 const hue = (kind: string) => HUE[kind] ?? HUE.unset!;
+/** The colour key of a plugin a line ends at: `mcp` for one that is an MCP server, `api` for any other. */
+export const pluginHue = (pv: PluginsView | undefined, name: string): "mcp" | "api" => ((pv?.plugins ?? []).find((p) => p.name === name)?.mcp ? "mcp" : "api");
 // Big enough to see and to grab at the size the whole picture is drawn.
 const PORT = "!h-3.5 !w-3.5 !border-2 !border-panel";
 
@@ -369,8 +373,13 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
   const groups = groupsOf(data.steps);
   // One line's conditions are open to change where they stand at a time; the rest read as a sentence, so a long rule stays short.
   const [open, setOpen] = useState<number | null>(null);
-  /** The colour a line wears: what it is plugged into, and for a model, whether that is a provider's. */
-  const worn = (to: ReturnType<typeof toOf>) => hue(to.kind === "asked" ? "model" : to.kind === "model" && (data.cloud ?? []).includes(to.model) ? "cloud" : to.kind);
+  const pv = useStore((x) => x.data?.plugins);
+  // A rule for plugin requests runs one as asked at its plugin: it wears the colour of the type it takes.
+  const pluginRule = (data.inputs ?? []).find((n) => n === "MCP" || n === "API");
+  /** The colour a line wears: what it is plugged into; for a model, whether that is a provider's; for a plugin, its type. */
+  const worn = (to: ReturnType<typeof toOf>) => hue(to.kind === "asked" ? (pluginRule ? pluginRule.toLowerCase() : "model")
+    : to.kind === "plugin" ? pluginHue(pv, to.plugin)
+    : to.kind === "model" && (data.cloud ?? []).includes(to.model) ? "cloud" : to.kind);
   return (
     <div className={cx(
       "w-[640px] rounded-xl border bg-panel shadow-sm transition-colors",
@@ -396,7 +405,9 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
         const word = i === last ? "Otherwise" : group ? (Object.keys(mine).length === 0 && i === group.to ? "Else" : i === group.from ? "If" : "Else if") : i === 0 ? "If" : "Else if";
         // A line that hands to an order reads as the places in it, not as the rule that holds them.
         const order = to.kind === "flow" ? data.orders?.[to.flow] : undefined;
-        const goes = order ? order.map(toText).join(", then ") : own(to) ? "its own model" : toText(to);
+        // A rule for plugin requests runs one as asked at the plugin it names, not at a model.
+        const plugins = (data.inputs ?? []).some((n) => n === "MCP" || n === "API");
+        const goes = order ? order.map(toText).join(", then ") : plugins && to.kind === "asked" ? "as asked: its plugin" : own(to) ? "its own model" : toText(to);
         return (
           <Fragment key={i}>
           {group?.from === i && (

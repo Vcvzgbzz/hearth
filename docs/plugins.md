@@ -372,7 +372,11 @@ plugins:
   answering (502 if it does not); after that there is no deadline, so a stream it holds open (server-sent
   events, an MCP session) stays open until one side closes it.
 - **Callers are let in as on `/v1`**: this machine, or one of `apiKeys`. A peer never is, and neither is a key
-  scoped to `models:`.
+  scoped to `models:`. The caller's router then decides, as it does for a model: the request is asked of it
+  as `API:<name>` (or `MCP:<name>`), so it can let a plugin through, send it to another, or refuse it. With
+  no rule for `API` or `MCP`, its flow for every other name decides: a router that refuses names it has no
+  type for refuses plugins too.
+  See [Plugins on the router](routing.md#plugins-on-the-router).
 - **The caller's key stays here.** The service is sent the plugin's `key` as a bearer token instead, when it
   has one, and who is calling in `x-hearth-caller` (`local` or `key:<label>`), which a caller cannot set.
 - **`use` is optional.** A plugin that only serves hooks nothing, so hearth reads no `/manifest` from it and
@@ -380,9 +384,47 @@ plugins:
   nothing (503).
 - A paused plugin answers 503, an unknown name 404, and a service that cannot be reached 502. The Plugins
   status counts the requests served and the ones that failed (`served`).
-- **In the console** each one is a box under the router on the Topology map, since callers reach it through
-  this node as they reach a backend; a click opens it on the Plugins page, which says where its path goes
-  and how many requests it has served.
+- **In the console** each one is a box under the router on the Topology map, in a Plugins frame, since callers
+  reach it through this node as they reach a backend; a click opens it on the Plugins page, which says where
+  its path goes and how many requests it has served.
+
+## A plugin that speaks MCP
+
+An MCP server is a plugin too, in either of two ways:
+
+```yaml
+plugins:
+  tools:
+    serves: http://tools:3100        # an MCP server already on the network
+    trust: http
+    key: env:TOOLS_TOKEN
+    mcp: true                        # its endpoint is /mcp; or give the path: mcp: /v2/mcp
+  search:
+    run:                             # a program hearth starts, spoken to over stdin and stdout
+      command: npx
+      args: [-y, some-mcp-server]
+      env: { SEARCH_API_KEY: env:SEARCH_API_KEY }
+    trust: code                      # it runs on this machine: the same opt-in as code
+```
+
+- **Served** (`serves` with `mcp`): requests go through as for any served API. hearth also makes the handshake
+  a client would (`initialize`, then `tools/list`, with the plugin's `key`) at startup and every minute after,
+  ends the session it opened, and shows the server's name and how many tools it has, or why it did not answer.
+  A failed check is shown, never a reason to stop forwarding.
+- **Run** (`run`): hearth starts the program when it starts, initializes it once, and answers
+  `/plugins/<name>/mcp` as MCP's streamable HTTP does without a stream: a JSON answer for each request, 202 for
+  a notification, and 405 for the GET that would open a stream. Every caller shares the one program: a caller's
+  `initialize` is answered from hearth's own, with a session id, and every request is given an id of its own on
+  the way in, so two callers using the same id each get their own answer. A request the program makes of its
+  caller (sampling, roots) is refused. A program that exits is started again, after one second, then longer
+  each time it exits again, up to a minute.
+- The program sees the `env` its entry gives it, and of hearth's own environment only what it needs to find
+  and cache its files (`PATH`, `HOME`, `TMPDIR`). The console shows its command line, never its `env`, so a
+  secret belongs in `env`, not in `args`.
+- Callers are let in as for a served API: this machine or one of `apiKeys`.
+- **In the console** MCP servers have a group of their own beside Services in the Plugins frame, each box with
+  its tool count; with both groups present, each is one box wide. The Plugins page shows the server's name, its
+  tools and when it was last asked.
 
 ## Guarantees
 
@@ -410,8 +452,10 @@ request goes: the same page that decides the model shows what happens to the req
   the models it needs and what is wired into them, the lines it is placed on, and how it is doing. A
   plugin's panel has its model slots (each offering only models of its kind), the lines it is on with a
   link to each on the Routing map, what it is sent, its failure policy, a pause switch, and a settings
-  form drawn from the settings its manifest describes. **Add plugin** checks a service's `/manifest`,
-  then writes the entry through the usual review; code plugins are added in the file by hand.
+  form drawn from the settings its manifest describes. **Add plugin** adds an API, an MCP server on the
+  network (checked by its handshake first: `POST /plugins/probe` with `mcp: <path>`), or a hook service
+  (checked at its `/manifest`), and writes the entry through the usual review. Code plugins, and MCP servers
+  hearth runs, are added in the file by hand; for the latter the dialog writes out the entry to add.
 - **On the Routing map** a plugin is a block on a line, between the rule and the model: request in on
   the left, changed request out on the right, its model slots underneath with lines to the models wired
   into them. Plugins that only watch hang off a dashed tap after the model. `everyLine` plugins are a
