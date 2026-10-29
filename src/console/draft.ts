@@ -1062,3 +1062,18 @@ export const GROUP = { head: 26, foot: 20 };
 /** What the headings and feet above line `i` add to a rule box's height; with no `i`, all of them. */
 export const groupRows = (steps: { when?: unknown }[], i = steps.length): number =>
   groupsOf(steps).reduce((px, g) => px + (g.from <= i ? GROUP.head : 0) + (g.foot && g.to < i ? GROUP.foot : 0), 0);
+
+/**
+ * An MCP server's address, split as the entry holds it: what it serves, and the path under that where MCP answers.
+ * The last segment of the path is the MCP path, so `https://host/api/mcp` is `https://host/api` and `/mcp`.
+ */
+export const splitMcp = (url: string): { serves: string; path: string } | null => {
+  try {
+    const u = new URL(url.trim());
+    const segs = u.pathname.split("/").filter(Boolean);
+    const last = segs.pop();
+    return { serves: `${u.origin}${segs.length ? `/${segs.join("/")}` : ""}`, path: last ? `/${last}` : "/" };
+  } catch {
+    return null;
+  }
+};

@@ -763,6 +763,10 @@ export interface PluginDecl {
   use: string | null;
   /** A service's own API, answered at `/plugins/<name>/*`; null when it has none. */
   serves: string | null;
+  /** The path under `serves` where an MCP endpoint answers (`/mcp` for a plugin that runs one); null when it speaks no MCP. */
+  mcp: string | null;
+  /** An MCP server hearth starts and speaks to over stdin and stdout, answered at `/plugins/<name>/mcp`; null when it has none. */
+  run: PluginRun | null;
   trust: "code" | "http";
   /** For `file:`, the sha256 of the file, as `sha256-<hex>`; a file that differs is not loaded. */
   integrity: string | null;
@@ -788,6 +792,9 @@ export interface PluginDecl {
   models: Record<string, string>;
   config: Record<string, unknown>;
 }
+
+/** A program hearth starts as an MCP server. `env` values may be `env:NAME`; the program sees these, and of hearth's own only what it needs to find and cache its files (PATH, HOME, TMPDIR). */
+export interface PluginRun { command: string; args: string[]; env: Record<string, string>; cwd: string | null }
 
 /** A plugin placed on a flow step, with the models this line wires into its slots over the plugin's own. */
 export interface StepPlugin { name: string; models: Record<string, string> }
@@ -827,6 +834,18 @@ function pluginWhen(raw: unknown, at: string): PluginWhen | null {
   return out;
 }
 
+/** `plugins.<name>.run`: the program an MCP server is, started by hearth and spoken to over its stdin and stdout. */
+function pluginRun(raw: unknown, at: string): PluginRun | null {
+  if (raw === undefined) return null;
+  const r = asRecord(raw, at);
+  only(r, ["command", "args", "env", "cwd"], at);
+  const command = str(r.command, `${at}.command`);
+  const args = r.args === undefined ? [] : stringList(r.args, `${at}.args`);
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(asRecord(r.env ?? {}, `${at}.env`))) env[k] = resolveSecret(str(v, `${at}.env.${k}`), `${at}.env.${k}`);
+  return { command, args, env, cwd: r.cwd === undefined ? null : str(r.cwd, `${at}.cwd`) };
+}
+
 /** `plugins:`. A plugin is code only when its entry says `trust: code`, so copying a line never runs code by accident. */
 function pluginDecls(raw: unknown): Record<string, PluginDecl> {
   const out: Record<string, PluginDecl> = {};
@@ -834,19 +853,26 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const at = `plugins.${name}`;
     if (!PLUGIN_NAME.test(name)) throw bad(at, "a plugin's name is lowercase letters, digits and dashes");
     const r = asRecord(v, at);
-    only(r, ["use", "serves", "trust", "integrity", "key", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
+    only(r, ["use", "serves", "mcp", "run", "trust", "integrity", "key", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
     const serves = r.serves === undefined ? null : str(r.serves, `${at}.serves`).replace(/\/$/, "");
     if (serves !== null && !/^https?:\/\/[^/]/.test(serves)) throw bad(`${at}.serves`, "is the http(s) URL of the service's own API");
+    const run = pluginRun(r.run, `${at}.run`);
+    if (run !== null && serves !== null) throw bad(`${at}.run`, "starts an MCP server here, so the plugin serves nothing else: leave serves out");
     // `/plugins/probe` is the console's own route, so a plugin of that name could never be reached.
-    if (serves !== null && name === "probe") throw bad(at, "a plugin that serves cannot be named probe: /plugins/probe is taken");
-    if (r.use === undefined && serves === null) throw bad(`${at}.use`, "is required, unless the plugin only serves an API (serves: <url>)");
+    if ((serves !== null || run !== null) && name === "probe") throw bad(at, "a plugin that serves cannot be named probe: /plugins/probe is taken");
+    if (r.use === undefined && serves === null && run === null) throw bad(`${at}.use`, "is required, unless the plugin only serves an API (serves: <url>) or runs an MCP server (run: { command })");
+    if (r.use !== undefined && run !== null) throw bad(`${at}.run`, "is a plugin of its own: an MCP server hearth starts; leave use out");
+    // `mcp` on a served API names the path its MCP endpoint answers at; a plugin that runs one is an MCP server.
+    if (r.mcp !== undefined && serves === null) throw bad(`${at}.mcp`, run !== null ? "is implied by run" : "says a served API speaks MCP: it needs serves");
+    const mcp = run !== null ? "/mcp" : r.mcp === undefined || r.mcp === false ? null : r.mcp === true ? "/mcp" : str(r.mcp, `${at}.mcp`);
+    if (mcp !== null && !mcp.startsWith("/")) throw bad(`${at}.mcp`, "is true, or the path its MCP endpoint answers at, like /mcp");
     const use = r.use === undefined ? null : str(r.use, `${at}.use`);
-    const service = use === null || /^https?:\/\//.test(use);
+    const service = run === null && (use === null || /^https?:\/\//.test(use));
     if (use !== null && !service && !/^(file:.+|npm:(@[^/]+\/)?[^@/]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/.test(use)) throw bad(`${at}.use`, "is file:<path>, npm:<package>@<exact version, like 1.2.3>, or an http(s) URL");
     if (serves !== null && !service) throw bad(`${at}.serves`, "is for a service; code answers its own routes inside hearth");
     const trust = r.trust;
-    if (trust !== "code" && trust !== "http") throw bad(`${at}.trust`, service ? "must be http for a service" : "must be code: this plugin runs inside hearth, and saying so is the opt-in");
-    if (service !== (trust === "http")) throw bad(`${at}.trust`, service ? "a URL is a service: trust: http" : "a file or package runs inside hearth: trust: code");
+    if (trust !== "code" && trust !== "http") throw bad(`${at}.trust`, run !== null ? "must be code: run starts a program on this machine, and saying so is the opt-in" : service ? "must be http for a service" : "must be code: this plugin runs inside hearth, and saying so is the opt-in");
+    if (service !== (trust === "http")) throw bad(`${at}.trust`, run !== null ? "run starts a program on this machine: trust: code" : service ? "a URL is a service: trust: http" : "a file or package runs inside hearth: trust: code");
     if (r.peers !== undefined && r.peers !== false) throw bad(`${at}.peers`, "plugins on requests peers send here are not built yet; leave it unset");
     let kinds: PluginDecl["kinds"] = null;
     if (r.kinds !== undefined) {
@@ -872,7 +898,7 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const key = r.key === undefined ? null : resolveSecret(str(r.key, `${at}.key`), `${at}.key`);
     if (integrity !== null && !/^sha256-[0-9a-f]{64}$/.test(integrity)) throw bad(`${at}.integrity`, "is sha256-<64 hex digits>");
     out[name] = {
-      use, serves, trust, integrity, key, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
+      use, serves, mcp, run, trust, integrity, key, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
       onError: pick(r.onError, ["skip", "refuse"] as const, "skip", `${at}.onError`),
       onFail: pick(r.onFail, ["refuse", "flag"] as const, "refuse", `${at}.onFail`),
       locked: bool(r.locked, `${at}.locked`, false),

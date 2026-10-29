@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 
 import { DEFAULT_ROUTER, PLUGIN_STAGES, REQUEST_KINDS, type Flow, type HearthConfig, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "./config.js";
 import type { Logger } from "./log.js";
+import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */
 export const LIVE_STAGES: ReadonlySet<PluginStage> = new Set(["request", "routed", "log", "error"]);
@@ -125,6 +126,12 @@ export interface PluginStatus {
   serves: string | null;
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
+  /** Requests at /plugins/<name>/* in flight, and those that ended within SEEN_MS, by id: what the map draws as dots. */
+  live: string[];
+  /** For a plugin that speaks MCP: whether its server answers, its name, how many tools it has, and its path under /plugins/<name>. */
+  mcp: (McpState & { path: string }) | null;
+  /** The program a plugin that runs an MCP server starts, as its command line; never its env. */
+  run: string | null;
   when: PluginWhen | null;
   timeoutMs: number;
   onError: PluginDecl["onError"];
@@ -140,6 +147,13 @@ export interface PluginStatus {
 }
 
 const BREAK_AFTER = 5;
+/** How long a request served at /plugins/<name>/* stays in `live` after it ends: past the console's one-second tick, so even a quick one is seen. */
+const SEEN_MS = 1_500;
+/** How often a served MCP endpoint is asked again who it is. */
+const MCP_RECHECK_MS = 60_000;
+
+/** A program's command line as the console shows it: what runs, never its env. */
+const runLine = (r: { command: string; args: string[] }) => [r.command, ...r.args].join(" ");
 const BREAK_MS = 30_000;
 const OBSERVE_MS = 10_000;
 
@@ -280,6 +294,12 @@ interface Loaded {
   paused: boolean;
   stats: Partial<Record<PluginStage, Stat>>;
   served: { calls: number; errors: number };
+  /** The MCP server it is, run here or served: what it last said of itself. */
+  stdio: StdioMcp | null;
+  mcp: McpState | null;
+  recheck: NodeJS.Timeout | null;
+  /** Requests served: when each ended, or null while it runs. */
+  flying: Map<string, number | null>;
 }
 
 /** One plugin as it applies to one request: its hooks, the settings its router gives it, its models and its line. */
@@ -303,6 +323,7 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
 
 export class Plugins {
   private loaded: Loaded[] = [];
+  private seq = 0;
   private tokens = new Map<string, string>();
 
   constructor(private cfg: HearthConfig, private log: Logger, private opts: { off: boolean; selfUrl: () => string }) {}
@@ -310,7 +331,7 @@ export class Plugins {
   /** Loads every plugin. One that fails is turned off and logged, unless it is `required`. */
   async start(): Promise<void> {
     for (const [name, decl] of Object.entries(this.cfg.plugins)) {
-      const l: Loaded = { name, decl, declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {}, served: { calls: 0, errors: 0 } };
+      const l: Loaded = { name, decl, declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {}, served: { calls: 0, errors: 0 }, flying: new Map(), stdio: null, mcp: null, recheck: null };
       this.loaded.push(l);
       if (this.opts.off) continue;
       try {
@@ -330,6 +351,7 @@ export class Plugins {
         l.hooks = hooks;
         l.state = "running";
         const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
+        this.startMcp(l);
         this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
         if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
           this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
@@ -343,7 +365,27 @@ export class Plugins {
     }
   }
 
+  /**
+   * A plugin that runs an MCP server has it started; one that serves an MCP endpoint is asked who it is now and
+   * every minute after. Neither holds startup up, and an answer that fails is shown, never a reason to turn it off.
+   */
+  private startMcp(l: Loaded): void {
+    if (l.decl.run) {
+      l.stdio = new StdioMcp(l.name, l.decl.run, this.log, Math.max(l.decl.timeoutMs, 30_000));
+      l.mcp = l.stdio.state;
+      void l.stdio.start();
+      return;
+    }
+    if (l.decl.serves === null || l.decl.mcp === null) return;
+    const check = async () => { l.mcp = await checkHttp(l.decl.serves + l.decl.mcp!, l.decl.key, 10_000); };
+    l.mcp = { transport: "http", server: null, tools: null, error: "checking", checkedAt: 0 };
+    void check();
+    l.recheck = setInterval(() => void check(), MCP_RECHECK_MS);
+    l.recheck.unref();
+  }
+
   async stop(): Promise<void> {
+    for (const l of this.loaded) { l.stdio?.stop(); if (l.recheck) clearInterval(l.recheck); }
     for (const l of this.loaded) await Promise.resolve(l.hooks.stop?.()).catch(() => {});
   }
 
@@ -418,13 +460,18 @@ export class Plugins {
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.
    */
-  serve(name: string): { url: string; key: string | null; done: (ok: boolean) => void } | { status: number; why: string } {
+  serve(name: string): { url: string; key: string | null; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
     const l = this.loaded.find((x) => x.name === name);
-    if (!l || l.decl.serves === null) return { status: 404, why: `no plugin named ${name} serves an API here` };
+    if (!l || (l.decl.serves === null && l.stdio === null)) return { status: 404, why: `no plugin named ${name} serves an API here` };
     if (l.state !== "running") return { status: 503, why: `${name} is ${l.state === "off" ? "off" : `not running: ${l.error}`}` };
     if (l.paused) return { status: 503, why: `${name} is paused` };
     l.served.calls++;
-    return { url: l.decl.serves, key: l.decl.key, done: (ok) => { if (!ok) l.served.errors++; } };
+    // Let go of what has been seen out here too, so the record stays bounded whether or not anyone reads the status.
+    this.live(l);
+    const id = `${name}:${++this.seq}`;
+    l.flying.set(id, null);
+    const done = (ok: boolean) => { if (!ok) l.served.errors++; l.flying.set(id, Date.now()); };
+    return l.stdio ? { stdio: l.stdio, done } : { url: l.decl.serves!, key: l.decl.key, done };
   }
 
   /** Whether any plugin could run on a request at all, so the request carries what a line's plugins will need. */
@@ -567,6 +614,13 @@ export class Plugins {
     });
   }
 
+  /** The requests still in flight, and those that ended within SEEN_MS, which are let go after it. */
+  private live(l: Loaded): string[] {
+    const now = Date.now();
+    for (const [id, ended] of l.flying) if (ended !== null && now - ended > SEEN_MS) l.flying.delete(id);
+    return [...l.flying.keys()];
+  }
+
   status(): PluginStatus[] {
     const pct = (ms: number[], q: number) => {
       if (!ms.length) return 0;
@@ -574,8 +628,9 @@ export class Plugins {
       return s[Math.min(s.length - 1, Math.floor(q * s.length))]!;
     };
     return this.loaded.map((l) => ({
-      name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, declared: l.declared, needs: l.needs, models: l.decl.models, everyLine: l.decl.everyLine, use: shownUse(l.decl.use ?? l.decl.serves!),
-      serves: l.decl.serves === null ? null : shownUse(l.decl.serves), served: { ...l.served },
+      name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, declared: l.declared, needs: l.needs, models: l.decl.models, everyLine: l.decl.everyLine, use: l.decl.run ? runLine(l.decl.run) : shownUse(l.decl.use ?? l.decl.serves!),
+      mcp: l.mcp ? { ...l.mcp, path: l.decl.mcp ?? "/mcp" } : null, run: l.decl.run ? runLine(l.decl.run) : null,
+      serves: l.decl.serves === null ? null : shownUse(l.decl.serves), served: { ...l.served }, live: this.live(l),
       when: l.decl.when, timeoutMs: l.decl.timeoutMs, onError: l.decl.onError, onFail: l.decl.onFail, locked: l.decl.locked,
       required: l.decl.required, reads: l.decl.reads, paused: l.paused, pausedUntil: l.pausedUntil, failOpens: l.failOpens,
       stages: Object.fromEntries(Object.entries(l.stats).map(([stage, st]) => [stage, {

@@ -19,6 +19,7 @@ import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, hashPassword, verifyDecoy, verifyPassword } from "./login.js";
 import { LogRing, type Logger } from "./log.js";
+import { checkHttp } from "./mcp.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
 import { decide, entryOf, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
@@ -2084,6 +2085,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       fail(res, e);
       return;
     }
+    // An MCP server hearth runs answers at its own /mcp, whatever comes after the name.
+    if ("stdio" in to) {
+      const t0 = Date.now();
+      const a = await to.stdio.handle(req.method ?? "GET", body);
+      to.done(a.status < 500);
+      res.writeHead(a.status, { "content-type": a.type, ...(a.session ? { "mcp-session-id": a.session } : {}) }).end(a.body);
+      log.info("plugin.served", { plugin: m![1], method: req.method, path: m?.[2] ?? "/", status: a.status, caller: c.caller, ms: Date.now() - t0 });
+      return;
+    }
     const headers = stripOurKey(req) as Record<string, string>;
     delete headers["x-hearth-caller"];
     if (to.key) headers.authorization = `Bearer ${to.key}`;
@@ -2113,13 +2123,22 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     }
   }
 
-  /** POST `{url, key?}`: what a plugin service declares at its /manifest, before it is added. */
+  /**
+   * POST `{url, key?}`: what a plugin service declares at its /manifest, before it is added. With `mcp` (a path
+   * under `url`), whether an MCP server answers there instead: its name and how many tools it has.
+   */
   async function routePluginProbe(c: Call): Promise<void> {
     try {
       const body = await readJson(c.req);
       if (typeof body.url !== "string" || !/^https?:\/\/[^/]/.test(body.url.trim())) throw new Refusal(400, "url is an http(s) URL");
       const key = typeof body.key === "string" && body.key.trim() !== "" ? resolveSecret(body.key.trim(), "key") : null;
       const url = body.url.trim();
+      if (typeof body.mcp === "string") {
+        if (!body.mcp.startsWith("/")) throw new Refusal(400, "mcp is a path, like /mcp");
+        const s = await checkHttp(url.replace(/\/$/, "") + body.mcp, key, 10_000);
+        json(c.res, 200, s.error ? { ok: false, url, problem: s.error } : { ok: true, url, server: s.server, tools: s.tools });
+        return;
+      }
       try {
         json(c.res, 200, { ok: true, url, ...(await Plugins.manifest(url, key)) });
       } catch (e) {
