@@ -437,6 +437,8 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   // Ends sit level with the lines that reach them, in that order, never closer than a step; one no line reaches goes last.
   const from: Record<string, number[]> = { low: [300, 340], high: [20], mid: [40], none: [] };
   assert.deepEqual(Object.fromEntries(beside(["low", "high", "mid", "none"], (id) => from[id]!, 50)), { high: 0, mid: 50, low: 295, none: 345 });
+  // A taller end takes its own room, so the one under it keeps clear.
+  assert.deepEqual(Object.fromEntries(beside(["low", "high", "mid", "none"], (id) => from[id]!, (id) => (id === "high" ? 80 : 50))), { high: 0, mid: 80, low: 295, none: 345 });
   // A box of one caller is as wide as the card under it, its chip in the middle: cards under two such boxes side by side stay clear.
   const [chip, edge, card, gap] = [{ w: 150, h: 30, gap: 6, cols: 2 }, { head: 24, pad: 10 }, 200, 12];
   const one = bayRoom(1, chip, edge, card);

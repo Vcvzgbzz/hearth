@@ -48,6 +48,8 @@ export interface RequestOptions {
   headersTimeoutMs?: number;
   /** Deadline for silence once the body flows, in ms: a backend that stops sending mid-answer fails. */
   idleTimeoutMs?: number;
+  /** Deadline for the connection itself, in ms: a host that is gone fails now rather than when the OS gives up on it. */
+  connectTimeoutMs?: number;
   /** Total deadline for `getJson`, body included. Defaults to 2x the headers
    *  timeout. Does nothing in `send`, which is for streams. */
   totalTimeoutMs?: number;
@@ -145,6 +147,17 @@ export function send(url: string, opts: RequestOptions = {}): Promise<UpstreamRe
     req.on("error", (e) =>
       fail(e instanceof UpstreamError ? e : new UpstreamError(String(e), e)),
     );
+
+    // Only a socket still connecting is timed: one reused from the pool is already connected.
+    if (opts.connectTimeoutMs != null) {
+      const ms = opts.connectTimeoutMs;
+      req.on("socket", (sock) => {
+        if (!sock.connecting) return;
+        const t = setTimeout(() => fail(new UpstreamError(`could not connect in ${ms}ms`)), ms);
+        sock.once("connect", () => clearTimeout(t));
+        sock.once("close", () => clearTimeout(t));
+      });
+    }
 
     /**
      * Abort from either side. Destroying the request also stops a generation whose client hung

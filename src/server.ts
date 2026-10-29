@@ -11,6 +11,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { existsSync, readFileSync, renameSync } from "node:fs";
 
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
+import { ADAPTERS, type Adapter } from "./adapt.js";
 import { admitModel, inScope, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
 import { ANY, backendAuth, backendBase, ConfigError, DEFAULT_ROUTER, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
@@ -19,6 +20,7 @@ import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, hashPassword, verifyDecoy, verifyPassword } from "./login.js";
 import { LogRing, type Logger } from "./log.js";
+import { checkHttp } from "./mcp.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
 import { decide, entryOf, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
@@ -140,6 +142,11 @@ function forwardable(
 /** One request this node asked for, where it ran, and how it ended; `backend` and `peer` are both absent when it never ran. */
 export interface RecentCall { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }
 const RECENT_KEPT = 12;
+/**
+ * How long a plugin's service has to accept the connection. A service on the network accepts in milliseconds;
+ * one that is gone would otherwise hold the caller for as long as the OS keeps trying, before its fallback is asked.
+ */
+const PLUGIN_CONNECT_MS = 3_000;
 
 export interface HearthNode {
   server: Server;
@@ -2071,55 +2078,153 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   async function routePluginServes(c: Call): Promise<void> {
     const { req, res, url } = c;
     const m = /^\/plugins\/([^/]+)(\/.*)?$/.exec(c.path);
-    const to = plugins.serve(m?.[1] ?? "");
-    if ("why" in to) {
+    // The caller's router decides, as it does for a model: the request is asked of it as MCP:<name> or API:<name>.
+    // With no rule for MCP or API, its flow for every other name decides: one that runs a name as itself lets
+    // plugins through, and one that refuses refuses them until a rule for MCP or API is added. A name that is no
+    // plugin's may be a router's own name for one, so it is asked as either type, and the plugin a step names answers.
+    const asked = m?.[1] ?? "";
+    const kind = plugins.kindOf(asked);
+    const world = { ...worldFor(c.caller, Object.keys(cfg.scheduler.lanes)[0]!, undefined, rulesFor(c.caller), headersOf(req)), plugin: asked };
+    let name: string | null = null;
+    let refused: string | null = null;
+    for (const as of kind !== null ? [kind] : (["API", "MCP"] as const)) {
+      const r = resolve(`${as}:${asked}`, world);
+      if (r.plugin !== undefined && plugins.kindOf(r.plugin) !== null) { name = r.plugin; break; }
+      if (r.plugin === undefined) refused ??= r.reason;
+    }
+    if (name === null) {
+      if (refused !== null) log.info("plugin.refused", { plugin: asked, caller: c.caller, reason: refused });
+      json(res, refused !== null ? 403 : 404, { error: refused ?? `no plugin named ${asked} serves an API here, and no rule gives that name to one` });
+      return;
+    }
+    const path = m?.[2] ?? "/";
+    // What the plugin's fallback is sent if this plugin cannot answer: null when it has none, or when its adapter
+    // has no counterpart for this request on the fallback's API.
+    const fb = plugins.fallbackOf(name);
+    let carry: { path: string; query: URLSearchParams; adapter: Adapter | null } | null = null;
+    if (fb !== null && fb.adapt === null) carry = { path, query: url.searchParams, adapter: null };
+    else if (fb !== null) {
+      const adapter = ADAPTERS[fb.adapt!]!;
+      const r = adapter.request(req.method ?? "GET", path, url.searchParams);
+      if (r !== null) carry = { ...r, adapter };
+    }
+    const to = plugins.serve(name);
+    if ("why" in to && carry === null) {
       json(res, to.status, { error: to.why });
       return;
     }
+    const done = "why" in to ? () => {} : to.done;
     let body: Buffer | undefined;
     try {
       body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, cfg.maxBodyBytes);
     } catch (e) {
-      to.done(false);
+      done(false);
       fail(res, e);
       return;
     }
-    const headers = stripOurKey(req) as Record<string, string>;
-    delete headers["x-hearth-caller"];
-    if (to.key) headers.authorization = `Bearer ${to.key}`;
-    headers["x-hearth-caller"] = c.caller;
+    // An MCP server hearth runs answers at its own /mcp, whatever comes after the name.
+    if ("stdio" in to) {
+      const t0 = Date.now();
+      const a = await to.stdio.handle(req.method ?? "GET", body);
+      to.done(a.status < 500);
+      res.writeHead(a.status, { "content-type": a.type, ...(a.session ? { "mcp-session-id": a.session } : {}) }).end(a.body);
+      log.info("plugin.served", { plugin: name, method: req.method, path: m?.[2] ?? "/", status: a.status, caller: c.caller, ms: Date.now() - t0 });
+      return;
+    }
     const ctrl = new AbortController();
     res.on("close", () => { if (!res.writableEnded) ctrl.abort(); });
     const t0 = Date.now();
-    try {
-      const up = await send(`${to.url}${m?.[2] ?? "/"}${url.search}`, {
+    // The plugin's own key replaces ours; an answer hearth rewrites is asked for uncompressed, so it can be read.
+    const call = (target: { url: string; key: string | null }, at: string, search: string, plain: boolean) => {
+      const headers = stripOurKey(req) as Record<string, string>;
+      delete headers["x-hearth-caller"];
+      if (plain) delete headers["accept-encoding"];
+      if (target.key) headers.authorization = `Bearer ${target.key}`;
+      headers["x-hearth-caller"] = c.caller;
+      return send(`${target.url}${at}${search}`, {
         method: req.method ?? "GET",
         ...(body && body.length > 0 ? { raw: body } : {}),
         headers,
         signal: ctrl.signal,
+        connectTimeoutMs: PLUGIN_CONNECT_MS,
         ...(cfg.backendFirstByteMs > 0 ? { headersTimeoutMs: cfg.backendFirstByteMs } : {}),
       });
-      to.done(up.status < 500);
-      res.writeHead(up.status, forwardable(up.headers));
-      await pipeline(up.body, res);
-      log.info("plugin.served", { plugin: m![1], method: req.method, path: m?.[2] ?? "/", status: up.status, caller: c.caller, ms: Date.now() - t0 });
+    };
+    const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    // Why this plugin did not answer, when its fallback is asked instead.
+    let failure: string;
+    if ("why" in to) failure = to.why;
+    else {
+      try {
+        const up = await call(to, path, url.search, false);
+        if (carry !== null && (up.status >= 500 || up.status === 429)) {
+          to.done(false);
+          up.body.resume();
+          failure = `it answered ${up.status}`;
+        } else {
+          to.done(up.status < 500);
+          res.writeHead(up.status, forwardable(up.headers));
+          await pipeline(up.body, res);
+          log.info("plugin.served", { plugin: name, method: req.method, path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+          return;
+        }
+      } catch (e) {
+        to.done(false);
+        // A caller that hung up mid-stream is the end of the exchange, not a failure of the service.
+        if (ctrl.signal.aborted) return;
+        log.warn("plugin.serve_failed", { plugin: name, path, error: said(e) });
+        // Once an answer has begun there is no taking it back, so only a plugin that never answered falls back.
+        if (res.headersSent) { res.destroy(); return; }
+        if (carry === null) { json(res, 502, { error: `plugin ${name} could not be reached: ${said(e)}` }); return; }
+        failure = said(e);
+      }
+    }
+    // A fallback is one hop: it answers with its own API, and its own fallback is not followed.
+    const alt = plugins.serve(fb!.plugin);
+    log.info("plugin.fallback", { plugin: name, to: fb!.plugin, adapt: fb!.adapt, why: failure, caller: c.caller });
+    if ("why" in alt || "stdio" in alt) {
+      if ("done" in alt) alt.done(false);
+      json(res, 502, { error: `plugin ${name} could not answer (${failure}), and neither could its fallback ${fb!.plugin}${"why" in alt ? `: ${alt.why}` : ""}` });
+      return;
+    }
+    const via = carry!;
+    try {
+      const qs = via.query.toString();
+      const up = await call(alt, via.path, qs === "" ? "" : `?${qs}`, via.adapter !== null);
+      alt.done(up.status < 500);
+      if (via.adapter === null || up.status < 200 || up.status >= 300) {
+        res.writeHead(up.status, forwardable(up.headers));
+        await pipeline(up.body, res);
+      } else {
+        const out = via.adapter.response(Buffer.from(await up.text(cfg.maxBodyBytes)));
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8", "content-length": out.length }).end(out);
+      }
+      log.info("plugin.served", { plugin: fb!.plugin, for: name, method: req.method, path: via.path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
     } catch (e) {
-      to.done(false);
-      // A caller that hung up mid-stream is the end of the exchange, not a failure of the service.
+      alt.done(false);
       if (ctrl.signal.aborted) return;
-      log.warn("plugin.serve_failed", { plugin: m![1], path: m?.[2] ?? "/", error: e instanceof Error ? e.message : String(e) });
-      if (!res.headersSent) json(res, 502, { error: `plugin ${m![1]} could not be reached: ${e instanceof Error ? e.message : String(e)}` });
+      log.warn("plugin.serve_failed", { plugin: fb!.plugin, for: name, path: via.path, error: said(e) });
+      if (!res.headersSent) json(res, 502, { error: `plugin ${name} could not answer (${failure}), and its fallback ${fb!.plugin} failed: ${said(e)}` });
       else res.destroy();
     }
   }
 
-  /** POST `{url, key?}`: what a plugin service declares at its /manifest, before it is added. */
+  /**
+   * POST `{url, key?}`: what a plugin service declares at its /manifest, before it is added. With `mcp` (a path
+   * under `url`), whether an MCP server answers there instead: its name and how many tools it has.
+   */
   async function routePluginProbe(c: Call): Promise<void> {
     try {
       const body = await readJson(c.req);
       if (typeof body.url !== "string" || !/^https?:\/\/[^/]/.test(body.url.trim())) throw new Refusal(400, "url is an http(s) URL");
       const key = typeof body.key === "string" && body.key.trim() !== "" ? resolveSecret(body.key.trim(), "key") : null;
       const url = body.url.trim();
+      if (typeof body.mcp === "string") {
+        if (!body.mcp.startsWith("/")) throw new Refusal(400, "mcp is a path, like /mcp");
+        const s = await checkHttp(url.replace(/\/$/, "") + body.mcp, key, 10_000);
+        json(c.res, 200, s.error ? { ok: false, url, problem: s.error } : { ok: true, url, server: s.server, tools: s.tools });
+        return;
+      }
       try {
         json(c.res, 200, { ok: true, url, ...(await Plugins.manifest(url, key)) });
       } catch (e) {
@@ -3333,6 +3438,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         modelKinds: cfg.modelKinds,
         liveKinds: [...LIVE_KINDS],
         liveStages: [...LIVE_STAGES],
+        // What a plugin's fallback can name as `adapt`, for the picker.
+        adapters: Object.entries(ADAPTERS).map(([name, a]) => ({ name, desc: a.desc })),
         pending: config.pluginChanges(),
         routers: Object.fromEntries([DEFAULT_ROUTER, ...Object.keys(cfg.routers).filter((n) => n !== DEFAULT_ROUTER)].map((name) => [name, {
           plugins: Object.fromEntries(Object.entries(cfg.routers[name]?.plugins ?? {}).map(([p, v]) => [p, v === "off" ? "off" : "own"])),

@@ -228,7 +228,7 @@ function ProviderDialog({ taken, onClose, onCreate }: { taken: string[]; onClose
 
 /** A card or CPU: the frame its backends sit in, so "runs on" needs no line. */
 type Chip = { name: string; tone: Tone; busy: boolean; sub: string };
-type Group = { /** What a backend let go here is given: this hardware, on this machine. */ drop?: { resource: string; server: string }; /** It can be dragged onto another machine. */ moves?: boolean; title: string; sub: string; icon: ReactNode; hot: boolean; selected?: boolean; tip?: string; chips?: Chip[]; picked?: string };
+type Group = { /** What a backend let go here is given: this hardware, on this machine. */ drop?: { resource: string; server: string }; /** It can be dragged onto another machine. */ moves?: boolean; title: string; sub: string; icon: ReactNode; hot: boolean; selected?: boolean; tip?: string; chips?: Chip[]; picked?: string; /** Fed from above: how far from its right edge the line comes in, in px. */ up?: number };
 
 const GroupNode = memo(function GroupNode({ data }: NodeProps<Node<Group>>) {
   return (
@@ -238,6 +238,7 @@ const GroupNode = memo(function GroupNode({ data }: NodeProps<Node<Group>>) {
       data.selected && "ring-2 ring-accent/25",
     )}>
       <Handle type="target" position={Position.Left} />
+      {data.up !== undefined && <Handle type="target" id="up" position={Position.Top} isConnectable={false} style={{ left: "auto", right: data.up, transform: "translate(50%, -50%)" }} />}
       <div className={cx("flex items-center gap-2 px-3 pt-2 text-[11px]", data.moves && "cursor-grab")} title={data.moves ? "Drag it onto another machine: what runs on it goes too" : undefined}>
         <span className={data.hot ? "text-ok" : "text-dim"}>{data.icon}</span>
         <span className="font-semibold uppercase tracking-wide">{data.title}</span>
@@ -275,12 +276,11 @@ const GroupNode = memo(function GroupNode({ data }: NodeProps<Node<Group>>) {
 });
 
 /** One machine: the frame around the backends on it. Drawn only once a config names another machine. */
-type Machine = { title: string; sub: string; /** The machine a backend let go here is put on. */ drop?: { server: string }; /** In place of the server icon. */ icon?: ReactNode; /** Fed from above: how far from its right edge the line comes in, in px. */ up?: number };
+type Machine = { title: string; sub: string; /** The machine a backend let go here is put on. */ drop?: { server: string }; /** In place of the server icon. */ icon?: ReactNode };
 
 const MachineNode = memo(function MachineNode({ data }: NodeProps<Node<Machine>>) {
   return (
     <div className="h-full w-full rounded-3xl border border-line bg-panel/40">
-      {data.up !== undefined && <Handle type="target" id="up" position={Position.Top} isConnectable={false} style={{ left: "auto", right: data.up, transform: "translate(50%, -50%)" }} />}
       <div className="flex items-center gap-2 px-4 pt-2.5 text-[12px]">
         {data.icon ?? <Server size={13} className="text-dim" />}
         <span className="font-semibold">{data.title}</span>
@@ -758,40 +758,52 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
     py += block + GAP;
   });
   // Plugins that serve an API hang under the hub: callers reach them through this node, as they reach a backend.
-  const services = (d.plugins?.plugins ?? []).filter((p) => p.serves !== null);
-  if (services.length > 0) {
-    // A Plugins frame holding a Services group, as a machine holds its hardware. Two boxes wide at most, ending at the
-    // hub's right edge, and as many rows down as there are services, so it never reaches the machines on the right.
-    // One line goes into the frame, straight down from the hub, crossing no box.
-    const cols = Math.min(services.length, 2);
-    const rows = Math.ceil(services.length / cols);
+  const serving = (d.plugins?.plugins ?? []).filter((p) => p.serves !== null || p.run !== null);
+  if (serving.length > 0) {
+    // A Plugins frame holding a group for each kind that has plugins, as a machine holds its hardware: Services, and
+    // MCP servers. One group alone is two boxes wide; side by side, each is one. Either way the frame ends at the
+    // hub's right edge and grows down, so it never reaches the machines on the right. A line goes from the hub into
+    // each group, its requests as dots, entering near the group's right edge so it stays clear of the peers' column.
+    const groups = [
+      { id: "services", title: "Services", items: serving.filter((p) => p.mcp === null), tip: "Plugins that serve an API of their own, at /plugins/<name>/. Callers reach each one through this node, with the same keys as the models." },
+      { id: "mcp", title: "MCP", items: serving.filter((p) => p.mcp !== null), tip: "MCP servers, served or run by this node, at /plugins/<name>/mcp. Callers list and call their tools with the same keys as the models." },
+    ].filter((g) => g.items.length > 0);
+    const cols = groups.length > 1 ? 1 : Math.min(groups[0]!.items.length, 2);
     const wide = PAD * 2 + cols * W + (cols - 1) * GAP;
-    const tall = HEAD + PAD + rows * H + (rows - 1) * GAP;
+    const tallOf = (n: number) => { const rows = Math.ceil(n / cols); return HEAD + PAD + rows * H + (rows - 1) * GAP; };
+    const inner = groups.length * wide + (groups.length - 1) * FRAME.gap;
+    const tall = Math.max(...groups.map((g) => tallOf(g.items.length)));
     // Below the hub and below the last peer, however many peers there are.
     const peersBottom = peers.length ? mid + (blocks.reduce((a, b) => a + b, 0) + GAP * (peers.length - 1)) / 2 : -Infinity;
     const top = Math.max(mid + H / 2 + 72, peersBottom + 56);
     nodes.push({
-      id: "plugins", type: "machine", position: { x: X.self + W + PAD + FRAME.pad - (wide + FRAME.pad * 2), y: top }, style: { width: wide + FRAME.pad * 2, height: FRAME.head + tall + FRAME.pad },
-      data: { title: "Plugins", sub: "", icon: <Plug size={13} className="text-dim" />, up: FRAME.pad + PAD + W / 2 } satisfies Machine,
+      id: "plugins", type: "machine", position: { x: X.self + W + PAD + FRAME.pad - (inner + FRAME.pad * 2), y: top }, style: { width: inner + FRAME.pad * 2, height: FRAME.head + tall + FRAME.pad },
+      data: { title: "Plugins", sub: "", icon: <Plug size={13} className="text-dim" /> } satisfies Machine,
     });
-    nodes.push({
-      id: "services", type: "hardware", parentId: "plugins", extent: "parent", position: { x: FRAME.pad, y: FRAME.head }, style: { width: wide, height: tall },
-      data: { title: "Services", icon: <Plug size={13} />, hot: false, sub: "", tip: "Plugins that serve an API of their own, at /plugins/<name>/. Callers reach each one through this node, with the same keys as the models." } satisfies Group,
-    });
-    const down = services.filter((p) => p.state !== "running" || p.paused).length;
-    edges.push({ id: "e:plugins", source: hub, sourceHandle: "down", target: "plugins", targetHandle: "up", type: "flow", data: { jobs: [], pulses: [], wire: true, color: "var(--dim)", dashed: down === services.length } });
-    services.forEach((p, n) => {
-      const out = p.state !== "running";
-      // The last row fills from the right, under the hub, as the first rows do.
-      const row = Math.floor(n / cols);
-      const col = cols - 1 - (n % cols);
+    groups.forEach((g, gi) => {
+      const jobs = g.items.flatMap((p) => p.live);
+      const down = g.items.every((p) => p.state !== "running" || p.paused);
       nodes.push({
-        id: `service:${p.name}`, type: "card", parentId: "services", extent: "parent", position: { x: PAD + col * (W + GAP), y: HEAD + row * (H + GAP) },
-        data: {
-          title: p.name, icon: <Plug size={14} />, tone: out ? "bad" : p.paused ? "warn" : "ok",
-          sub: out ? (p.error ?? "did not start") : p.paused ? "paused" : `/plugins/${p.name}/${p.served.calls ? ` · ${p.served.calls} served${p.served.errors ? `, ${p.served.errors} failed` : ""}` : ""}`,
-          tip: `/plugins/${p.name}/ goes to ${p.serves}. Click to open it on the Plugins page.`,
-        } satisfies Card,
+        id: g.id, type: "hardware", parentId: "plugins", extent: "parent", position: { x: FRAME.pad + gi * (wide + FRAME.gap), y: FRAME.head }, style: { width: wide, height: tallOf(g.items.length) },
+        data: { title: g.title, icon: <Plug size={13} />, hot: jobs.length > 0, sub: "", tip: g.tip, up: PAD * 2 } satisfies Group,
+      });
+      edges.push({ id: `e:${g.id}`, source: hub, sourceHandle: "down", target: g.id, targetHandle: "up", type: "flow", data: { jobs, pulses: pulsesFor(`e:${g.id}`, jobs, who ? 2 : 1), dashed: down } });
+      g.items.forEach((p, n) => {
+        const out = p.state !== "running";
+        const at = `/plugins/${p.name}${p.mcp ? p.mcp.path : "/"}`;
+        const mcp = p.mcp;
+        const said = mcp?.error ? (mcp.error === "starting" || mcp.error === "checking" ? mcp.error : "not answering") : mcp?.tools != null ? `${mcp.tools} tools` : null;
+        // The last row fills from the right, under the hub, as the first rows do.
+        const row = Math.floor(n / cols);
+        const col = cols - 1 - (n % cols);
+        nodes.push({
+          id: `service:${p.name}`, type: "card", parentId: g.id, extent: "parent", position: { x: PAD + col * (W + GAP), y: HEAD + row * (H + GAP) },
+          data: {
+            title: p.name, icon: <Plug size={14} />, tone: out ? "bad" : p.paused ? "warn" : mcp?.error && said === "not answering" ? "warn" : "ok",
+            sub: out ? (p.error ?? "did not start") : p.paused ? "paused" : [at, said, p.served.calls ? `${p.served.calls} served${p.served.errors ? `, ${p.served.errors} failed` : ""}` : null].filter(Boolean).join(" · "),
+            tip: `${at} goes to ${p.run ?? p.serves}.${mcp?.error && said === "not answering" ? ` Its MCP server: ${mcp.error}.` : ""}${p.fallback ? ` When it cannot answer, ${p.fallback.plugin} does${p.fallback.adapt ? ` (${p.fallback.adapt})` : ""}.` : ""} Click to open it on the Plugins page.`,
+          } satisfies Card,
+        });
       });
     });
   }
