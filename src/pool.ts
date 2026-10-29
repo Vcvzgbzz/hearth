@@ -523,6 +523,8 @@ export class BackendPool {
   /**
    * The chat body for the backend: `as` for the id and the route's `params` over the client's.
    * `wire` overrides the id for a peer, and params still apply. Untouched when neither is set.
+   * The `efforts` fields for the effort asked (after params) go under params: the seat's only when
+   * it runs here, a template switch being the seat's own, then the id's, which travel like params.
    */
   outboundBody(
     model: string,
@@ -530,8 +532,12 @@ export class BackendPool {
     wire: string = this.outboundId(model),
   ): Record<string, unknown> {
     const params = this.cfg.models[model]?.params ?? null;
-    if (wire === model && params === null) return payload;
-    return { ...payload, ...(params ?? {}), model: wire };
+    const asked = params?.reasoning_effort ?? payload.reasoning_effort;
+    const level = typeof asked === "string" ? asked : "";
+    const seat = wire === this.outboundId(model) && wire !== model ? this.cfg.models[wire]?.efforts?.[level] : undefined;
+    const own = this.cfg.models[model]?.efforts?.[level];
+    if (wire === model && params === null && seat === undefined && own === undefined) return payload;
+    return { ...payload, ...(seat ?? {}), ...(own ?? {}), ...(params ?? {}), model: wire };
   }
 
   /** Every advertised id for a backend's `raw` id: its aliases, plus `raw` when it is a first-class id. */

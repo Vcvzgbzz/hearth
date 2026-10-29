@@ -326,6 +326,11 @@ export interface ModelRoute {
    * Local dispatch only.
    */
   params: Record<string, unknown> | null;
+  /**
+   * Request fields stamped when a call asks for one `reasoning_effort`, keyed by that level: the
+   * lever for a model whose template has another switch. Read on the asked id and on the seat it lands on.
+   */
+  efforts?: Record<string, Record<string, unknown>>;
   /** The lane every request for this id queues in, over the client's; null lets the client choose. */
   lane: string | null;
   /** What this model can take when nothing can be asked; observed values win field by field. */
@@ -1123,6 +1128,17 @@ function modelParams(raw: unknown, id: string, where = `models.${id}.params`): R
     }
   }
   return Object.keys(rec).length === 0 ? null : rec;
+}
+
+/** `efforts: { none: { … } }`: per level, fields checked like `params`. Empty levels are dropped. */
+function modelEfforts(raw: unknown, id: string): Record<string, Record<string, unknown>> | null {
+  if (raw === undefined || raw === null) return null;
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [level, fields] of Object.entries(asRecord(raw, `models.${id}.efforts`))) {
+    const p = modelParams(fields, id, `models.${id}.efforts.${level}`);
+    if (p !== null) out[level] = p;
+  }
+  return Object.keys(out).length === 0 ? null : out;
 }
 
 /** A model's own slot count, or null to take its backend's. */
@@ -1934,6 +1950,8 @@ export function parseConfig(raw: unknown): HearthConfig {
     if (entry.videoTokens !== undefined) {
       models[id].videoTokens = count(entry.videoTokens, `models.${id}.videoTokens`, 1);
     }
+    const efforts = modelEfforts(entry.efforts, id);
+    if (efforts !== null) models[id].efforts = efforts;
   }
 
   // A provider answers for its own models, and every probe of one would be billed.
