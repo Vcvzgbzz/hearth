@@ -12,7 +12,7 @@ import { reachOf } from "../src/reach.js";
 
 const cfgOf = (extra: Record<string, unknown>): HearthConfig => parseConfig({
   name: "n",
-  backends: { main: { url: "http://127.0.0.1:1", kind: "none", serves: ["a", "b", "c"], routes: [{ path: "/v1/rank", model: "ranker", lane: "chat" }] } },
+  backends: { main: { url: "http://127.0.0.1:1", kind: "none", serves: ["a", "b", "c", "d"], routes: [{ path: "/v1/rank", model: "ranker", lane: "chat" }, { path: "/v1/embed", lane: "batch" }] } },
   peers: { friend: { url: "http://127.0.0.1:2", token: "t", models: { a: "a", far: "far" } } },
   models: { pinned: { lane: "batch" } },
   ...extra,
@@ -64,6 +64,12 @@ const ends = (cfg: HearthConfig, flows: Record<string, Flow>, type: string) => r
   assert.equal(ends(cfg, flows, "rank")[1]!.lane, "chat", "a routed model lands in its route's lane");
   assert.equal(ends(cfg, flows, "chat")[0]!.lane, null, "a chat model with no lane of its own takes the key's");
   assert.equal(ends(cfg, flows, "chat")[1]!.lane, "batch", "a model's own lane holds");
+}
+
+// A route that names no model still pins the lane of what the backend serves through it.
+{
+  const { cfg, flows } = rules({ embed: { inputs: ["embed"], takes: ["/v1/embed"], steps: [{ to: "d" }] } });
+  assert.deepEqual(ends(cfg, flows, "embed").map((e) => [e.id, e.chat, e.lane]), [["d", false, "batch"]]);
 }
 
 console.log("reach.test.ts ok");

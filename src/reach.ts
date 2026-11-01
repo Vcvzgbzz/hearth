@@ -24,8 +24,13 @@ export interface ReachType {
 }
 
 export function reachOf(cfg: HearthConfig, flows: Readonly<Record<string, Flow>>): ReachType[] {
-  const routes = cfg.backends.flatMap((b) => b.routes);
   const out: ReachType[] = [];
+  /** The route a path reaches this model by: its own, else the path on the backend that serves it. */
+  const routeOf = (id: string, takes: readonly string[]) => {
+    const routes = cfg.backends.flatMap((b) => b.routes);
+    const server = cfg.backends.find((b) => b.name === cfg.models[id]?.backend) ?? cfg.backends.find((b) => b.serves.includes(id));
+    return routes.find((r) => takes.includes(r.path) && r.model === id) ?? server?.routes.find((r) => takes.includes(r.path));
+  };
   for (const [name, flow] of Object.entries(flows)) {
     for (const type of flow.inputs.filter((i) => i !== ANY)) {
       const found = new Map<string, ReachEnd>();
@@ -36,7 +41,7 @@ export function reachOf(cfg: HearthConfig, flows: Readonly<Record<string, Flow>>
         if (how.peer === undefined && !how.plugin) end.here = true;
         if (how.peer !== undefined && !end.peers.includes(how.peer)) end.peers.push(how.peer);
         if (takes.length === 0) end.chat = true;
-        if (!how.plugin) end.lane = cfg.models[id]?.lane ?? routes.find((r) => takes.includes(r.path) && r.model === id)?.lane ?? end.lane;
+        if (!how.plugin) end.lane = cfg.models[id]?.lane ?? routeOf(id, takes)?.lane ?? end.lane;
       };
       const walk = (at: string, inherited: readonly string[]): void => {
         if (seen.has(at)) return;
