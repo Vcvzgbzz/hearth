@@ -12,7 +12,7 @@ import { reachOf } from "../src/reach.js";
 
 const cfgOf = (extra: Record<string, unknown>): HearthConfig => parseConfig({
   name: "n",
-  backends: { main: { url: "http://127.0.0.1:1", kind: "none", serves: ["a", "b", "c", "d"], routes: [{ path: "/v1/rank", model: "ranker", lane: "chat" }, { path: "/v1/embed", lane: "batch" }] } },
+  backends: { spare: { url: "http://127.0.0.1:3", kind: "none", serves: ["e"] }, main: { url: "http://127.0.0.1:1", kind: "none", serves: ["a", "b", "c", "d"], routes: [{ path: "/v1/rank", model: "ranker", lane: "chat" }, { path: "/v1/embed", lane: "batch" }] } },
   peers: { friend: { url: "http://127.0.0.1:2", token: "t", models: { a: "a", far: "far" } } },
   models: { pinned: { lane: "batch" } },
   ...extra,
@@ -70,6 +70,12 @@ const ends = (cfg: HearthConfig, flows: Record<string, Flow>, type: string) => r
 {
   const { cfg, flows } = rules({ embed: { inputs: ["embed"], takes: ["/v1/embed"], steps: [{ to: "d" }] } });
   assert.deepEqual(ends(cfg, flows, "embed").map((e) => [e.id, e.chat, e.lane]), [["d", false, "batch"]]);
+}
+
+// A path belongs to one backend, so what stands in for it there as a fallback lands in that route's lane.
+{
+  const { cfg, flows } = rules({ embed: { inputs: ["embed"], takes: ["/v1/embed"], steps: [{ to: "d", when: { variant: ["x"] } }, { to: "e" }] } });
+  assert.equal(ends(cfg, flows, "embed")[1]!.lane, "batch");
 }
 
 console.log("reach.test.ts ok");

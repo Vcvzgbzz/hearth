@@ -25,12 +25,9 @@ export interface ReachType {
 
 export function reachOf(cfg: HearthConfig, flows: Readonly<Record<string, Flow>>): ReachType[] {
   const out: ReachType[] = [];
-  /** The route a path reaches this model by: its own, else the path on the backend that serves it. */
-  const routeOf = (id: string, takes: readonly string[]) => {
-    const routes = cfg.backends.flatMap((b) => b.routes);
-    const server = cfg.backends.find((b) => b.name === cfg.models[id]?.backend) ?? cfg.backends.find((b) => b.serves.includes(id));
-    return routes.find((r) => takes.includes(r.path) && r.model === id) ?? server?.routes.find((r) => takes.includes(r.path));
-  };
+  /** A path resolves to exactly one backend, so its route says the lane of all that runs under it, a fallback included. */
+  const routes = cfg.backends.flatMap((b) => b.routes);
+  const routeOf = (id: string, takes: readonly string[]) => routes.find((r) => takes.includes(r.path) && r.model === id) ?? routes.find((r) => takes.includes(r.path));
   for (const [name, flow] of Object.entries(flows)) {
     for (const type of flow.inputs.filter((i) => i !== ANY)) {
       const found = new Map<string, ReachEnd>();
