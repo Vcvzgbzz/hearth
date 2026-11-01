@@ -123,6 +123,34 @@ function fleet(n: number, opts: Partial<SchedulerOptions> = {}) {
   held.finish();
 }
 
+// --- a card is not kept for jobs that cannot run ---------------------------------------
+{
+  const tally = new KeyTally();
+  const arbiter = new ResourceArbiter();
+  const elsewhere = new Scheduler({ lanes, tally });
+  const a = new Scheduler({ lanes, concurrency: 2, tally, resources: ["gpu0"], arbiter });
+  const b = new Scheduler({ lanes, tally, resources: ["gpu0"], arbiter });
+  const running = job(elsewhere, { limit: limited(1) });
+  await tick();
+  const passing = job(a, { caller: "key:other" });
+  await tick();
+  const held = job(a, { limit: limited(1) });
+  await tick();
+  const waiting = job(b, { caller: "key:third" });
+  await tick();
+  assert.equal(waiting.started, false, "the card is in use");
+  passing.finish();
+  await tick();
+  assert.equal(waiting.started, true, "with only held jobs left, the card goes to work that can use it");
+  waiting.finish();
+  running.finish();
+  await tick();
+  a.kick();
+  await tick();
+  assert.equal(held.started, true, "and the held job takes it back once its key has room");
+  held.finish();
+}
+
 // --- a limit raised frees a waiter ----------------------------------------------------
 {
   const { list: [s] } = fleet(1);

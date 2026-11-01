@@ -359,7 +359,8 @@ export class Scheduler {
   /** Nothing is running: keep the hardware while we have work, unless our turn is up and someone waits. */
   private settleHold(): void {
     if (!this.arbiter || !this.holding) return;
-    if (this.queued.length === 0 || this.arbiter.owed(this.resources, this)) this.dropHold();
+    // Jobs their keys hold cannot use the card, so it does not wait for them.
+    if (this.queued.every((j) => this.keyFull(j)) || this.arbiter.owed(this.resources, this)) this.dropHold();
   }
 
   /** Would this job overflow its model's shared pool? A job alone always fits. */
@@ -616,6 +617,7 @@ export class Scheduler {
         this.sync();
       });
     }
+    if (this.running.size === 0) this.settleHold();
     this.updateClaim();
     this.sync();
   }

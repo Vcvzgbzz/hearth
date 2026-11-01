@@ -1093,7 +1093,14 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       throw new Refusal(404, why);
     }
     limits?.();
-    withinModelLimits(caller, model);
+    /** A model's own limits, checked once for each model this request lands on. */
+    const limited = new Set<string>();
+    const limitModel = (m: string): void => {
+      if (limited.has(m)) return;
+      limited.add(m);
+      withinModelLimits(caller, m);
+    };
+    limitModel(model);
 
     // A model that keeps its answers gives one back to a request identical to the one it answered.
     // A stream opened early to report queue position is neither kept nor answered from what is.
@@ -1140,6 +1147,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
           throw new Refusal(400, `${model} ${tooMuch}`);
         }
         try {
+          limitModel(model);
           const elsewhere = spare().target === "local";
           await local.scheduler.submit(
             // A second try goes back through admission without re-applying the caller cap.
@@ -1188,7 +1196,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         lane,
         model,
         caller,
-        maxPerCaller: callerCap(null, cfg),
+        maxPerCaller: capOf(caller, model),
         // No local slot: this runs on their hardware, not ours.
         offbox: true,
         ...(id ? { id } : {}),
@@ -1234,7 +1242,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
           fellBack = true;
           lastTarget = "local";
           // A local retry goes back through admission, without re-applying the caller cap.
-          await local.scheduler.submit({ lane, model, caller, signal, tokens: pool.poolTokens(model, need) }, () => runLocal());
+          limitModel(model);
+          await local.scheduler.submit({ lane, model, caller, ...keyLimitOf(caller, model), signal, tokens: pool.poolTokens(model, need) }, () => runLocal());
         }
       },
     );
@@ -3166,7 +3175,6 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         const { lane } = routed.rule;
         // Two models can share one routed path; each queues as itself.
         const model = pool.routedModel(routed.slot, routed.rule, asked);
-        withinModelLimits(who, model, false);
         // Queued on the backend that runs it, and recorded in history like any local use.
         const run = async (to: BackendSlot, as: string, sendBody: Buffer | undefined, orFail: boolean): Promise<void> => {
           const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
@@ -3208,6 +3216,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
           const line = !usable ? undefined : held ? pool.forPath(held.as(next.model))?.slot : placeOf(next.model);
           const more = line ? { slot: line, model: next!.model, line: next }
             : spare && fb && !fellBack ? { slot: spare, model: fb.model, line: null } : null;
+          // Outside the try: a refusal here is the answer, not a reason to try the next line.
+          withinModelLimits(who, as, false);
           try {
             await run(to, as, sendBody, more !== null);
             break;
