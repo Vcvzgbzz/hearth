@@ -1211,8 +1211,21 @@ export interface KeyRule {
   tokensPerDay: number;
   /** What it may spend in a UTC day, in dollars, on models that carry a `price`. 0 is no limit. */
   dollarsPerDay: number;
+  /** The lane its requests queue in where neither the model nor a route says; null leaves it to the request. */
+  lane: string | null;
+  /** Jobs it may run at once over every model; more wait in line. 0 is no limit. */
+  maxConcurrent: number;
+  /** One model's own limits, each beside the key's. Keyed by the id a job runs as; an id no longer reached does nothing. */
+  models: Record<string, KeyModelRule>;
 }
-const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0, dollarsPerDay: 0 };
+
+/** What one model is held to for one key. */
+export interface KeyModelRule {
+  maxConcurrent?: number;
+  tokensPerDay?: number;
+  requestsPerMinute?: number;
+}
+const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0, dollarsPerDay: 0, lane: null, maxConcurrent: 0, models: {} };
 
 /** Every name a flow takes, in `flows:` and in each router's: what a client may ask for besides a model. Read off the file as written. */
 function typeNames(root: Record<string, unknown>): string[] {
@@ -1227,7 +1240,7 @@ function typeNames(root: Record<string, unknown>): string[] {
 
 /** `apiKeys:` entries: a bare secret, or `{ key, label }`. Labels are shown wherever caller ids are. */
 function apiKeyList(
-  v: unknown, where: string, routeIds: Set<string>,
+  v: unknown, where: string, routeIds: Set<string>, lanes: readonly string[],
 ): { keys: string[]; labels: string[]; models: (string[] | null)[]; rules: KeyRule[] } {
   if (v === undefined) return { keys: [], labels: [], models: [], rules: [] };
   if (!Array.isArray(v)) throw bad(where, "must be a list");
@@ -1271,7 +1284,7 @@ function apiKeyList(
       return;
     }
     const entry = asRecord(raw, at);
-    only(entry, ["key", "label", "models", "expires", "limits"], at);
+    only(entry, ["key", "label", "models", "expires", "limits", "lane"], at);
     const key = resolveSecret(str(entry.key, `${at}.key`), `${at}.key`);
     // A blank label is a typo, not "no label" — the string form is how you say
     // no label — so it is refused rather than silently falling back to the hash.
@@ -1299,13 +1312,38 @@ function apiKeyList(
       expires = t + 86_400_000;
     }
     const limits = entry.limits === undefined ? {} : asRecord(entry.limits, `${at}.limits`);
-    only(limits, ["requestsPerMinute", "tokensPerDay", "dollarsPerDay"], `${at}.limits`);
+    only(limits, ["requestsPerMinute", "tokensPerDay", "dollarsPerDay", "maxConcurrent", "models"], `${at}.limits`);
     const cap = (k: "requestsPerMinute" | "tokensPerDay"): number => {
       const n = num(limits[k], `${at}.limits.${k}`, 0);
       if (!Number.isInteger(n) || n < 0) throw bad(`${at}.limits.${k}`, "must be a whole number, 0 or more");
       return n;
     };
-    take(key, label, at, scope, { expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay"), dollarsPerDay: atLeast(limits.dollarsPerDay, `${at}.limits.dollarsPerDay`, 0) });
+    const jobs = (raw: unknown, here: string): number => {
+      const n = num(raw, here, 0);
+      if (!Number.isInteger(n) || n < 1) throw bad(here, "must be a whole number, 1 or more");
+      return n;
+    };
+    const lane = entry.lane === undefined ? null : str(entry.lane, `${at}.lane`);
+    if (lane !== null && !lanes.includes(lane)) throw bad(`${at}.lane`, `is "${lane}", which is not in scheduler.lanes (${lanes.join(", ")})`);
+    const own: Record<string, KeyModelRule> = {};
+    for (const [id, raw] of Object.entries(limits.models === undefined ? {} : asRecord(limits.models, `${at}.limits.models`))) {
+      const here = `${at}.limits.models.${id}`;
+      const m = asRecord(raw, here);
+      only(m, ["maxConcurrent", "tokensPerDay", "requestsPerMinute"], here);
+      const rule: KeyModelRule = {};
+      if (m.maxConcurrent !== undefined) rule.maxConcurrent = jobs(m.maxConcurrent, `${here}.maxConcurrent`);
+      for (const k of ["tokensPerDay", "requestsPerMinute"] as const) {
+        if (m[k] === undefined) continue;
+        const n = num(m[k], `${here}.${k}`, 0);
+        if (!Number.isInteger(n) || n < 0) throw bad(`${here}.${k}`, "must be a whole number, 0 or more");
+        rule[k] = n;
+      }
+      own[id] = rule;
+    }
+    take(key, label, at, scope, {
+      expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay"), dollarsPerDay: atLeast(limits.dollarsPerDay, `${at}.limits.dollarsPerDay`, 0),
+      lane, maxConcurrent: limits.maxConcurrent === undefined ? 0 : jobs(limits.maxConcurrent, `${at}.limits.maxConcurrent`), models: own,
+    });
   });
   return { keys, labels, models, rules };
 }
@@ -1956,7 +1994,7 @@ export function parseConfig(raw: unknown): HearthConfig {
   }
 
   const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels, rules: apiKeyRules } =
-    apiKeyList(root.apiKeys, "apiKeys", new Set([...Object.keys(models), ...typeNames(root)]));
+    apiKeyList(root.apiKeys, "apiKeys", new Set([...Object.keys(models), ...typeNames(root)]), Object.keys(lanes).filter((l) => l !== WARM_LANE));
 
   const mainListen = {
     // Loopback by default. Anyone who wants it on the network says so, and

@@ -101,7 +101,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `borrowing.downMs` | `30000` | how long a failed probe is remembered, so an outage doesn't make every local request pay the timeout |
 | `borrowing.pollMs` / `.staleMs` | `60000` / `60000` | background floor that warms the cache. The real mechanism is on-demand. A peer that answered one of our requests within `staleMs` stays up |
 | `borrowing.coldPenalty` | `2` | what a model load is worth to `fastest`, in queued-jobs-equivalent |
-| `apiKeys` | `[]` | keys allowed on `/v1/*`. Empty means loopback only. Setting it means loopback needs a key too, including any local tool you point at this. An entry may be `{ key, label }` to name a caller, and may carry `models`, `expires` and `limits` — see below |
+| `apiKeys` | `[]` | keys allowed on `/v1/*`. Empty means loopback only. Setting it means loopback needs a key too, including any local tool you point at this. An entry may be `{ key, label }` to name a caller, and may carry `models`, `lane`, `expires` and `limits` — see below |
 | `operator` | unset | the console login, `{user, passHash}`. Written by the console's first-run setup or `hearth set-operator`; applies live; see [The console](console.md#the-console) |
 | `maxBodyBytes` | `33554432` | largest accepted request body |
 | `shutdownGraceMs` | `30000` | how long a shutdown waits for requests already in flight. `0` destroys them |
@@ -171,6 +171,25 @@ estimate where it does not.
 ```yaml
 apiKeys:
   - { key: env:GUEST_KEY, label: guest, expires: 2030-06-30, limits: { requestsPerMinute: 20, tokensPerDay: 200000 } }
+```
+
+`limits.maxConcurrent` is how many jobs a key may run at once over every model
+and backend. It is the one limit that does not refuse: more wait in line, and
+other callers pass them. `limits.models` gives a model its own `maxConcurrent`,
+`tokensPerDay` and `requestsPerMinute`, beside the key's. A model is named by
+the id its job runs as, not the type asked for, and an id no longer reached does
+nothing. `lane` queues the key's requests in that lane where neither the model
+nor a route says otherwise.
+
+```yaml
+apiKeys:
+  - key: env:AGENT_KEY
+    label: agent
+    lane: batch
+    limits:
+      maxConcurrent: 6
+      models:
+        my-model: { maxConcurrent: 4, tokensPerDay: 2000000 }
 ```
 
 For the caller that only has a model picker and runs on the softest box you

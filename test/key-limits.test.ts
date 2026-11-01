@@ -54,6 +54,21 @@ bad('{"key":"k","label":"a","expires":"next week"}', /expires/);
 bad('{"key":"k","label":"a","limits":{"requestsPerMinute":-1}}', /requestsPerMinute/);
 bad('{"key":"k","label":"a","limits":{"perHour":5}}', /perHour/);
 
+// A key's lane, its jobs at once, and a model's own limits.
+const ruleFor = (entry: unknown) => parseConfig({ ...loadYaml(), apiKeys: [entry] }).apiKeyRules[0]!;
+const full = ruleFor({ key: "k", label: "a", lane: "batch", limits: { maxConcurrent: 6, models: { "my-model:latest": { maxConcurrent: 2, tokensPerDay: 100, requestsPerMinute: 5 } } } });
+assert.equal(full.lane, "batch");
+assert.equal(full.maxConcurrent, 6);
+assert.deepEqual(full.models, { "my-model:latest": { maxConcurrent: 2, tokensPerDay: 100, requestsPerMinute: 5 } });
+const plain = ruleFor({ key: "k", label: "a" });
+assert.deepEqual([plain.lane, plain.maxConcurrent, plain.models], [null, 0, {}], "a key that names none of them is held to none of them");
+assert.deepEqual(ruleFor({ key: "k", label: "a", limits: { models: { gone: { tokensPerDay: 5 } } } }).models, { gone: { tokensPerDay: 5 } }, "a limit on a model no longer here loads: a router can change under it");
+bad('{"key":"k","label":"a","lane":"nope"}', /apiKeys\[0\]\.lane.*nope.*chat, batch/);
+bad('{"key":"k","label":"a","limits":{"maxConcurrent":0}}', /apiKeys\[0\]\.limits\.maxConcurrent/);
+bad('{"key":"k","label":"a","limits":{"maxConcurrent":1.5}}', /apiKeys\[0\]\.limits\.maxConcurrent/);
+bad('{"key":"k","label":"a","limits":{"models":{"m":{"tokensPerDay":-1}}}}', /apiKeys\[0\]\.limits\.models\.m\.tokensPerDay/);
+bad('{"key":"k","label":"a","limits":{"models":{"m":{"perHour":5}}}}', /perHour/);
+
 const node = createNode(loadConfig(cfgPath), silentLogger);
 node.start();
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
