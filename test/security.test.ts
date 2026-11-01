@@ -107,7 +107,7 @@ const host = url.slice("http://".length);
 /* ------------------------------------------- a body that is not an object */
 
 {
-  for (const path of ["/control", "/keys/mint", "/backends/probe"]) {
+  for (const path of ["/control", "/keys/mint", "/keys/update", "/backends/probe"]) {
     const r = await fetch(`${url}${path}`, { method: "POST", headers: { Authorization: "Bearer my-key" }, body: "null" });
     assert.equal(r.status, 400, `${path} answers a null body as the caller's mistake`);
   }
