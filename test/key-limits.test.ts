@@ -183,7 +183,7 @@ const row = async (label: string) => ((await (await fetch(`${heldUrl}/ui/data`, 
 const single = await row("single");
 assert.equal(single.router, "default");
 assert.equal(single.lane, null);
-assert.deepEqual(single.reach.map((t) => t.type), ["stepped"], "what its rulebook names; the rest of what it can ask for has no type");
+assert.deepEqual(single.reach.map((t) => t.type), ["stepped", "anything else"], "what its rulebook names, and that the rest runs as asked");
 const busy = Object.values(single.now);
 assert.deepEqual([busy.reduce((n, m) => n + m.running, 0), busy.reduce((n, m) => n + m.waiting, 0)], [1, 1], "what the page shows as running and waiting; either may have started first");
 await letGo();
@@ -254,7 +254,7 @@ await letGo();
 await Promise.all([first, second]);
 const orphan = await patch([{ path: ["scheduler", "lanes", "batch"], delete: true }]);
 assert.ok(orphan.status >= 400 && orphan.status < 500);
-assert.match(await orphan.text(), /apiKeys\[\d\]\.lane/);
+assert.match(await orphan.text(), /apiKeys\[\d\]\.lane of key .{0,2}bulk/, "the refusal names the key");
 
 await heldNode.close();
 slow.close();

@@ -33,6 +33,16 @@ apiKeys:
     label: agent
     limits: {tokensPerDay: 500}
   - bare-secret
+  - key: noted-secret
+    label: noted
+    limits:
+      # why this cap
+      tokensPerDay: 900
+      models:
+        # and this one
+        mine: {requestsPerMinute: 4}
+callers:
+  ghost: other
 `);
 const node = createNode(loadConfig(cfgPath), silentLogger);
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
@@ -63,15 +73,26 @@ assert.deepEqual(Object.keys(entry().models), ["my.model"]);
 assert.equal((await update({ model: { id: "my.model", limits: { tokensPerDay: 0 } } })).status, 200);
 assert.equal((await update({ lane: null, limits: { maxConcurrent: null, tokensPerDay: null } })).status, 200);
 assert.equal(entry().lane, null);
-assert.doesNotMatch(file(), /limits|lane/, "nothing is left empty");
+const agentBlock = () => file().slice(file().indexOf("label: agent"), file().indexOf("- bare-secret"));
+assert.doesNotMatch(agentBlock(), /limits|lane/, "nothing is left empty");
+
+// A save changes the values it names, and what a person wrote beside them stays.
+const noted = (body: Record<string, unknown>) => post("/keys/update", { label: "noted", ...body });
+assert.equal((await noted({ limits: { maxConcurrent: 3 } })).status, 200);
+assert.equal((await noted({ model: { id: "mine", limits: { tokensPerDay: 50 } } })).status, 200);
+assert.match(file(), /# why this cap/);
+assert.match(file(), /# and this one/);
+assert.deepEqual(loadConfig(cfgPath).apiKeyRules[3]!.models, { mine: { requestsPerMinute: 4, tokensPerDay: 50 } });
+assert.equal(loadConfig(cfgPath).apiKeyRules[3]!.tokensPerDay, 900);
+assert.equal(loadConfig(cfgPath).apiKeyRules[3]!.maxConcurrent, 3);
 
 // A router is the callers: entry, and default is no entry at all.
 assert.equal((await update({ router: "other" })).status, 200);
-assert.match(file(), /callers:\s+agent: other/);
+assert.match(file(), /agent: other/);
 assert.equal((await update({ router: "default" })).status, 200);
-assert.doesNotMatch(file(), /callers/, "default is the absence of a line");
+assert.doesNotMatch(file(), /agent: /, "default is the absence of a line");
 const star = file();
-writeFileSync(cfgPath, `${star}callers:\n  "*": other\n`);
+writeFileSync(cfgPath, star.replace("callers:", 'callers:\n  "*": other'));
 const star2 = createNode(loadConfig(cfgPath), silentLogger);
 await new Promise<void>((r) => star2.server.listen(0, "127.0.0.1", r));
 const starUrl = `http://127.0.0.1:${(star2.server.address() as AddressInfo).port}`;
@@ -90,6 +111,12 @@ assert.ok((await update({ lane: "nope" })).status >= 400);
 assert.ok((await update({ limits: { maxConcurrent: 1.5 } })).status >= 400);
 assert.equal((await update({})).status, 400, "nothing to change");
 assert.equal(file(), before);
+
+// A key with no limits yet takes them, and a mint that says default clears a line an old key left.
+assert.equal((await post("/keys/mint", { label: "ghost", router: "default" })).status, 200);
+assert.doesNotMatch(file(), /ghost: other/);
+assert.equal((await post("/keys/update", { label: "ghost", model: { id: "mine", limits: { maxConcurrent: 2 } } })).status, 200);
+assert.deepEqual(loadConfig(cfgPath).apiKeyRules.at(-1)!.models, { mine: { maxConcurrent: 2 } });
 
 // A mint can say which router, in one write.
 assert.equal((await post("/keys/mint", { label: "fresh", router: "other" })).status, 200);

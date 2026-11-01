@@ -279,13 +279,13 @@ export interface ModelLimits { tokensPerDay: number; maxConcurrent: number; rate
 export interface KeyModelRule { maxConcurrent?: number; tokensPerDay?: number; requestsPerMinute?: number }
 
 /** One place a key's rulebook can land: a model, here or on peers, or a plugin. */
-export interface ReachEnd { id: string; plugin?: true; peers: string[]; here: boolean; /** Tokens are counted here. */ chat: boolean; /** Pinned by the model or its route; null takes the key's. */ lane: string | null }
+export interface ReachEnd { id: string; plugin?: true; peers: string[]; here: boolean; /** Tokens are counted here. */ chat: boolean; /** Where it lands whatever the key says; null takes the key's, `varies` where its rules differ. */ lane: string | null }
 
 /** One key, as the keys page draws it. */
 export interface KeyRow {
   label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used;
   rule?: { expires: number | null; requestsPerMinute: number; tokensPerDay: number; dollarsPerDay?: number; lane?: string | null; maxConcurrent?: number; models?: Record<string, KeyModelRule> } | null;
-  router: string; reach: { type: string; ends: ReachEnd[] }[]; lane: string | null;
+  router: string; reach: { type: string; ends: ReachEnd[]; /** A name no rule takes runs as itself. */ asAsked?: true }[]; lane: string | null;
   byModel: { today: Record<string, Used>; month: Record<string, Used> };
   now: Record<string, { running: number; waiting: number }>;
 }

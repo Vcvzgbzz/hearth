@@ -1324,7 +1324,7 @@ function apiKeyList(
       return n;
     };
     const lane = entry.lane === undefined ? null : str(entry.lane, `${at}.lane`);
-    if (lane !== null && !lanes.includes(lane)) throw bad(`${at}.lane`, `is "${lane}", which is not in scheduler.lanes (${lanes.join(", ")})`);
+    if (lane !== null && !lanes.includes(lane)) throw bad(`${at}.lane`, `of key "${label}" is "${lane}", which is not in scheduler.lanes (${lanes.join(", ")})`);
     const own: Record<string, KeyModelRule> = {};
     for (const [id, raw] of Object.entries(limits.models === undefined ? {} : asRecord(limits.models, `${at}.limits.models`))) {
       const here = `${at}.limits.models.${id}`;

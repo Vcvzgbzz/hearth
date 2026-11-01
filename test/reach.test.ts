@@ -78,4 +78,46 @@ const ends = (cfg: HearthConfig, flows: Record<string, Flow>, type: string) => r
   assert.equal(ends(cfg, flows, "embed")[1]!.lane, "batch");
 }
 
+// A step's lane and one on the name asked for are where the work lands, so the page says so.
+{
+  const cfg = cfgOf({ models: { pinned: { lane: "batch" }, named: { lane: "batch" } }, flows: {
+    stepped: { inputs: ["chat"], steps: [{ to: "a", lane: "batch", when: { variant: ["x"] } }, { to: "b", when: { variant: ["y"] } }, { to: { flow: "later" }, lane: "batch", when: { variant: ["z"] } }, { to: { refuse: "no" } }] },
+    later: { inputs: [], steps: [{ to: "c" }] },
+    named: { inputs: ["named"], steps: [{ to: "a" }] },
+    twice: { inputs: ["twice"], steps: [{ to: "a", lane: "batch", when: { variant: ["x"] } }, { to: "a" }] },
+    rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] },
+  } });
+  assert.deepEqual(ends(cfg, cfg.flows, "chat").map((e) => [e.id, e.lane]), [["a", "batch"], ["b", null], ["c", "batch"]], "a step's lane holds through a hand-off");
+  assert.equal(ends(cfg, cfg.flows, "named")[0]!.lane, "batch", "a lane on the name asked for");
+  assert.equal(ends(cfg, cfg.flows, "twice")[0]!.lane, "varies", "two steps, two lanes: neither alone is true");
+}
+
+// A route's lane beats a model's own, since a routed request queues in the route's.
+{
+  const cfg = cfgOf({ models: { d: { lane: "batch" } }, flows: {
+    rank: { inputs: ["rank"], takes: ["/v1/rank"], steps: [{ to: "d" }] },
+    rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] },
+  } });
+  assert.equal(ends(cfg, cfg.flows, "rank")[0]!.lane, "chat");
+}
+
+// Where the rule for everything else lands is reached too, and a name run as itself leaves that open.
+{
+  const cfg = cfgOf({ flows: { rest: { inputs: ["*"], steps: [{ to: "a" }] } } });
+  assert.deepEqual(reachOf(cfg, cfg.flows).map((t) => [t.type, t.ends.map((e) => e.id), t.asAsked]), [["anything else", ["a"], undefined]]);
+  const open = cfgOf({ flows: { rest: { inputs: ["*"], steps: [{ to: { asked: true } }] } } });
+  assert.deepEqual(reachOf(open, open.flows).map((t) => [t.type, t.ends.length, t.asAsked]), [["anything else", 0, true]]);
+}
+
+// A hand-off to a flow that is switched off still runs its steps; only a name that enters it runs as itself.
+{
+  const cfg = cfgOf({ flows: {
+    top: { inputs: ["top"], steps: [{ to: { flow: "resting" } }] },
+    resting: { inputs: ["quiet"], off: true, steps: [{ to: "a" }] },
+    rest: { inputs: ["*"], steps: [{ to: { refuse: "no" } }] },
+  } });
+  assert.deepEqual(ends(cfg, cfg.flows, "top").map((e) => e.id), ["a"]);
+  assert.deepEqual(ends(cfg, cfg.flows, "quiet").map((e) => e.id), ["quiet"]);
+}
+
 console.log("reach.test.ts ok");

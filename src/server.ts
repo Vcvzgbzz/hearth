@@ -2237,22 +2237,40 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       if (body[k] !== null) ops.push({ path: ["apiKeys", i, k], value: body[k] });
       else if (written[k] !== undefined) ops.push({ path: ["apiKeys", i, k], delete: true });
     }
+    type Fields = Record<string, unknown>;
     const gone = (v: unknown): boolean => v === null || v === 0;
-    const merged = (was: Record<string, unknown>, change: Record<string, unknown>) =>
-      Object.fromEntries(Object.entries({ ...was, ...change }).filter(([, v]) => !gone(v)));
-    const model = body.model as { id?: unknown; limits?: Record<string, unknown> } | undefined;
+    const merged = (was: Fields, change: Fields): Fields => Object.fromEntries(Object.entries({ ...was, ...change }).filter(([, v]) => !gone(v)));
+    /** One edit per value that moved, so what a person wrote beside the others stays. */
+    const diff = (at: (string | number)[], was: Fields, now: Fields): void => {
+      for (const k of new Set([...Object.keys(was), ...Object.keys(now)])) {
+        if (now[k] === undefined) ops.push({ path: [...at, k], delete: true });
+        else if (now[k] !== was[k]) ops.push({ path: [...at, k], value: now[k] });
+      }
+    };
+    const model = body.model as { id?: unknown; limits?: Fields } | undefined;
     if (body.limits === undefined && model === undefined) return ops;
-    const was = (written.limits ?? {}) as Record<string, unknown>;
-    const next = merged(was, (body.limits ?? {}) as Record<string, unknown>);
+    const at = ["apiKeys", i, "limits"];
+    const { models: wasModels = {}, ...wasTop } = (written.limits ?? {}) as Fields & { models?: Record<string, Fields> };
+    const top = merged(wasTop, (body.limits ?? {}) as Fields);
+    const models = { ...wasModels };
     if (typeof model?.id === "string" && model.id !== "") {
-      const models = { ...(next.models ?? {}) as Record<string, Record<string, unknown>> };
       const own = merged(models[model.id] ?? {}, model.limits ?? {});
       if (Object.keys(own).length > 0) models[model.id] = own;
       else delete models[model.id];
-      if (Object.keys(models).length > 0) next.models = models;
-      else delete next.models;
     }
-    ops.push(Object.keys(next).length > 0 ? { path: ["apiKeys", i, "limits"], value: next } : { path: ["apiKeys", i, "limits"], delete: true });
+    if (Object.keys(top).length === 0 && Object.keys(models).length === 0) {
+      if (written.limits !== undefined) ops.push({ path: at, delete: true });
+      return ops;
+    }
+    diff(at, wasTop, top);
+    if (Object.keys(models).length === 0) {
+      if (Object.keys(wasModels).length > 0) ops.push({ path: [...at, "models"], delete: true });
+      return ops;
+    }
+    for (const id of new Set([...Object.keys(wasModels), ...Object.keys(models)])) {
+      if (models[id] === undefined) ops.push({ path: [...at, "models", id], delete: true });
+      else diff([...at, "models", id], wasModels[id] ?? {}, models[id]!);
+    }
     return ops;
   }
 

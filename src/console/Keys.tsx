@@ -56,6 +56,21 @@ function Dollars({ value, label, onSave }: { value: number; label: string; onSav
   );
 }
 
+/** A day that saves when it is left or Enter is pressed: every keystroke of a year is a valid date on the way to the right one. */
+function LastDay({ value, label, onSave }: { value: string; label: string; onSave: (day: string) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const commit = () => {
+    if (text === null) return;
+    setText(null);
+    if (text !== value) onSave(text);
+  };
+  return (
+    <input type="date" aria-label={label} value={text ?? value} onChange={(e) => setText(e.target.value)} onBlur={commit}
+           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setText(null); }}
+           className="h-8 rounded-md border border-line bg-panel px-2 text-[12px] focus-visible:outline-2 focus-visible:outline-accent" />
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><div className="mb-1 whitespace-nowrap text-[12px] text-dim">{label}</div>{children}</div>;
 }
@@ -97,7 +112,7 @@ function ModelRow({ k, end }: { k: KeyRow; end: ReachEnd }) {
         {end.id}{end.peers.length > 0 && <span className="font-sans text-dim"> {end.here ? "also on" : "on"} {end.peers.join(", ")}</span>}
       </td>
       {end.lane !== null
-        ? <td className={cx("px-2 py-1.5", mono)} title="set on this model or its route, so it beats the key's lane">{end.lane}</td>
+        ? <td className={cx("px-2 py-1.5", mono)} title={end.lane === "varies" ? "it depends on the rule that sends work here" : "set on this model, its route or the rule that sends it here, so it beats the key's lane"}>{end.lane}</td>
         : <td className={cx("px-2 py-1.5 text-dim", mono)}><span className="border-b border-dashed border-dim" title="the key's lane">{k.lane ?? "default"}</span></td>}
       {end.here ? cell("maxConcurrent", "jobs at once", rule.maxConcurrent ?? 0) : none}
       {end.chat ? cell("tokensPerDay", "tokens a day", rule.tokensPerDay) : none}
@@ -123,8 +138,13 @@ function KeyDetail({ k }: { k: KeyRow }) {
   const rule = k.rule ?? NO_RULE;
   const set = (body: Record<string, unknown>, done: string) => void updateKey(k.label, body, done);
   const openOf = (type: string, ends: ReachEnd[]) => groups[type] ?? (k.reach.length <= 5 || ends.some((e) => k.byModel.month[e.id] || k.now[e.id] || rule.models?.[e.id]));
-  const reached = new Set(k.reach.flatMap((t) => t.ends.map((e) => e.id)));
-  const stale = Object.keys(rule.models ?? {}).filter((id) => !reached.has(id));
+  const listed = new Set(k.reach.flatMap((t) => t.ends.map((e) => e.id)));
+  // Where a name runs as itself the rules cannot list what it may ask for, so its use and its limits stand in.
+  const open = k.reach.some((t) => t.asAsked);
+  const named = open ? [...new Set([...Object.keys(k.byModel.month), ...Object.keys(rule.models ?? {})])].filter((id) => !listed.has(id)) : [];
+  const reach = k.reach.map((t) => (t.asAsked ? { ...t, ends: [...t.ends, ...named.map((id): ReachEnd => ({ id, peers: [], here: true, chat: true, lane: null }))] } : t));
+  const reached = new Set(reach.flatMap((t) => t.ends.map((e) => e.id)));
+  const stale = open ? [] : Object.keys(rule.models ?? {}).filter((id) => !reached.has(id));
   const clearStale = async () => {
     for (const id of stale) await updateKey(k.label, { model: { id, limits: { maxConcurrent: null, tokensPerDay: null, requestsPerMinute: null } } }, `${id}: its limits cleared`);
   };
@@ -165,9 +185,8 @@ function KeyDetail({ k }: { k: KeyRow }) {
           <Dollars label={`${k.label}: dollars a day`} value={rule.dollarsPerDay ?? 0} onSave={(n) => set({ limits: { dollarsPerDay: n === 0 ? null : n } }, "dollars a day saved")} />
         </Field>
         <Field label="last day it works">
-          <input type="date" aria-label={`${k.label}: last day it works`} value={rule.expires === null ? "" : new Date(rule.expires - 1).toISOString().slice(0, 10)}
-                 onChange={(e) => set({ expires: e.target.value === "" ? null : e.target.value }, "last day saved")}
-                 className="h-8 rounded-md border border-line bg-panel px-2 text-[12px] focus-visible:outline-2 focus-visible:outline-accent" />
+          <LastDay label={`${k.label}: last day it works`} value={rule.expires === null ? "" : new Date(rule.expires - 1).toISOString().slice(0, 10)}
+                   onSave={(day) => set({ expires: day === "" ? null : day }, "last day saved")} />
         </Field>
       </div>
       {k.models !== null && k.models.length > 0 && (
@@ -187,7 +206,7 @@ function KeyDetail({ k }: { k: KeyRow }) {
             <button type="button" onClick={() => void clearStale()} className="text-accent hover:underline">clear</button>
           </p>
         )}
-        {k.reach.length === 0 ? <p className="text-dim">Its rulebook names nothing of its own: whatever it asks for runs as asked.</p> : (
+        {reach.length === 0 ? <p className="text-dim">Its rulebook reaches nothing: whatever it asks for is refused.</p> : (
           <div className="overflow-x-auto"><table className="w-full min-w-[880px] max-w-[1060px] table-fixed text-left">
             <colgroup><col /><col className="w-[92px]" /><col className="w-[104px]" /><col className="w-[116px]" /><col className="w-[92px]" /><col className="w-[132px]" /><col className="w-[126px]" /><col className="w-[64px]" /></colgroup>
             <thead className="text-[11px] text-dim">
@@ -198,20 +217,21 @@ function KeyDetail({ k }: { k: KeyRow }) {
               </tr>
             </thead>
             <tbody>
-              {k.reach.map(({ type, ends }) => {
-                const open = openOf(type, ends);
+              {reach.map(({ type, ends, asAsked }) => {
+                const isOpen = openOf(type, ends);
                 return (
                   <Fragment key={type}>
                     <tr className="border-b border-line/40">
                       <td colSpan={8} className="pb-1 pt-2.5">
-                        <button type="button" aria-expanded={open} onClick={() => setGroups({ ...groups, [type]: !open })}
+                        <button type="button" aria-expanded={isOpen} onClick={() => setGroups({ ...groups, [type]: !isOpen })}
                                 className="inline-flex items-center gap-1 text-[12px] font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-accent">
-                          <ChevronRight size={14} className={cx("text-dim transition-transform", open && "rotate-90")} />{type}
+                          <ChevronRight size={14} className={cx("text-dim transition-transform", isOpen && "rotate-90")} />{type}
                           <span className="ml-1 rounded-full bg-muted px-1.5 text-[11px] font-normal tabular text-dim">{ends.length}</span>
                         </button>
                       </td>
                     </tr>
-                    {open && ends.map((e) => e.plugin
+                    {isOpen && asAsked && <tr className="border-b border-line/40"><td colSpan={8} className="py-1.5 pl-5 text-[12px] text-dim">any name no rule takes runs as itself, if this node has it; these are the ones it has used or has a limit on</td></tr>}
+                    {isOpen && ends.map((e) => e.plugin
                       ? <tr key={e.id} className="border-b border-line/40 last:border-0"><td className={cx("truncate py-1.5 pl-5 pr-2", mono)}>{e.id}</td><td colSpan={7} className="px-2 py-1.5 text-[12px] text-dim">a plugin: it has no queue, so these limits do not apply</td></tr>
                       : <ModelRow key={e.id} k={k} end={e} />)}
                   </Fragment>
@@ -239,7 +259,7 @@ export function Keys() {
     const l = label.trim();
     if (l === "" || busy) return;
     setBusy(true);
-    const key = await mintKey(l, null, router === "default" ? {} : { router });
+    const key = await mintKey(l, null, { router });
     setBusy(false);
     if (key !== null) {
       setCopied(false);
