@@ -127,7 +127,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     agePerSecond: { type: "number", min: 0, desc: "Priority earned per second waited, which is also the starvation bound.", def: 1 },
     warmBonus: { type: "number", min: 0, desc: "Priority discount for a model already loaded.", def: 40 },
     maxPerLane: { type: "number", min: 1, desc: "How long one lane's queue may get before new work is refused.", def: 100 },
-    maxPerCaller: { type: "number", min: 0, desc: "Queued-or-running jobs per caller per lane. 0 is off.", def: "0, or 2 with apiKeys" },
+    maxPerCaller: { type: "number", min: 0, desc: "Queued-or-running jobs per caller per lane, refused past it. 0 is off. A key with its own limits.maxConcurrent skips it.", def: "0, or 2 with apiKeys" },
   },
   lane: {
     priority: { type: "number", desc: "Base priority. Lower goes first.", def: 0 },

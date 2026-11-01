@@ -52,7 +52,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `scheduler.agePerSecond` | `1` | priority earned per second waited, which is also the starvation bound |
 | `scheduler.warmBonus` | `40` | priority discount for a model already loaded |
 | `scheduler.maxPerLane` | `100` | how long one lane's queue may get before new work is refused. Off-box jobs are bounded separately, on their own count |
-| `scheduler.maxPerCaller` | `0`, or `2` with apiKeys | queued-or-running jobs per caller per lane. Off without apiKeys, where every local caller is one identity |
+| `scheduler.maxPerCaller` | `0`, or `2` with apiKeys | queued-or-running jobs per caller per lane, refused past it. Off without apiKeys, where every local caller is one identity. A key with its own `limits.maxConcurrent`, for all models or for the one asked, skips it |
 | `models.<id>` | — | per-model settings. Where a model's requests go is a flow; see [Flows](routing.md#flows) |
 | `models.<id>.kind` | `chat` | what kind of request the model takes (`chat`, `embeddings`, `rerank`, `image`, …). A plugin's model slot is offered only models of the kind it needs. See [Model slots](plugins.md#model-slots) |
 | `models.<id>.lane` | the client's | lane this model's requests queue in, over the one the client asked for |
@@ -178,8 +178,15 @@ and backend. It is the one limit that does not refuse: more wait in line, and
 other callers pass them. `limits.models` gives a model its own `maxConcurrent`,
 `tokensPerDay` and `requestsPerMinute`, beside the key's. A model is named by
 the id its job runs as, not the type asked for, and an id no longer reached does
-nothing. `lane` queues the key's requests in that lane where neither the model
-nor a route says otherwise.
+nothing. `lane` queues the key's chat requests in that lane, over the lane a
+request asks for; a model's or a step's own lane wins, and a route always uses
+its own. Tokens are counted for chat, not for routes, so a model's `tokensPerDay`
+holds its chat work.
+
+These hold what a key asks for through `/v1`, for clients that behave. They are
+not a security boundary: a key with no `models` list is a full local caller, and
+can reach the rest of the node, `/upstream/<model>` included, past its router
+and limits. A key that must be kept to a list needs `models`.
 
 ```yaml
 apiKeys:

@@ -13,7 +13,7 @@ import { existsSync, readFileSync, renameSync } from "node:fs";
 import { actionDecls, runAction, type Action, type ActionFacts } from "./actions.js";
 import { admitModel, inScope, BodyTooLargeError, callerCap, Refusal, refusalOf } from "./admit.js";
 import { createCanary, degradedError, type RelayWatch } from "./canary.js";
-import { ANY, backendAuth, backendBase, ConfigError, DEFAULT_ROUTER, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ANY, backendAuth, backendBase, ConfigError, DEFAULT_ROUTER, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy, type KeyRule } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
 import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
@@ -29,6 +29,7 @@ import { closedWhy, limitsFor, spentWhy, termsFor } from "./lending.js";
 import { Answers } from "./answers.js";
 import { fitOutput, needsOf, NOTE_MAX, unfit, type ModelStats } from "./stats.js";
 import { CONSOLE_CSP, CONSOLE_HTML } from "./ui.js";
+import type { KeyLimit } from "./keytally.js";
 import { createViews, type CallerUse, type KeyInfo, type LedgerRow, type Spent } from "./views.js";
 import { multipartField, replaceMultipartField } from "./multipart.js";
 import { relayAnthropic, toAnthropic } from "./anthropic.js";
@@ -187,6 +188,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   // Peers apply live, so the registry follows every edit before the status surfaces hear of it.
   const config = new ConfigFile(cfg, log, () => {
     peers.sync();
+    // A changed key limit applies to jobs already waiting.
+    pool.kickAll();
     queueMicrotask(() => void broadcast());
   });
   if (cfg.stateFile) config.migrateSidecar(cfg.stateFile);
@@ -321,11 +324,46 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     return { ...usage.total(caller, days), cost };
   }
 
+  /** The rule of the key a caller is, or null for anyone else and for a key since revoked. */
+  function ruleOf(caller: string): KeyRule | null {
+    if (!caller.startsWith("key:")) return null;
+    const i = cfg.apiKeys.findIndex((k, n) => "key:" + (cfg.apiKeyLabels[n] || keyId(k)) === caller);
+    return cfg.apiKeyRules[i] ?? null;
+  }
+
+  /** What holds a key's job to its jobs at once, read each time so a change reaches jobs already waiting. */
+  const keyLimitOf = (caller: string, model: string): { keyLimit?: () => KeyLimit } =>
+    caller.startsWith("key:") ? { keyLimit: () => { const r = ruleOf(caller); return { total: r?.maxConcurrent ?? 0, model: r?.models[model]?.maxConcurrent ?? 0 }; } } : {};
+
+  /** The node's cap on a caller, unless its key says how many it may run: that limit waits where the cap refuses. */
+  const capOf = (caller: string, model: string): number | undefined => {
+    const r = ruleOf(caller);
+    return r !== null && (r.maxConcurrent > 0 || r.models[model]?.maxConcurrent !== undefined) ? undefined : callerCap(null, cfg);
+  };
+
+  /** Hold a key to one model's own limits, once it is known which model runs. A routed path counts requests, not tokens. */
+  function withinModelLimits(caller: string, model: string, tokens = true): void {
+    const rule = ruleOf(caller)?.models[model];
+    if (!rule) return;
+    if (tokens && (rule.tokensPerDay ?? 0) > 0) {
+      const used = usage.byModel(caller, 1)[model];
+      if ((used?.in ?? 0) + (used?.out ?? 0) >= rule.tokensPerDay!) throw new Refusal(429, `this key has used its ${rule.tokensPerDay} tokens of ${model} for today (UTC)`, "rate_limit_error");
+    }
+    if ((rule.requestsPerMinute ?? 0) > 0) {
+      const at = `${caller}\0${model}`;
+      const now = Date.now();
+      const recent = (asked.get(at) ?? []).filter((t) => now - t < 60_000);
+      if (recent.length >= rule.requestsPerMinute!) {
+        asked.set(at, recent);
+        throw new Refusal(429, `this key is limited to ${rule.requestsPerMinute} requests a minute of ${model}`, "rate_limit_error");
+      }
+      asked.set(at, [...recent, now]);
+    }
+  }
+
   /** Hold a key to its limits: so many requests a minute, so many tokens a UTC day. Counts the request it lets through. */
   function withinLimits(caller: string): void {
-    if (!caller.startsWith("key:")) return;
-    const i = cfg.apiKeys.findIndex((k, n) => "key:" + (cfg.apiKeyLabels[n] || keyId(k)) === caller);
-    const rule = cfg.apiKeyRules[i];
+    const rule = ruleOf(caller);
     if (!rule) return;
     if (rule.tokensPerDay > 0) {
       const used = usage.total(caller, 1);
@@ -1054,6 +1092,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       throw new Refusal(404, why);
     }
     limits?.();
+    withinModelLimits(caller, model);
 
     // A model that keeps its answers gives one back to a request identical to the one it answered.
     // A stream opened early to report queue position is neither kept nor answered from what is.
@@ -1103,7 +1142,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
           const elsewhere = spare().target === "local";
           await local.scheduler.submit(
             // A second try goes back through admission without re-applying the caller cap.
-            { lane, model, caller, ...(failed.size === 0 ? { maxPerCaller: callerCap(null, cfg), onPosition, ...(id ? { id } : {}) } : {}), signal, tokens: pool.poolTokens(model, fitted) },
+            { lane, model, caller, ...keyLimitOf(caller, model), ...(failed.size === 0 ? { maxPerCaller: capOf(caller, model), onPosition, ...(id ? { id } : {}) } : {}), signal, tokens: pool.poolTokens(model, fitted) },
             async () => {
               t.startedAt = Date.now();
               await runLocal(elsewhere);
@@ -2680,7 +2719,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     let lane =
       fromPeer !== null
         ? cfg.peerLane
-        : cfg.models[model]?.lane ??
+        : cfg.models[model]?.lane ?? ruleOf(caller)?.lane ??
           (typeof payload.lane === "string" && payload.lane in cfg.scheduler.lanes
             ? payload.lane
             : Object.keys(cfg.scheduler.lanes)[0]!);
@@ -3066,12 +3105,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         const { lane } = routed.rule;
         // Two models can share one routed path; each queues as itself.
         const model = pool.routedModel(routed.slot, routed.rule, asked);
+        withinModelLimits(who, model, false);
         // Queued on the backend that runs it, and recorded in history like any local use.
         const run = async (to: BackendSlot, as: string, sendBody: Buffer | undefined, orFail: boolean): Promise<void> => {
           const t: Timing = { enqueuedAt: Date.now(), startedAt: 0 };
           try {
             await to.scheduler.submit(
-              { lane, model: as, caller: who, maxPerCaller: callerCap(null, cfg), signal: ctrl.signal, ...(jobId(req) ? { id: jobId(req)! } : {}) },
+              { lane, model: as, caller: who, ...keyLimitOf(who, as), maxPerCaller: capOf(who, as), signal: ctrl.signal, ...(jobId(req) ? { id: jobId(req)! } : {}) },
               async () => {
                 t.startedAt = Date.now();
                 await proxy(to, sendBody, orFail);
