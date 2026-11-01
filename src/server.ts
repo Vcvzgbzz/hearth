@@ -16,7 +16,7 @@ import { createCanary, degradedError, type RelayWatch } from "./canary.js";
 import { ANY, backendAuth, backendBase, ConfigError, DEFAULT_ROUTER, flowsFor, resolveSecret, peersMapping, WARM_LANE, type BackendConfig, type FlowEnd, type HearthConfig, type RoutePolicy, type KeyRule } from "./config.js";
 import { Controls } from "./controls.js";
 import { emulatedRequest, relayEmulated, streamErrorFrame } from "./emulate.js";
-import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic } from "./configfile.js";
+import { ConfigFile, ConfigRefusal, deepFreeze, link, setNote, setShare, unlink, writeFileAtomic, type ConfigOp } from "./configfile.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, hashPassword, verifyDecoy, verifyPassword } from "./login.js";
 import { LogRing, type Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
@@ -1499,7 +1499,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: routeQueueEvents },
 
     // Mint and revoke write the config file, and the node follows it at once.
-    { path: ["/keys/mint", "/keys/revoke", "/keys/rotate"], methods: ["POST"], auth: "local", handler: routeKeys },
+    { path: ["/keys/mint", "/keys/revoke", "/keys/rotate", "/keys/update"], methods: ["POST"], auth: "local", handler: routeKeys },
     // Invite a node to borrow from this one, or redeem another node's invite.
     { path: "/peers/invite", methods: ["POST"], auth: "local", handler: routeInvite },
     { path: "/peers/join", methods: ["POST"], auth: "local", handler: routeJoin },
@@ -2211,6 +2211,42 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   // secret and keeps the rest of it. Each lands in the config file through the same patch path
   // every other config change uses, and takes effect at once. A plaintext comes back once, in
   // the answer of the mint or the rotate that made it.
+  /** The edit that sends a key by a router: `default` is no line at all, unless `*` sends everyone else by another. */
+  function routerOps(label: string, router: unknown): ConfigOp[] {
+    if (typeof router !== "string") return [];
+    if (router !== DEFAULT_ROUTER || cfg.callers["*"] !== undefined) return [{ path: ["callers", label], value: router }];
+    if (cfg.callers[label] === undefined) return [];
+    return [{ path: Object.keys(cfg.callers).length > 1 ? ["callers", label] : ["callers"], delete: true }];
+  }
+
+  /** The edits a `/keys/update` body asks for, the whole of `limits` written at once so no empty map is left behind. */
+  function keyOps(i: number, label: string, body: Record<string, unknown>): ConfigOp[] {
+    const written = ((config.text().doc as { apiKeys?: Record<string, unknown>[] } | null)?.apiKeys ?? [])[i] ?? {};
+    const ops = routerOps(label, body.router);
+    for (const k of ["lane", "expires"] as const) {
+      if (body[k] === undefined) continue;
+      if (body[k] !== null) ops.push({ path: ["apiKeys", i, k], value: body[k] });
+      else if (written[k] !== undefined) ops.push({ path: ["apiKeys", i, k], delete: true });
+    }
+    const gone = (v: unknown): boolean => v === null || v === 0;
+    const merged = (was: Record<string, unknown>, change: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries({ ...was, ...change }).filter(([, v]) => !gone(v)));
+    const model = body.model as { id?: unknown; limits?: Record<string, unknown> } | undefined;
+    if (body.limits === undefined && model === undefined) return ops;
+    const was = (written.limits ?? {}) as Record<string, unknown>;
+    const next = merged(was, (body.limits ?? {}) as Record<string, unknown>);
+    if (typeof model?.id === "string" && model.id !== "") {
+      const models = { ...(next.models ?? {}) as Record<string, Record<string, unknown>> };
+      const own = merged(models[model.id] ?? {}, model.limits ?? {});
+      if (Object.keys(own).length > 0) models[model.id] = own;
+      else delete models[model.id];
+      if (Object.keys(models).length > 0) next.models = models;
+      else delete next.models;
+    }
+    ops.push(Object.keys(next).length > 0 ? { path: ["apiKeys", i, "limits"], value: next } : { path: ["apiKeys", i, "limits"], delete: true });
+    return ops;
+  }
+
   async function routeKeys(c: Call): Promise<void> {
     try {
       const body = await readJson(c.req);
@@ -2230,13 +2266,21 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         // The file's own parser judges these, as it would had they been typed there.
         if (typeof body.expires === "string" && body.expires !== "") entry.expires = body.expires;
         if (typeof body.limits === "object" && body.limits !== null && Object.keys(body.limits).length > 0) entry.limits = body.limits;
-        const commit = config.patch({ ops: [{ path: ["apiKeys", cfg.apiKeys.length], value: entry }] });
+        const commit = config.patch({ ops: [{ path: ["apiKeys", cfg.apiKeys.length], value: entry }, ...routerOps(label, body.router)] });
         log.info("keys.minted", { label, id: keyId(key), caller: c.caller });
         json(c.res, 200, { key, label, models, restartPending: commit.restartPending });
         return;
       }
       const i = cfg.apiKeyLabels.indexOf(label);
       if (i < 0) throw new Refusal(404, `no key labeled ${label}`);
+      if (c.path === "/keys/update") {
+        const ops = keyOps(i, label, body);
+        if (ops.length === 0) throw new Refusal(400, "nothing to change");
+        const commit = config.patch({ ops });
+        log.info("keys.updated", { label, caller: c.caller });
+        json(c.res, 200, { label, updated: true, restartPending: commit.restartPending });
+        return;
+      }
       if (c.path === "/keys/rotate") {
         // Only the secret changes: its label, and so its router, scope, limits and usage, stay.
         const written = ((config.text().doc as { apiKeys?: unknown[] } | null)?.apiKeys ?? [])[i];
