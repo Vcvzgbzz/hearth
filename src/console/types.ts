@@ -383,6 +383,8 @@ export interface UiData {
   canary?: Canary;
   /** Every api key: its label (or hash where unlabeled), its model scope, and the last time it spoke here. */
   keys?: KeyRow[];
+  /** What a key can be set to: the rulebooks there are, and the lanes by priority. */
+  keySettings: { routers: string[]; lanes: { name: string; priority: number; ceiling?: number }[] };
   /** Callers that are not keys (this machine with none, peers) and what they used. */
   others?: { caller: string; today: Used; month: Used }[];
   /** Each peer's lines in the ledger: tokens it ran here, tokens this node ran there, and why it is turned away now, if it is. */

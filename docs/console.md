@@ -53,8 +53,13 @@ Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
   evicted from its row.
-- **Keys**: every api key by label, what it may run, its limits and expiry,
+- **Keys**: every api key by label, the router it goes by, its limits and expiry,
   what it used today and over 31 days, and when it last spoke to this node. Mint one (shown once), revoke one by its label, or rotate one: a new key for the same label, shown once, with the old one refused from then on.
+  A key opens to set its router, its lane and its limits, and to list what its
+  router reaches with each model's use, what is running and waiting, and its own
+  limits: dashed values are the key's, solid ones the model's own. What a key
+  reaches is changed on the routing map. A limit on tokens shows only where tokens
+  are counted, and one on jobs at once only for work that queues here.
 - **Queue**: jobs in flight, and finished requests per model with how long they
   waited and ran, over the last ten minutes or the last day; a row opens to
   its individual calls. The day view adds

@@ -239,7 +239,7 @@ export async function evict(model: string): Promise<void> {
 }
 
 /** Mint a key into hearth.yaml. The plaintext comes back once, in this result. */
-export async function mintKey(label: string, models: string[] | null, more: { expires?: string; limits?: { requestsPerMinute?: number; tokensPerDay?: number; dollarsPerDay?: number } } = {}): Promise<string | null> {
+export async function mintKey(label: string, models: string[] | null, more: { expires?: string; limits?: { requestsPerMinute?: number; tokensPerDay?: number; dollarsPerDay?: number }; router?: string } = {}): Promise<string | null> {
   try {
     const d = await request<{ key: string }>("POST", "/keys/mint", { label, ...(models !== null && models.length > 0 ? { models } : {}), ...more });
     useStore.setState({ fresh: { label, key: d.key } });
@@ -265,6 +265,17 @@ export async function rotateKey(label: string): Promise<string | null> {
 }
 /** Let go of the key that was being shown. */
 export const doneWithKey = () => useStore.setState({ fresh: null });
+
+/** Change a key's router, lane or limits. The file judges them, and a refusal says why. */
+export async function updateKey(label: string, set: Record<string, unknown>, done: string): Promise<void> {
+  try {
+    await request("POST", "/keys/update", { label, ...set });
+    toast("ok", done);
+    await refresh();
+  } catch (e) {
+    toast("bad", (e as Error).message);
+  }
+}
 
 /** Revoke a key by label; it stops authenticating at once. */
 export async function revokeKey(label: string): Promise<void> {

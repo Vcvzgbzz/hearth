@@ -18,6 +18,7 @@ const r = await fetch(`http://127.0.0.1:${(node.server.address() as AddressInfo)
 const html = await r.text();
 assert.equal(r.status, 200);
 assert.match(r.headers.get("content-type") ?? "", /text\/html/);
+for (const words of ["goes by router", "queues in lane", "what it reaches"]) assert.ok(html.includes(words), `the keys page says ${words}`);
 assert.match(html, /<div id="root"><\/div>/);
 assert.match(html, /<style>[^]*--accent[^]*<\/style>/, "the stylesheet is inlined, so nothing loads from elsewhere");
 assert.ok(!/<script src=|<link [^>]*href="(?!data:)/.test(html), "no external assets: an icon is a data: URI");

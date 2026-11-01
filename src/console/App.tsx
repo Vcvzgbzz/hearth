@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
-import { CanaryAlert, History, Inspector, KeyOnce, Keys, Models, Queue } from "./pages.js";
+import { Keys } from "./Keys.js";
+import { CanaryAlert, History, Inspector, KeyOnce, Models, Queue } from "./pages.js";
 import { NodeSmoke } from "./Smoke.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";

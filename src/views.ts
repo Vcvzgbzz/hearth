@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import type { ReachType } from "./reach.js";
 import type { Row } from "./usage.js";
 import { CONSOLE_HTML } from "./ui.js";
-import type { HearthConfig, KeyRule, LendTerms } from "./config.js";
+import { DEFAULT_ROUTER, WARM_LANE, type HearthConfig, type KeyRule, type LendTerms } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
@@ -187,6 +187,11 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       flowHits: flowHits(),
       // Every api key, by label and scope, with when it last authenticated here.
       keys: keys(),
+      keySettings: {
+        routers: [DEFAULT_ROUTER, ...Object.keys(cfg.routers)],
+        lanes: Object.entries(cfg.scheduler.lanes).filter(([name]) => name !== WARM_LANE).sort((a, b) => a[1].priority - b[1].priority)
+          .map(([name, l]) => ({ name, priority: l.priority, ...(l.concurrency !== undefined ? { ceiling: l.concurrency } : {}) })),
+      },
       others: others(),
       ledger: ledger(),
       lendDefaults: lendDefaults(),
