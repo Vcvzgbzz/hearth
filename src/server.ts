@@ -21,7 +21,8 @@ import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken, h
 import { LogRing, type Logger } from "./log.js";
 import { PeerRegistry, PeerStatusError } from "./peers.js";
 import { BackendPool, type BackendSlot } from "./pool.js";
-import { decide, entryOf, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
+import { reachOf, type ReachType } from "./reach.js";
+import { decide, entryOf, flowsOf, mayLeave, resolve, variantsOf, type LocalLoad, type World } from "./route.js";
 import { QueueFullError } from "./scheduler.js";
 import { DAY_MS, History } from "./history.js";
 import { KEEP_DAYS, meter, Usage, withoutUsage, type Meter } from "./usage.js";
@@ -1983,11 +1984,27 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   }
 
   /** The keys page's rows: every key by its label and scope, with the last time it spoke to this node. */
-  const keysView = (): KeyInfo[] =>
-    cfg.apiKeys.map((k, i) => {
+  const keysView = (): KeyInfo[] => {
+    const jobs = pool.jobs();
+    const reached = new Map<string, ReachType[]>();
+    return cfg.apiKeys.map((k, i) => {
       const caller = "key:" + (cfg.apiKeyLabels[i] || keyId(k));
-      return { label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: spent(caller, 1), month: spent(caller, KEEP_DAYS), rule: cfg.apiKeyRules[i] ?? null };
+      const router = routerNameOf(caller);
+      if (!reached.has(router)) reached.set(router, reachOf(cfg, flowsOf(rulesFor(caller))));
+      const now: KeyInfo["now"] = {};
+      for (const j of jobs) {
+        if (j.caller !== caller) continue;
+        const n = (now[j.model] ??= { running: 0, waiting: 0 });
+        if (j.state === "running") n.running++;
+        else n.waiting++;
+      }
+      const rule = cfg.apiKeyRules[i] ?? null;
+      return {
+        label: cfg.apiKeyLabels[i] ?? "", id: keyId(k), models: cfg.apiKeyModels[i] ?? null, lastSeen: keySeen.get(caller) ?? null, today: spent(caller, 1), month: spent(caller, KEEP_DAYS), rule,
+        router, reach: reached.get(router)!, lane: rule?.lane ?? null, byModel: { today: usage.byModel(caller, 1), month: usage.byModel(caller, KEEP_DAYS) }, now,
+      };
     });
+  };
 
   /** Whoever else used this node in the last month: this machine with no key, and peers. */
   const othersView = (): CallerUse[] => {

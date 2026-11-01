@@ -3,6 +3,7 @@
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
 import { createHash } from "node:crypto";
+import type { ReachType } from "./reach.js";
 import type { Row } from "./usage.js";
 import { CONSOLE_HTML } from "./ui.js";
 import type { HearthConfig, KeyRule, LendTerms } from "./config.js";
@@ -57,6 +58,15 @@ export interface KeyInfo {
   month: Spent;
   /** When it expires and what it is limited to; null for a bare key. */
   rule: KeyRule | null;
+  /** The rulebook it goes by, and everything that rulebook can land on. */
+  router: string;
+  reach: ReachType[];
+  /** The lane it names; null leaves it to the request. */
+  lane: string | null;
+  /** Its use by the id each job ran as, today (UTC) and over the days that are kept. */
+  byModel: { today: Record<string, Row>; month: Record<string, Row> };
+  /** Its jobs in flight right now, by model. */
+  now: Record<string, { running: number; waiting: number }>;
 }
 
 /** A caller that is not a key: this machine with none, or a peer. */

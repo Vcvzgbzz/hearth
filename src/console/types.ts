@@ -275,6 +275,21 @@ export interface Used { requests: number; failed: number; in: number; out: numbe
 export interface ModelLimits { tokensPerDay: number; maxConcurrent: number; rateLimit: number }
 
 /** What one peer may take: the models it may run, and how much of each; `limits` is each model's own. */
+/** What one model is held to for one key. */
+export interface KeyModelRule { maxConcurrent?: number; tokensPerDay?: number; requestsPerMinute?: number }
+
+/** One place a key's rulebook can land: a model, here or on peers, or a plugin. */
+export interface ReachEnd { id: string; plugin?: true; peers: string[]; here: boolean; /** Tokens are counted here. */ chat: boolean; /** Pinned by the model or its route; null takes the key's. */ lane: string | null }
+
+/** One key, as the keys page draws it. */
+export interface KeyRow {
+  label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used;
+  rule?: { expires: number | null; requestsPerMinute: number; tokensPerDay: number; dollarsPerDay?: number; lane?: string | null; maxConcurrent?: number; models?: Record<string, KeyModelRule> } | null;
+  router: string; reach: { type: string; ends: ReachEnd[] }[]; lane: string | null;
+  byModel: { today: Record<string, Used>; month: Record<string, Used> };
+  now: Record<string, { running: number; waiting: number }>;
+}
+
 export interface LendTerms extends ModelLimits { models: string[]; off?: boolean; limits?: Record<string, Partial<ModelLimits>> }
 
 /** A model's limits as the peer lending it states them, with how much of today this node has used. */
@@ -367,7 +382,7 @@ export interface UiData {
   /** The canary's verdict per model. Absent only on an older server's payload. */
   canary?: Canary;
   /** Every api key: its label (or hash where unlabeled), its model scope, and the last time it spoke here. */
-  keys?: { label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used; rule?: { expires: number | null; requestsPerMinute: number; tokensPerDay: number; dollarsPerDay?: number } | null }[];
+  keys?: KeyRow[];
   /** Callers that are not keys (this machine with none, peers) and what they used. */
   others?: { caller: string; today: Used; month: Used }[];
   /** Each peer's lines in the ledger: tokens it ran here, tokens this node ran there, and why it is turned away now, if it is. */
