@@ -53,6 +53,8 @@ const loadYaml = (): Record<string, unknown> => ({ name: "n", backends: { main: 
 bad('{"key":"k","label":"a","expires":"next week"}', /expires/);
 bad('{"key":"k","label":"a","limits":{"requestsPerMinute":-1}}', /requestsPerMinute/);
 bad('{"key":"k","label":"a","limits":{"perHour":5}}', /perHour/);
+bad('{"key":"k","label":"a","limits":{"models":{"":{"maxConcurrent":1}}}}', /limits\.models/);
+bad('{"key":"k","label":"a","limits":{"models":{"  ":{"maxConcurrent":1}}}}', /limits\.models/);
 
 // A key's lane, its jobs at once, and a model's own limits.
 const ruleFor = (entry: unknown) => parseConfig({ ...loadYaml(), apiKeys: [entry] }).apiKeyRules[0]!;

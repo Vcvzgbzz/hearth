@@ -564,6 +564,17 @@ models:
       assert.equal(loadConfig(path).scheduler.maxPerLane, 7, "and the node loads it");
       await a.node.close();
     }
+    // A key two levels under the empty block: every empty map on the way takes a map.
+    const path = join(dir, `held-${n++}.yaml`);
+    writeFileSync(path, held(head));
+    const a = await boot(path);
+    const out = (await a.file()) as Status & { text: string };
+    const r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "lanes", "chat", "priority"], value: 5 }] });
+    assert.equal(r.status, 200, "a key deeper under the block is written");
+    const text = readFileSync(path, "utf8");
+    assert.match(text, note, `and the comment stays:\n${text}`);
+    assert.equal(loadConfig(path).scheduler.lanes.chat?.priority, 5, "and the node loads it");
+    await a.node.close();
   }
 }
 

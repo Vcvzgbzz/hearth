@@ -1353,6 +1353,7 @@ function apiKeyList(
     const own: Record<string, KeyModelRule> = {};
     for (const [id, raw] of Object.entries(limits.models === undefined ? {} : asRecord(limits.models, `${at}.limits.models`))) {
       const here = `${at}.limits.models.${id}`;
+      if (id.trim() === "") throw bad(`${at}.limits.models`, "names a model with an empty id");
       const m = asRecord(raw, here);
       only(m, ["maxConcurrent", "tokensPerDay", "requestsPerMinute"], here);
       const rule: KeyModelRule = {};

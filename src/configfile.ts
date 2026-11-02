@@ -361,11 +361,11 @@ function keepComments<T>(old: unknown, node: T): T {
  * node that keeps the old one's flow style. A parent that holds nothing is made a block mapping.
  */
 function setOp(doc: Document, path: Path, value: unknown): void {
-  const parentPath = path.slice(0, -1);
-  if (parentPath.length > 0) {
-    const parent = doc.getIn(parentPath, true);
-    // `scheduler:` with only a comment under it is an empty map, which is what a key goes into.
-    if (parent === null || (isScalar(parent) && parent.value === null)) doc.setIn(parentPath, keepComments(parent, doc.createNode({})));
+  // `scheduler:` with only a comment under it is an empty map, at any depth on the way to the key.
+  for (let i = 1; i < path.length; i++) {
+    const at = path.slice(0, i);
+    const here = doc.getIn(at, true);
+    if (here === null || (isScalar(here) && here.value === null)) doc.setIn(at, keepComments(here, doc.createNode({})));
   }
   const old = doc.getIn(path, true) as { flow?: boolean } | null | undefined;
   if (isScalar(old) && (value === null || typeof value !== "object")) {
