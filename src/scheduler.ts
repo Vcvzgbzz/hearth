@@ -121,7 +121,12 @@ export interface JobView {
   peer?: string;
   /** Set on a queued job while its key is at its limit. */
   held?: "key";
+  /** Set on a queued job that waits; undefined for running jobs and queued jobs with no blocker. */
+  why?: WaitReason;
 }
+
+/** Why a queued job is waiting, in priority order. */
+export type WaitReason = "key" | "card" | "hold" | "lane" | "model" | "pool" | "share" | "slots";
 
 export class QueueFullError extends Error {
   constructor(
@@ -264,13 +269,20 @@ export class Scheduler {
     return s;
   }
 
-  /** How many go before this one: everything running, plus anything queued that
-   *  outranks it. */
-  private positionOf(job: Job, now: number, resident: string | null): number {
+  /** The queued jobs whose key is at its limit, read once per pass so a pass costs one key read per job. */
+  private keyHeld(): Set<Job> {
+    const held = new Set<Job>();
+    for (const j of this.queued) if (this.keyFull(j)) held.add(j);
+    return held;
+  }
+
+  /** How many go before this one: everything running, plus every queued job that can actually take a turn ahead of it. */
+  private positionOf(job: Job, now: number, resident: string | null, keyHeld: Set<Job>): number {
     const mine = this.score(job, now, resident);
     let ahead = this.running.size;
+    // A job its key holds is passed over, so it holds no place in line.
     for (const j of this.queued) {
-      if (j !== job && this.score(j, now, resident) < mine) ahead++;
+      if (j !== job && this.score(j, now, resident) < mine && !keyHeld.has(j)) ahead++;
     }
     return ahead;
   }
@@ -303,17 +315,27 @@ export class Scheduler {
     });
     for (const j of this.running) out.push(running(j));
     for (const j of this.offbox) out.push(running(j));
+    // One walk per queued job; `key` is first, so a "key" reason is the same thing as a held job.
+    const reasons = new Map<Job, WaitReason | null>();
+    const keyHeld = new Set<Job>();
     for (const j of this.queued) {
+      const reason = this.blockedBy(j, false);
+      reasons.set(j, reason);
+      if (reason === "key") keyHeld.add(j);
+    }
+    for (const j of this.queued) {
+      const reason = reasons.get(j) ?? null;
       out.push({
         id: j.id,
         lane: j.lane,
         model: j.model,
         caller: j.caller,
         state: "queued",
-        position: this.positionOf(j, now, resident),
+        position: this.positionOf(j, now, resident, keyHeld),
         since: j.enqueuedAt,
         offbox: false,
-        ...(this.keyFull(j) ? { held: "key" as const } : {}),
+        ...(reason === "key" ? { held: "key" as const } : {}),
+        ...(reason !== null ? { why: reason } : {}),
       });
     }
     return out;
@@ -406,27 +428,36 @@ export class Scheduler {
   }
 
   /**
-   * May this job start now? Its lane's ceiling, its model's, then the backend's; above
-   * `concurrency` only alongside jobs of the same model.
+   * May this job start now? Answered by the same walk that names its blocker, so a job
+   * that is shown a reason is exactly a job that is not admitted.
    */
   private canAdmit(job: Job): boolean {
-    // Hardware first; our own hold never blocks us. A job that claims nothing
-    // (a canary probe) is not gated on it either — it is not going to use it.
-    if (job.claimHardware && !this.hardwareFree()) return false;
-    if (this.held(job)) return false;
-    if (this.laneFull(job)) return false;
-    if (this.keyFull(job)) return false;
-    if (this.heldBy(job.model) >= this.limitFor(job.model)) return false;
-    if (this.overPool(job)) return false;
-    if (this.tooSoonToShare(job)) return false;
-    if (this.running.size < this.concurrency) return true;
-    const wire = this.wireOf(job.model);
-    for (const j of this.running) if (this.wireOf(j.model) !== wire) return false;
-    return true;
+    return this.blockedBy(job, true) === null;
+  }
+
+  /**
+   * Why this job is blocked, in priority order; null if it may start.
+   * When `arm` is true, tooSoonToShare arms its timer.
+   */
+  private blockedBy(job: Job, arm: boolean): WaitReason | null {
+    if (this.keyFull(job)) return "key";
+    if (job.claimHardware && !this.hardwareFree()) return "card";
+    if (this.held(job)) return "hold";
+    if (this.laneFull(job)) return "lane";
+    // A model with no ceiling of its own is full on the backend's count, which is what the slots are.
+    if (this.heldBy(job.model) >= this.limitFor(job.model)) return this.slotsOf(job.model) === null ? "slots" : "model";
+    if (this.overPool(job)) return "pool";
+    if (this.tooSoonToShare(job, arm)) return "share";
+    // At its ceiling, a backend only takes more of the model already running.
+    if (this.running.size >= this.concurrency) {
+      const wire = this.wireOf(job.model);
+      for (const j of this.running) if (this.wireOf(j.model) !== wire) return "slots";
+    }
+    return null;
   }
 
   /** Would joining now cut into a running turn's head start? Arms a wake-up for when the youngest crosses it. */
-  private tooSoonToShare(job: Job): boolean {
+  private tooSoonToShare(job: Job, arm: boolean): boolean {
     if (this.running.size === 0) return false;
     const share = this.shareAfter(job.model);
     if (share <= 0) return false;
@@ -434,7 +465,7 @@ export class Scheduler {
     for (const j of this.running) youngest = Math.max(youngest, j.startedAt ?? 0);
     const wait = youngest + share - Date.now();
     if (wait <= 0) return false;
-    if (!this.shareTimer) {
+    if (arm && !this.shareTimer) {
       this.shareTimer = setTimeout(() => { this.shareTimer = null; this.pump(); }, wait + 1);
       this.shareTimer.unref?.();
     }
@@ -523,8 +554,9 @@ export class Scheduler {
   private sync(): void {
     const now = Date.now();
     const resident = this.resident();
+    const keyHeld = this.keyHeld();
     for (const j of this.queued) {
-      const pos = this.positionOf(j, now, resident);
+      const pos = this.positionOf(j, now, resident, keyHeld);
       if (pos !== j.lastPosition) {
         j.lastPosition = pos;
         j.onPosition?.(pos);

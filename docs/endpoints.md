@@ -30,7 +30,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/setup` | loopback or an unscoped api key, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists, `403` for anyone else |
 | `/` | anyone | `GET` redirects to `/ui` |
 | `/network` | local | every node, what each one serves, and what's **loaded right now**. Also lists peer models you haven't mapped, which is usually the config mistake people actually make |
-| `/queue` | local | jobs in flight, with lane, caller and position |
+| `/queue` | local | jobs in flight, with lane, caller and position. A queued job also carries why it waits: `held: "key"` while its key is at its limit, and `why` naming the one check that stopped it (`key`, `card`, `hold`, `lane`, `model`, `pool`, `share`, `slots`) |
 | `/ui/data`, `/ui/events` | loopback, or a login | the page's data, pushed. A snapshot then diffs |
 | `/ui/history` | loopback, or a login | the last day of finished calls and per-minute queue depth, for the Queue page's 24 h view |
 | `/ui/lending` | loopback, or a login | what `/lending` answers, for the Lending page |

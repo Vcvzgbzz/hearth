@@ -153,8 +153,15 @@ export interface Job {
   state: "running" | "queued";
   position: number;
   since: number;
+  /** Set on a queued job while its key is at its limit. */
+  held?: "key";
+  /** Set on a queued job that waits; undefined for running jobs and queued jobs with no blocker. */
+  why?: WaitReason;
   offbox?: boolean;
 }
+
+/** Why a queued job is waiting, in priority order. */
+export type WaitReason = "key" | "card" | "hold" | "lane" | "model" | "pool" | "share" | "slots";
 
 export interface Capacity {
   free: number;
