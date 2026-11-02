@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import type { ReachType } from "./reach.js";
 import type { Row } from "./usage.js";
 import { CONSOLE_HTML } from "./ui.js";
-import { DEFAULT_ROUTER, WARM_LANE, type HearthConfig, type KeyRule, type LendTerms } from "./config.js";
+import { DEFAULT_ROUTER, WARM_LANE, laneDefaults, type HearthConfig, type KeyRule, type LendTerms } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
@@ -191,6 +191,25 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
         routers: [DEFAULT_ROUTER, ...Object.keys(cfg.routers)],
         lanes: Object.entries(cfg.scheduler.lanes).filter(([name]) => name !== WARM_LANE).sort((a, b) => a[1].priority - b[1].priority)
           .map(([name, l]) => ({ name, priority: l.priority, ...(l.concurrency !== undefined ? { ceiling: l.concurrency } : {}) })),
+      },
+      // Every lane and the order settings, for the Scheduler page.
+      scheduler: {
+        lanes: Object.entries(cfg.scheduler.lanes)
+          .sort((a, b) => a[1].priority - b[1].priority)
+          .map(([name, l]) => ({
+            name,
+            priority: l.priority,
+            ...(l.concurrency !== undefined ? { ceiling: l.concurrency } : {}),
+            ...(l.maxWaitMs !== undefined ? { maxWaitMs: l.maxWaitMs } : {}),
+            ...(name === WARM_LANE ? { builtIn: true as const } : {}),
+          })),
+        order: {
+          agePerSecond: cfg.scheduler.agePerSecond,
+          warmBonus: cfg.scheduler.warmBonus,
+          maxPerLane: cfg.scheduler.maxPerLane,
+          maxPerCaller: cfg.scheduler.maxPerCaller,
+        },
+        defaults: laneDefaults(cfg),
       },
       others: others(),
       ledger: ledger(),

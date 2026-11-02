@@ -559,6 +559,31 @@ const WARM_LANE_PRIORITY = 200;
 
 export { WARM_LANE };
 
+/** The lane with the highest priority number, leaving out `warm`; the first declared wins a tie. */
+export function lowestLane(lanes: Record<string, { priority: number }>): string {
+  let best: string | null = null;
+  let bestPriority = -Infinity;
+  for (const [name, lane] of Object.entries(lanes)) {
+    if (name === WARM_LANE) continue;
+    if (lane.priority > bestPriority) {
+      best = name;
+      bestPriority = lane.priority;
+    }
+  }
+  // A file may declare only `warm`, which is then the lane every request that names none lands in.
+  return best ?? WARM_LANE;
+}
+
+/** Where a request that names no lane lands. */
+export interface LaneDefaults {
+  /** The first declared lane: what an empty flow step runs in. */
+  first: string;
+  /** `lending.lane`, else the lowest-priority lane. */
+  peers: string;
+  /** What a backend route that names no lane runs in: the lowest-priority lane. */
+  routes: string;
+}
+
 /**
  * A validation finding. `path` is the field it is about (e.g. `backends.card.kind`),
  * or null for a whole-config one; the sentence keeps the field too, because a
@@ -1607,6 +1632,11 @@ function canaryDecl(v: unknown, backends: readonly BackendConfig[]): CanaryConfi
 /** The layout of hearth.yaml this build reads and writes. A file that names a later one is refused, never half-read. */
 export const CONFIG_VERSION = 3;
 
+/** Where a request that names no lane lands, read off a parsed config as a dry run would read it. */
+export function laneDefaults(cfg: Pick<HearthConfig, "scheduler" | "peerLane">): LaneDefaults {
+  return { first: Object.keys(cfg.scheduler.lanes)[0]!, peers: cfg.peerLane, routes: lowestLane(cfg.scheduler.lanes) };
+}
+
 export function parseConfig(raw: unknown): HearthConfig {
   const root = asRecord(raw, "config");
   if (root.version !== undefined) {
@@ -1808,9 +1838,7 @@ export function parseConfig(raw: unknown): HearthConfig {
   }
 
   // Route defaults need the lanes: the lowest-priority lane, since a named path is usually the heavy work.
-  const fallbackLane = Object.entries(lanes)
-    .filter(([n]) => n !== WARM_LANE)
-    .sort((a, b) => b[1].priority - a[1].priority)[0]![0];
+  const fallbackLane = lowestLane(lanes);
   const claimedPaths = new Map<string, string>();
   for (const b of backends) {
     for (const [ri, r] of b.routes.entries()) {
@@ -2072,9 +2100,7 @@ export function parseConfig(raw: unknown): HearthConfig {
         return named;
       }
       // The lowest-priority lane, excluding warm, which is reserved for speculative preloading.
-      const eligible = Object.entries(lanes).filter(([n]) => n !== WARM_LANE);
-      const pick = eligible.length > 0 ? eligible : Object.entries(lanes);
-      return pick.sort((a, b) => b[1].priority - a[1].priority)[0]![0];
+      return lowestLane(lanes);
     })(),
     peerMaxConcurrent: count(lending.maxConcurrent, "lending.maxConcurrent", 2, 1),
     lendTokensPerDay: count(lending.tokensPerDay, "lending.tokensPerDay", 0, 0),

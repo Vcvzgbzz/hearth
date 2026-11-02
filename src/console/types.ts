@@ -352,6 +352,24 @@ export interface PluginsView {
   pending: { name: string; change: "added" | "changed" | "removed" }[];
 }
 
+/** Where a request that names no lane lands. Repeated here because the page does not import server code. */
+export interface LaneDefaults {
+  /** The first declared lane: what an empty flow step runs in. */
+  first: string;
+  /** `lending.lane`, else the lowest-priority lane. */
+  peers: string;
+  /** What a backend route that names no lane runs in: the lowest-priority lane. */
+  routes: string;
+}
+
+/** The lane and order settings the Scheduler page edits, with where a request that names no lane lands. */
+export interface SchedulerView {
+  /** Sorted by priority, lowest number first. `warm` is included and marked builtIn. */
+  lanes: { name: string; priority: number; ceiling?: number; maxWaitMs?: number; builtIn?: true }[];
+  order: { agePerSecond: number; warmBonus: number; maxPerLane: number; maxPerCaller: number };
+  defaults: LaneDefaults;
+}
+
 export interface UiData {
   /** Which console the node serves now; the page reloads when it stops being the one it was loaded from. */
   build?: string;
@@ -406,4 +424,6 @@ export interface UiData {
   recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }[];
   /** Plugins, for the Plugins page and the Routing map. Absent on an older server's payload. */
   plugins?: PluginsView;
+  /** The lanes, the order settings and the lane defaults, for the Scheduler page. */
+  scheduler: SchedulerView;
 }

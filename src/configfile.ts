@@ -11,10 +11,10 @@ import {
 } from "node:fs";
 import { basename, dirname } from "node:path";
 
-import { isMap, isScalar, parseDocument, type Document } from "yaml";
+import { isCollection, isMap, isScalar, parseDocument, type Document } from "yaml";
 
 import { Refusal } from "./admit.js";
-import { ConfigError, endsOf, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type RoutePolicy } from "./config.js";
+import { ConfigError, endsOf, laneDefaults, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type LaneDefaults, type RoutePolicy } from "./config.js";
 import { routedFlow } from "./route.js";
 import type { Logger } from "./log.js";
 
@@ -205,6 +205,8 @@ export interface CommitResult {
   hash: string;
   text: string;
   restartPending: string[];
+  /** A dry run only: where a request that names no lane would land, before and after the edit. */
+  defaults?: { before: LaneDefaults; after: LaneDefaults };
 }
 
 const hashOf = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
@@ -340,6 +342,39 @@ export function setShare(cfg: HearthConfig, model: string, on: boolean): void {
   if (on) return;
   cfg.share = cfg.share.filter((m) => m !== model);
   for (const terms of Object.values(cfg.peerTerms)) if (terms.models) terms.models = terms.models.filter((m) => m !== model);
+}
+
+/**
+ * `node`, standing where a key held nothing, with the comments that empty value carried: a comment
+ * beside `scheduler:` or under it belongs to that null, and stays as the new block's last line.
+ */
+function keepComments<T>(old: unknown, node: T): T {
+  if (!isScalar(old) || old.value !== null || !isCollection(node)) return node;
+  if (old.commentBefore) node.commentBefore = old.commentBefore;
+  if (old.comment) node.comment = old.comment;
+  return node;
+}
+
+/**
+ * Write one op's value into the document. A scalar replaces the old one in place when the file held
+ * a plain scalar there, so the comment beside it stays beside it; anything else is written as a new
+ * node that keeps the old one's flow style. A parent that holds nothing is made a block mapping.
+ */
+function setOp(doc: Document, path: Path, value: unknown): void {
+  const parentPath = path.slice(0, -1);
+  if (parentPath.length > 0) {
+    const parent = doc.getIn(parentPath, true);
+    // `scheduler:` with only a comment under it is an empty map, which is what a key goes into.
+    if (parent === null || (isScalar(parent) && parent.value === null)) doc.setIn(parentPath, keepComments(parent, doc.createNode({})));
+  }
+  const old = doc.getIn(path, true) as { flow?: boolean } | null | undefined;
+  if (isScalar(old) && (value === null || typeof value !== "object")) {
+    old.value = value;
+    return;
+  }
+  const node = keepComments(old, doc.createNode(value)) as { flow?: boolean };
+  if (old && typeof old.flow === "boolean" && node && typeof node === "object") node.flow = old.flow;
+  doc.setIn(path, node);
 }
 
 /**
@@ -595,25 +630,27 @@ export class ConfigFile {
       const doc = parseDocument(this.lastText);
       for (const op of ops) {
         if (!Array.isArray(op.path) || op.path.length === 0) throw new ConfigRefusal(400, "each op needs a non-empty path", null);
-        if (op.delete) {
-          doc.deleteIn(op.path);
-          continue;
+        try {
+          if (op.delete) {
+            doc.deleteIn(op.path);
+            continue;
+          }
+          if (op.rename !== undefined) {
+            const parent = doc.getIn(op.path.slice(0, -1), true);
+            const key = op.path[op.path.length - 1];
+            const pair = isMap(parent) ? parent.items.find((p) => (isScalar(p.key) ? p.key.value : p.key) === key) : undefined;
+            if (!pair || !isScalar(pair.key)) throw new ConfigRefusal(409, `nothing at ${op.path.join(".")} to rename`, null);
+            if (typeof op.rename !== "string" || op.rename === "") throw new ConfigRefusal(400, "rename needs a non-empty name", null);
+            if (isMap(parent) && parent.has(op.rename)) throw new ConfigRefusal(400, `${op.rename} already exists`, null);
+            pair.key.value = op.rename;
+            continue;
+          }
+          setOp(doc, op.path, op.value);
+        } catch (e) {
+          // The YAML library's own walks throw a plain Error; the console gets the same refusal as any other.
+          if (e instanceof ConfigRefusal) throw e;
+          throw new ConfigRefusal(409, `${op.path.join(".")} cannot be written here: ${e instanceof Error ? e.message : String(e)}`, op.path.join("."));
         }
-        if (op.rename !== undefined) {
-          const parent = doc.getIn(op.path.slice(0, -1), true);
-          const key = op.path[op.path.length - 1];
-          const pair = isMap(parent) ? parent.items.find((p) => (isScalar(p.key) ? p.key.value : p.key) === key) : undefined;
-          if (!pair || !isScalar(pair.key)) throw new ConfigRefusal(409, `nothing at ${op.path.join(".")} to rename`, null);
-          if (typeof op.rename !== "string" || op.rename === "") throw new ConfigRefusal(400, "rename needs a non-empty name", null);
-          if (isMap(parent) && parent.has(op.rename)) throw new ConfigRefusal(400, `${op.rename} already exists`, null);
-          pair.key.value = op.rename;
-          continue;
-        }
-        // A list or map written inline stays inline when replaced.
-        const old = doc.getIn(op.path, true) as { flow?: boolean } | undefined;
-        const node = doc.createNode(op.value) as { flow?: boolean };
-        if (old && typeof old.flow === "boolean" && node && typeof node === "object") node.flow = old.flow;
-        doc.setIn(op.path, node);
       }
       out = unmaskSecrets(this.render(doc), table);
     }
@@ -634,7 +671,14 @@ export class ConfigFile {
   private commit(text: string, dryRun: boolean, name = ""): CommitResult {
     const next = this.parse(text, 422);
     const masked = this.masked(text);
-    if (dryRun) return { hash: hashOf(text), text: masked, restartPending: this.restartPendingFor(next) };
+    if (dryRun) {
+      return {
+        hash: hashOf(text),
+        text: masked,
+        restartPending: this.restartPendingFor(next),
+        defaults: { before: laneDefaults(this.live), after: laneDefaults(next) },
+      };
+    }
     if (text !== this.lastText) {
       try {
         writeFileAtomic(this.path!, text);
