@@ -25,7 +25,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.port` | — | with `server` and no `url`: the backend is `http://<server host>:<port>` |
 | `backends.<name>.kind` | `llama-swap` | where warm state comes from: `llama-swap`, `ollama`, `single`, `none` |
 | `backends.<name>.serves` | discover | model ids this backend serves. Declaring replaces discovery and acts as an allowlist; on a URL shared with another backend, only these count as its loaded models |
-| `backends.<name>.concurrency` | `backendDefaults` | jobs at once on this backend |
+| `backends.<name>.concurrency` | `backendDefaults` | jobs at once on this backend. Restart to apply |
 | `backends.<name>.firstByteMs` / `.idleMs` | `backendDefaults` | per-backend deadlines. A sidecar that renders a clip before it answers at all needs a longer one than a chat server |
 | `backends.<name>.activity` | none | `{ path, running, queued? }` — where a backend reports its OWN busy state, so one hearth forwards to but does not schedule still lights while it works. See below |
 | `backends.<name>.resources` | none | hardware this backend uses. Backends on one exclusive card take turns. See [Backends that share a card](backends.md#backends-that-share-a-card) |
@@ -37,22 +37,22 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `backends.<name>.promptCache` | `true` | with `format: anthropic`: mark each request's system prompt, tools and conversation so far for the provider's prompt cache |
 | `backends.<name>.promptCacheTtl` | `5m` | with `promptCache`: how long the provider keeps a prefix after its last use, `5m` or `1h`. `1h` costs more to write; it pays where a conversation's requests come more than five minutes apart |
 | `backends.<name>.cloud` | `false` | a provider's server on the internet: no hardware here, no warm state, and only the models under `serves`. See [A provider's models](providers.md#a-providers-models) |
-| `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. See [Backends that don't speak the OpenAI API](backends.md#backends-that-dont-speak-the-openai-api) |
+| `backends.<name>.routes` | none | paths this backend answers besides chat, each with its lane and model. A route's `lane` is read when the node starts, so it restarts to apply. See [Backends that don't speak the OpenAI API](backends.md#backends-that-dont-speak-the-openai-api) |
 | `resources.<name>.kind` | `gpu` | `gpu`, `cpu` or `other`. Picks the icon; `gpu` and `other` are exclusive unless shared |
 | `servers.<name>.host` | — | a machine on your network that backends run on: an IP or hostname, no scheme or port |
 | `resources.<name>.shared` | `false` | many backends at once, never arbitrated: CPUs, mostly. See [Hardware that is not a card](backends.md#hardware-that-is-not-a-card) |
-| `backendDefaults.concurrency` | `1` | jobs at once per backend, unless it sets its own |
+| `backendDefaults.concurrency` | `1` | jobs at once per backend, unless it sets its own. Restart to apply |
 | `backendDefaults.firstByteMs` | `900000` | how long a backend may take to start answering. Catches one that accepts the connection and then never answers, which would otherwise hold its slot — and its card — until a restart. `0` waits forever |
 | `backendDefaults.restMs` | `30000` | after three failures in a row (no answer, a 5xx, a 429, its key refused), how long a backend is passed over. Only a request whose flow has another line that fits is moved; one with nowhere else to go still tries it. The first request after the rest tries it again, and one more failure rests it again. `0` never passes one over. Chat only |
 | `backendDefaults.idleMs` | `600000` | how long a backend may go silent once its answer has started. Catches a generation that hangs mid-stream. `0` waits forever |
-| `scheduler.lanes` | `chat`, `batch` | named lanes and their base priority |
-| `scheduler.lanes.<lane>.priority` | `0` | base priority. Lower goes first |
-| `scheduler.lanes.<lane>.concurrency` | unset | the most slots of one backend this lane may hold at once. Unset is no ceiling. See Lanes |
-| `scheduler.lanes.<lane>.maxWaitMs` | unset | fail a queued job in this lane with a 503 once nothing on its backend has started for this long. A guard against a wedged backend, not a deadline: a slow queue that keeps moving never trips it, nor does a job kept waiting by a neighbour's `hold` |
-| `scheduler.agePerSecond` | `1` | priority earned per second waited, which is also the starvation bound |
-| `scheduler.warmBonus` | `40` | priority discount for a model already loaded |
-| `scheduler.maxPerLane` | `100` | how long one lane's queue may get before new work is refused. Off-box jobs are bounded separately, on their own count |
-| `scheduler.maxPerCaller` | `0`, or `2` with apiKeys | queued-or-running jobs per caller per lane, refused past it. Off without apiKeys, where every local caller is one identity. A key with its own `limits.maxConcurrent`, for all models or for the one asked, skips it |
+| `scheduler.lanes` | `chat`, `batch` | named lanes and their base priority. Adding one, or renaming one, applies without a restart; moving a lane's priority moves what peers and unnamed routes land in. See [Lanes](lanes.md) |
+| `scheduler.lanes.<lane>.priority` | `0` | base priority. Lower goes first, and a negative number simply goes before every lane at zero |
+| `scheduler.lanes.<lane>.concurrency` | unset | the most slots of one backend this lane may hold at once. Unset is no ceiling. Applies live, and a lowered ceiling drains: nothing running is stopped. See [Lanes](lanes.md#a-ceiling-for-a-lane) |
+| `scheduler.lanes.<lane>.maxWaitMs` | unset | fail a queued job in this lane with a 503 once nothing on its backend has started for this long. A guard against a wedged backend, not a deadline: a slow queue that keeps moving never trips it, nor does a job kept waiting by a neighbour's `hold`. Applies live, and binds the jobs queued after the change; one already waiting keeps the timer it was given |
+| `scheduler.agePerSecond` | `1` | priority earned per second waited, which is also the starvation bound. Applies live |
+| `scheduler.warmBonus` | `40` | priority discount for a model already loaded. Applies live |
+| `scheduler.maxPerLane` | `100` | how long one lane's queue may get before new work is refused. Off-box jobs are bounded separately, on their own count. Applies live, to the jobs queued after the change |
+| `scheduler.maxPerCaller` | `0`, or `2` with apiKeys | queued-or-running jobs per caller per lane, refused past it. Off without apiKeys, where every local caller is one identity. A key with its own `limits.maxConcurrent`, for all models or for the one asked, skips it. Applies live, to the jobs queued after the change |
 | `models.<id>` | — | per-model settings. Where a model's requests go is a flow; see [Flows](routing.md#flows) |
 | `models.<id>.kind` | `chat` | what kind of request the model takes (`chat`, `embeddings`, `rerank`, `image`, …). A plugin's model slot is offered only models of the kind it needs. See [Model slots](plugins.md#model-slots) |
 | `models.<id>.lane` | the client's | lane this model's requests queue in, over the one the client asked for |

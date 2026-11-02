@@ -160,6 +160,9 @@ export interface Job {
   offbox?: boolean;
 }
 
+/** hearth.yaml as `GET /config` serves it: the text, its hash, and the parsed document when it parses. */
+export type File = { text: string; hash: string; doc: Record<string, unknown> | null };
+
 /** Why a queued job is waiting, in priority order. */
 export type WaitReason = "key" | "card" | "hold" | "lane" | "model" | "pool" | "share" | "slots";
 

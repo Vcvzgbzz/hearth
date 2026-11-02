@@ -4,14 +4,14 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 
 | path | who | what |
 |---|---|---|
-| `/ui` | anyone | the console, a static shell; its data takes loopback or a login: topology with live request flow, models and sharing, the queue and recent requests, and the config file by section. ⌘K jumps anywhere |
+| `/ui` | anyone | the console, a static shell; its data takes loopback or a login: topology with live request flow, models and sharing, the Scheduler page with the live queue and recent requests, and the config file by section. ⌘K jumps anywhere |
 | `/restart` | local | `POST` drains in-flight work and exits `75`, so a supervisor with `Restart=on-failure` (or `always`) starts the node again; the console offers it while a change waits for a restart. Without a supervisor it only stops. `501` when not run by `hearth serve` |
 | `/control` | local | read or change what leaves this node: lending, borrowing, per-model sharing, peer model maps |
 | `/queue/events` | local | the caller's own jobs, pushed over SSE: a `snapshot` on connect, then `jobs` whenever the list changes (queued, started, finished, moved in line). One connection serves every job a client has, so it never needs to poll |
 | `X-Hearth-Job: <id>` | request header | the client's own id for this request (letters, digits, `._:-`, up to 128). It comes back as the job's `id` on `/queue` and `/queue/events`, so a client can match updates to its own work |
 | `X-Request-Id: req_…` | response header | on every answer: this node's id for the request. Its `request` line in the log carries the same `id`, along with `headers`: what the request sent for each header a flow tests (never `Authorization` or `Cookie`). A backend's or peer's own id is not passed on |
 | `X-Hearth-Queue: stream` | request header | on a streamed chat, open the stream while the request waits and send `: hearth-queue {"position":N}` comments (how many are ahead, the running turn included). OpenAI-style parsers skip comments. A failure after that arrives as an SSE `data: {"error": …}` frame, since the 200 is already sent |
-| `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written) |
+| `/config` | local | the config file itself: `GET` its text and status, `PATCH` paths or the whole text (`name` labels the version written). With `dryRun: true` nothing is written and the reply adds `defaults`: where a request that names no lane would land, under `before` and `after` the edit |
 | `/config/draft` | local | the console's unpublished draft, kept beside the file: `GET`, `PUT` a JSON body, `DELETE` |
 | `/config/versions` | local | `GET` the versions written through the node (`at`, `name`, `hash`); `POST { hash, dryRun? }` makes one the file again |
 | `/backends/probe` | local | `POST { url, key?, format? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
@@ -30,9 +30,9 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/setup` | loopback or an unscoped api key, once | `GET` says `{needed}`; `POST {user, pass}` writes the first `operator` and signs it in. `409` once one exists, `403` for anyone else |
 | `/` | anyone | `GET` redirects to `/ui` |
 | `/network` | local | every node, what each one serves, and what's **loaded right now**. Also lists peer models you haven't mapped, which is usually the config mistake people actually make |
-| `/queue` | local | jobs in flight, with lane, caller and position. A queued job also carries why it waits: `held: "key"` while its key is at its limit, and `why` naming the one check that stopped it (`key`, `card`, `hold`, `lane`, `model`, `pool`, `share`, `slots`) |
+| `/queue` | local | jobs in flight, with lane, caller and position. A queued job also carries why it waits: `held: "key"` while its key is at its limit, and `why` naming the one check that stopped it (`key`, `card`, `hold`, `lane`, `model`, `pool`, `share`, `slots`). Position counts only the jobs that can take a turn ahead of it, so one their key holds does not push it down. The Scheduler page shows the same jobs with the reason in words |
 | `/ui/data`, `/ui/events` | loopback, or a login | the page's data, pushed. A snapshot then diffs |
-| `/ui/history` | loopback, or a login | the last day of finished calls and per-minute queue depth, for the Queue page's 24 h view |
+| `/ui/history` | loopback, or a login | the last day of finished calls and per-minute queue depth, for the Scheduler page's 24 h view |
 | `/ui/lending` | loopback, or a login | what `/lending` answers, for the Lending page |
 | `/ui/logs` | loopback, or a login | the most recent log lines (up to 5,000), for the Logs page |
 | `/healthz` | anyone | whether this node can serve. `503` when it can't. The one unauthenticated endpoint |

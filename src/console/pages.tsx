@@ -341,39 +341,7 @@ export function KeyOnce() {
   );
 }
 
-/* ----------------------------------------------------------------- queue */
-
-export function Queue() {
-  const jobs = useStore((s) => s.data!.q.jobs);
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const rows = [...jobs].sort((a, b) => (a.state === b.state ? a.since - b.since : a.state === "running" ? -1 : 1));
-  return (
-    <Card className="overflow-hidden">
-      <table className="w-full text-left">
-        <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
-          <tr>{["state", "model", "lane", "caller", "where", "time"].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.map((j) => (
-            <tr key={j.id} className="border-b border-line/60 last:border-0">
-              <td className="px-4 py-2">{j.state === "running" ? <Pill tone="accent" pulse>running</Pill> : <Pill tone="dim">#{j.position + 1} queued</Pill>}</td>
-              <td className={cx("px-4 py-2", mono)}>{j.model}</td>
-              <td className="px-4 py-2">{j.lane}</td>
-              <td className="px-4 py-2 text-dim">{j.caller}</td>
-              <td className="px-4 py-2 text-dim">{j.offbox ? `${j.peer} (peer)` : j.backend}</td>
-              <td className="tabular px-4 py-2 text-dim">{ago(j.since)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length === 0 && <Empty>Nothing queued or running.</Empty>}
-    </Card>
-  );
-}
+/* --------------------------------------------------------------- history */
 
 const pct = (xs: number[], p: number) => {
   if (xs.length === 0) return 0;
@@ -481,7 +449,10 @@ function CallsPanel({ calls }: { calls: Call[] }) {
   );
 }
 
-/** Finished requests per model over the last ten minutes or the last day: how many, how long they waited and ran. */
+/**
+ * Finished requests per model over the last ten minutes or the last day: how many, how long they
+ * waited and ran. It is a tab of the Scheduler page, inside that page's card.
+ */
 export function History() {
   const [range, setRange] = useState<"10m" | "24h">("10m");
   const [open, setOpen] = useState<string | null>(null);
@@ -493,12 +464,9 @@ export function History() {
   const rows = [...by.entries()].sort((a, b) => b[1].length - a[1].length);
   const longest = Math.max(1, ...rows.map(([, cs]) => pct(cs.map((c) => c.waitedMs + c.ms), 95)));
   return (
-    <Card className="mt-4 overflow-hidden">
-      <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
-        <div className="mr-auto">
-          <div className="font-medium">Recent requests</div>
-          <div className="text-[11px] text-dim">Per model. The bar is p95 time: waiting, then running.</div>
-        </div>
+    <div>
+      <div className="flex items-center gap-3 border-b border-line px-4 py-2">
+        <div className="mr-auto text-[11px] text-dim">Recent requests per model. The bar is p95 time: waiting, then running.</div>
         <div role="group" aria-label="range" className="flex rounded-lg border border-line p-0.5 text-[12px]">
           {(["10m", "24h"] as const).map((r) => (
             <button key={r} type="button" aria-pressed={range === r} onClick={() => setRange(r)}
@@ -509,9 +477,10 @@ export function History() {
         </div>
       </div>
       {range === "24h" && day && <DayChart day={day} />}
+      <div className="overflow-x-auto">
       <table className="w-full text-left">
-        <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
-          <tr>{["model", "requests", "failed", "wait p50", "run p50", "run p95", ""].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
+        <thead className="border-b border-line text-[11px] text-dim">
+          <tr>{["model", "requests", "failed", "wait p50", "run p50", "run p95", ""].map((h) => <th key={h} className="whitespace-nowrap px-4 py-2 font-medium">{h}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map(([m, cs]) => {
@@ -554,7 +523,8 @@ export function History() {
           })}
         </tbody>
       </table>
+      </div>
       {rows.length === 0 && <Empty>{range === "24h" && !day ? "loading…" : "No requests finished in this window."}</Empty>}
-    </Card>
+    </div>
   );
 }

@@ -5,13 +5,15 @@ import { useEffect, useState } from "react";
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
 import { Keys } from "./Keys.js";
-import { CanaryAlert, History, Inspector, KeyOnce, Models, Queue } from "./pages.js";
+import { CanaryAlert, Inspector, KeyOnce, Models } from "./pages.js";
+import { Scheduler } from "./Scheduler.js";
 import { NodeSmoke } from "./Smoke.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "./types.js";
 import { go, login, logout, openPlugin, pageOf, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
+import { changes, useSched } from "./schedStore.js";
 import { Plugins } from "./Plugins.js";
 import { Routing } from "./Routing.js";
 import { Lending } from "./Lending.js";
@@ -25,7 +27,7 @@ const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "models", label: "Models", icon: Boxes },
   { id: "lending", label: "Lending", icon: Handshake },
   { id: "keys", label: "Keys", icon: KeyRound },
-  { id: "queue", label: "Queue", icon: ListOrdered },
+  { id: "scheduler", label: "Scheduler", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
   { id: "config", label: "Config", icon: FileCog },
 ];
@@ -95,10 +97,14 @@ function Endpoints({ onClose }: { onClose: () => void }) {
 
 function ConfigPill() {
   const c = useStore((s) => s.data?.config);
-  // What is on the Topology page and not yet written counts: "saved" is only true of the file.
-  const unsaved = useEdit(changed);
+  // What is on the Routing page and not yet written counts: "saved" is only true of the file.
+  const routing = useEdit(changed);
+  // The Scheduler page's draft is kept too, so an edit made there is unsaved however far the reader walks.
+  const scheduler = useSched(changes);
+  const unsaved = routing + scheduler;
   if (!c) return null;
-  if (unsaved > 0 && !c.error) return <button onClick={() => go("routing")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
+  // The count leads the way back to the page that holds the edits: routing's first, since it is the map.
+  if (unsaved > 0 && !c.error) return <button onClick={() => go(routing > 0 ? "routing" : "scheduler")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
   const tone = c.error ? "bad" : c.restartPending.length ? "warn" : "ok";
   const text = c.error ? "config does not load" : c.restartPending.length ? `restart to apply ${c.restartPending.length}` : c.path ? "saved" : "in memory";
   return (
@@ -476,7 +482,7 @@ export default function App() {
               {page === "models" && <Models />}
               {page === "lending" && <Lending />}
               {page === "keys" && <Keys />}
-              {page === "queue" && <><Queue /><History /></>}
+              {page === "scheduler" && <Scheduler />}
               {/* What has been published, and the way back to it, wherever the file is edited. */}
               {page === "config" && <Config versions={<VersionsHere />} />}
             </div>

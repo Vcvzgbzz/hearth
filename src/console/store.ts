@@ -4,6 +4,7 @@
  */
 import { create } from "zustand";
 
+import { pageFor } from "./knobs.js";
 import type { UiData } from "./types.js";
 
 const KEY_STORE = "hearth.apikey";
@@ -18,10 +19,10 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "queue", "logs", "config"] as const;
+export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "scheduler", "logs", "config"] as const;
 export type Page = (typeof PAGE_IDS)[number];
-/** The page the address names; anything else is the first one. */
-export const pageOf = (): Page => PAGE_IDS.find((p) => p === location.hash.slice(1)) ?? "topology";
+/** The page the address names, an old `#queue` link included; anything else is the first one. */
+export const pageOf = (): Page => PAGE_IDS.find((p) => p === pageFor(location.hash.slice(1))) ?? "topology";
 export type Sel = { kind: "self" | "peer" | "backend" | "resource" | "machine"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 

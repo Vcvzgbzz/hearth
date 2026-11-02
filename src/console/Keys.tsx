@@ -164,9 +164,9 @@ function KeyDetail({ k }: { k: KeyRow }) {
                   onClick={(e) => choose(e, [
                     { label: "default", value: "", aside: "what the request asks, else the first lane", on: k.lane === null },
                     ...settings.lanes.map((l) => ({ label: l.name, value: l.name, mono: true, aside: laneOf(l.name) ?? "", on: l.name === k.lane })),
-                    { label: "edit lanes in Config", value: "\0config", icon: "split" as const },
+                    { label: "edit lanes on Scheduler", value: "\0scheduler", icon: "split" as const },
                   ], (l) => {
-                    if (l === "\0config") return go("config");
+                    if (l === "\0scheduler") return go("scheduler");
                     set({ lane: l === "" ? null : l }, l === "" ? `${k.label} queues as the request asks` : `${k.label} now queues in ${l}`);
                   })}>
             {k.lane ?? "default"}<ChevronDown size={12} className="text-dim" />

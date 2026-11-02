@@ -19,6 +19,13 @@ const html = await r.text();
 assert.equal(r.status, 200);
 assert.match(r.headers.get("content-type") ?? "", /text\/html/);
 for (const words of ["goes by router", "queues in lane", "what it reaches"]) assert.ok(html.includes(words), `the keys page says ${words}`);
+// The Scheduler page is served with its own words, and the nav offers no Queue page.
+for (const words of ["review & apply", "waiting on", "top goes first"]) assert.ok(html.includes(words), `the scheduler page says ${words}`);
+// Every knob the scheduler has is on that page, and one that waits for a restart says so.
+for (const words of ["jobs at once", "head start", "Lane pins", "restart"]) assert.ok(html.includes(words), `the scheduler page says ${words}`);
+// The Config page's scheduler section sends the reader there instead of offering a second form for it.
+assert.ok(html.includes("Lanes, order and limits now live on the Scheduler page"), "the config page points at the Scheduler page");
+assert.ok(!html.includes('label:"Queue"'), "the nav has no Queue page");
 assert.match(html, /<div id="root"><\/div>/);
 assert.match(html, /<style>[^]*--accent[^]*<\/style>/, "the stylesheet is inlined, so nothing loads from elsewhere");
 assert.ok(!/<script src=|<link [^>]*href="(?!data:)/.test(html), "no external assets: an icon is a data: URI");
