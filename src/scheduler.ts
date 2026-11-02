@@ -24,12 +24,10 @@ export interface LaneConfig {
   maxWaitMs?: number;
 }
 
-export interface SchedulerOptions {
+/** The settings that change while the scheduler runs. */
+export interface Tuning {
   /** Lanes and their base priority. */
   lanes: Record<string, LaneConfig>;
-  /** Jobs allowed to hold the backend at once. One per GPU is the honest
-   *  answer. Raise it only if your backend really does serve in parallel. */
-  concurrency?: number;
   /** Priority earned per second of waiting. Also the starvation bound: lanes
    *  100 apart at a weight of 1 means the low one overtakes after 100s. */
   agePerSecond?: number;
@@ -39,6 +37,12 @@ export interface SchedulerOptions {
   /** Refuse work rather than take an unbounded backlog. Someone told "full" can
    *  retry. Someone queued behind 400 jobs just waits for a timeout. */
   maxPerLane?: number;
+}
+
+export interface SchedulerOptions extends Tuning {
+  /** Jobs allowed to hold the backend at once. One per GPU is the honest
+   *  answer. Raise it only if your backend really does serve in parallel. */
+  concurrency?: number;
   /** What's loaded right now, for display in capacity(). Return null if you
    *  don't know. */
   resident?: () => string | null;
@@ -183,11 +187,11 @@ const DEFAULTS = {
 };
 
 export class Scheduler {
-  private readonly lanes: Record<string, LaneConfig>;
+  private lanes!: Record<string, LaneConfig>;
   private readonly concurrency: number;
-  private readonly agePerSecond: number;
-  private readonly warmBonusValue: number;
-  private readonly maxPerLane: number;
+  private agePerSecond!: number;
+  private warmBonusValue!: number;
+  private maxPerLane!: number;
   private readonly resident: () => string | null;
   private readonly isWarm: (model: string) => boolean;
   private readonly slotsOf: (model: string) => number | null;
@@ -215,11 +219,8 @@ export class Scheduler {
   private preparing: Promise<void> | null = null;
 
   constructor(opts: SchedulerOptions) {
-    this.lanes = opts.lanes;
+    this.retune(opts);
     this.concurrency = opts.concurrency ?? DEFAULTS.concurrency;
-    this.agePerSecond = opts.agePerSecond ?? DEFAULTS.agePerSecond;
-    this.warmBonusValue = opts.warmBonus ?? DEFAULTS.warmBonus;
-    this.maxPerLane = opts.maxPerLane ?? DEFAULTS.maxPerLane;
     this.resident = opts.resident ?? (() => null);
     this.isWarm = opts.warm ?? ((m) => m === this.resident());
     this.slotsOf = opts.slots ?? (() => null);
@@ -236,6 +237,18 @@ export class Scheduler {
     this.tally = opts.tally;
     // A queue blocked on someone else's hardware wakes when it is released.
     this.arbiter?.onRelease(() => this.pump());
+  }
+
+  /**
+   * Replace the lanes and the order and queue settings, with the constructor's defaults for any left out.
+   * Nothing running is stopped and nothing is pumped: call `kick` after. A lane's `maxWaitMs` and
+   * `maxPerLane` bind jobs submitted from now on.
+   */
+  retune(t: Tuning): void {
+    this.lanes = t.lanes;
+    this.agePerSecond = t.agePerSecond ?? DEFAULTS.agePerSecond;
+    this.warmBonusValue = t.warmBonus ?? DEFAULTS.warmBonus;
+    this.maxPerLane = t.maxPerLane ?? DEFAULTS.maxPerLane;
   }
 
   /** Lane priority, or something large for an unknown lane, so a typo sorts to

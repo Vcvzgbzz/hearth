@@ -688,6 +688,11 @@ export class BackendPool {
     return { slots, free, running, offbox, queued, resident: this.loaded()[0] ?? null };
   }
 
+  /** Give every backend's scheduler these lanes and order settings. Pair with `kickAll`. */
+  retune(s: HearthConfig["scheduler"]): void {
+    for (const slot of this.slots) slot.scheduler.retune({ lanes: s.lanes, agePerSecond: s.agePerSecond, warmBonus: s.warmBonus, maxPerLane: s.maxPerLane });
+  }
+
   /** Look at every queue again: something outside them changed what may start. */
   kickAll(): void {
     for (const s of this.slots) s.scheduler.kick();

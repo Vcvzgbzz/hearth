@@ -197,13 +197,16 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   assert.equal(r.status, 200);
   let out = (await r.json()) as Status;
   assert.deepEqual(out.restartPending, [], "an idle deadline is read per request");
-  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }] });
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backendDefaults", "concurrency"], value: 7 }] });
   out = (await r.json()) as Status;
-  assert.deepEqual(out.restartPending, ["scheduler"], "lanes and queues are built once, so they wait");
-  assert.equal(loadConfig(cfgPath).scheduler.maxPerLane, 7, "but the file has it now");
-  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], delete: true }] });
+  assert.deepEqual(out.restartPending, ["backends"], "a backend's slots are built once, so they wait");
+  assert.equal(loadConfig(cfgPath).backends[0]!.concurrency, 7, "but the file has it now");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backendDefaults", "concurrency"], delete: true }] });
   out = (await r.json()) as Status;
   assert.deepEqual(out.restartPending, [], "putting it back clears the restart");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }] });
+  out = (await r.json()) as Status;
+  assert.deepEqual(out.restartPending, [], "lanes and queues apply live");
 
   // Invalid: 422 with the field, and nothing written.
   const before = readFileSync(cfgPath, "utf8");
@@ -214,8 +217,8 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   assert.equal(readFileSync(cfgPath, "utf8"), before, "and the file is untouched");
 
   // A dry run shows the result without writing it.
-  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 9 }], dryRun: true });
-  assert.deepEqual(((await r.json()) as Status).restartPending, ["scheduler"], "a dry run says what its change would need");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backendDefaults", "concurrency"], value: 9 }], dryRun: true });
+  assert.deepEqual(((await r.json()) as Status).restartPending, ["backends"], "a dry run says what its change would need");
   r = await a.patch({ baseHash: out.hash, ops: [{ path: ["lending", "models"], value: [] }], dryRun: true });
   assert.match(((await r.json()) as { text: string }).text, /lending:\n  models: \[\]/);
   assert.equal(readFileSync(cfgPath, "utf8"), before, "a dry run writes nothing");

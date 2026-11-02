@@ -48,3 +48,13 @@ lanes behind it, however long it has aged. Leave it off and the lane has no
 ceiling of its own, which is how every lane behaved before. Off-box jobs hold no
 local slot and are not counted. The ceiling is per backend: `concurrency: 2` on a
 node with two backends lets the lane hold two slots on each.
+
+## Changing lanes
+
+Lanes, their priorities and ceilings, `agePerSecond`, `warmBonus` and
+`maxPerLane` apply as soon as the file changes, with no restart. Jobs already
+waiting are ordered again under the new values. A lowered ceiling drains: nothing
+running is stopped, and the lane starts nothing more until it is back under it.
+`maxWaitMs` and `maxPerLane` reach jobs that arrive after the change; a job
+already waiting keeps the timer it was queued with. A job waiting in a lane you
+removed still runs, after the jobs in lanes that exist.

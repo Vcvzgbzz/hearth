@@ -297,8 +297,8 @@ route or a mapping takes its comments with it, because they belong to the thing
 being deleted.
 
 Most of the config applies as soon as it is written: models and routes, sharing,
-notes, peers' model maps, api keys and peer tokens, and the deadlines and limits
-read per request. The rest — listen addresses, backends, servers, resources, lanes, and
+notes, peers' model maps, api keys and peer tokens, lanes and the queue
+settings, and the deadlines and limits read per request. The rest — listen addresses, backends, servers, resources, and
 adding or changing a peer — is written immediately but takes effect on the next
 restart, and the console lists those keys until then.
 

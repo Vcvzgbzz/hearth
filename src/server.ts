@@ -189,7 +189,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   // Peers apply live, so the registry follows every edit before the status surfaces hear of it.
   const config = new ConfigFile(cfg, log, () => {
     peers.sync();
-    // A changed key limit applies to jobs already waiting.
+    // New lanes and order settings, and a changed key limit, apply to jobs already waiting.
+    pool.retune(cfg.scheduler);
     pool.kickAll();
     queueMicrotask(() => void broadcast());
   });
