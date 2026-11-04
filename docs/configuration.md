@@ -144,14 +144,15 @@ it stays a hash.
 
 A key can also be **scoped** with `models:`. Every key above is a full local
 caller — chat on anything, the passthrough, `/v1/warm`, `/control`. A scoped
-key gets `POST /v1/chat/completions` and `POST /v1/messages` for exactly the ids it names and a
-`/v1/models` filtered to them, and every other route answers 403:
+key gets `POST /v1/chat/completions`, `POST /v1/messages` and `POST /v1/embeddings` for exactly
+the ids it names and a `/v1/models` filtered to them, and every other route answers 403:
 
 ```yaml
 apiKeys:
   - { key: env:HEARTH_APP_KEY, label: app }              # full
   - { key: env:VOICE_KEY, label: voice, models: [voice] }      # chat on one id, nothing else
   - { key: env:GUEST_KEY, label: guest, models: [chat] }       # a name a flow takes, in any of its variants
+  - { key: env:MEMORY_KEY, label: memory, models: [embed] }   # embeddings through the flow that takes embed
 ```
 
 A scope names models, or names a [flow](routing.md#flows) takes. Held to a

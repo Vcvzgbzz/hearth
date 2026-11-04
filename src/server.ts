@@ -1304,6 +1304,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     models: string[] | null;
     /** A plugin calling back in with the token hearth gave it: no plugin runs on this request. */
     internal?: boolean;
+    /** The request body, when a route already read it to check something before passing it on. */
+    body?: Buffer;
   }
 
   /** Who a route lets in, declared per path rather than re-derived in each handler. */
@@ -1481,6 +1483,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     // The Messages API, for clients that speak only that; peers borrow over chat completions.
     { path: "/v1/messages", methods: ["POST"], auth: "local", envelope: "openai", scoped: true,
       handler: routeMessages },
+    // Embeddings pass through as before; a scoped key may use them for the names in its scope.
+    { path: "/v1/embeddings", methods: ["POST"], auth: "local", envelope: "openai", scoped: true,
+      handler: routeEmbeddings },
 
     // Login and logout take no credential by definition; cross-origin POSTs are refused above.
     { path: "/login", methods: ["POST"], auth: "open", handler: routeLogin },
@@ -2882,6 +2887,29 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     }
   }
 
+  async function routeEmbeddings(c: Call): Promise<void> {
+    if (c.models !== null) {
+      try {
+        c.body = await readBody(c.req, cfg.maxBodyBytes);
+      } catch (e) {
+        fail(c.res, e);
+        return;
+      }
+      let model = "";
+      try {
+        const parsed = JSON.parse(c.body.toString()) as { model?: unknown };
+        if (typeof parsed.model === "string") model = parsed.model;
+      } catch {
+        // Unreadable: refused below as naming no model.
+      }
+      if (model === "" || !inScope(c.models, model, isType)) {
+        fail(c.res, new Refusal(403, `this key may not run "${model}"`, "permission_error"));
+        return;
+      }
+    }
+    return routePassthrough(c);
+  }
+
   /** Everything not claimed above, proxied to a backend as-is. */
   async function routePassthrough(c: Call): Promise<void> {
     const { req, res, url } = c;
@@ -2893,7 +2921,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     const who = c.caller;
     let body: Buffer | undefined;
     try {
-      body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, cfg.maxBodyBytes);
+      body = c.body ?? (req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, cfg.maxBodyBytes));
     } catch (e) {
       fail(res, e);
       return;
