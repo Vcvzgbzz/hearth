@@ -58,6 +58,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `models.<id>.lane` | the client's | lane this model's requests queue in, over the one the client asked for |
 | `models.<id>.as` | unset | the id this one goes out as: an alias for another model. See [Advertising a nicer id](models.md#advertising-a-nicer-id-than-the-backend-uses) |
 | `models.<id>.params` | unset | request fields stamped on every call (`temperature`, `reasoning_effort`, …). See [One resident model, several ids](models.md#one-resident-model-several-ids-different-defaults) |
+| `models.<id>.efforts` | unset | request fields stamped when a call asks for one `reasoning_effort`, keyed by level. See [A model with its own thinking switch](models.md#a-model-with-its-own-thinking-switch) |
 | `flows.<name>.inputs` | none | the ids whose requests enter this flow. An id enters at most one. See [Flows](routing.md#flows) |
 | `flows.<name>.steps` | — | where those requests go: tried in order, first match wins, the last always applies. A step's `plugins:` run, in order, on what it sends to a model. See [Where a plugin runs](plugins.md#where-a-plugin-runs) |
 | `flows.<name>.takes` | chat | request paths this flow answers besides chat, each as a backend declares it under `routes:`. See [Types](routing.md#types) |
