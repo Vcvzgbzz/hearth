@@ -307,22 +307,20 @@ this request, and `line`, the flow and step it was placed on (`null` for an `eve
 
 ## Writing a `code` plugin
 
-```ts
-import { definePlugin } from "@vcvzgbzz/hearth/plugin";
+A plugin is an ES module whose default export has `apiVersion`, `kinds` and `setup`:
 
-export default definePlugin({
-  name: "redact-emails",
+```js
+export default {
   apiVersion: 1,
   kinds: { chat: ["routed"] },            // hearth never calls it for anything else
   setup(ctx) {
     return { routed: async (r) => ({ body: redact(r.body) }) };
   },
-});
+};
 ```
 
-`setup` receives `ctx.config` (its settings), `ctx.models.chat / embed / rerank` (calls into hearth's
-scheduler, marked internal, below), `ctx.log`, `ctx.store` (a small key-value store per plugin),
-`ctx.metrics` and `ctx.every(ms, fn)`.
+`setup` receives `ctx.name`, `ctx.config` (its settings), `ctx.log` and `ctx.internal` (`url` and `token`, to
+call hearth's `/v1` model routes as internal traffic, below). It returns the hooks, plus an optional `stop`.
 
 ## Writing an `http` plugin
 

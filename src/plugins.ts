@@ -637,7 +637,7 @@ export class Plugins {
     }
     const mod = (await import(url)) as { default?: PluginModule };
     const m = mod.default;
-    if (!m || m.apiVersion !== 1 || typeof m.setup !== "function") throw new Error("its default export is not a plugin (definePlugin with apiVersion 1)");
+    if (!m || m.apiVersion !== 1 || typeof m.setup !== "function") throw new Error("its default export is not a plugin: it needs apiVersion 1 and a setup function");
     const declared = validDeclared(m.kinds);
     if (!declared) throw new Error("it declares kinds hearth does not know");
     const needs = validNeeds(m.needs);
