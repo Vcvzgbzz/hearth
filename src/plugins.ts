@@ -142,6 +142,9 @@ export interface PluginStatus {
 const BREAK_AFTER = 5;
 const BREAK_MS = 30_000;
 const OBSERVE_MS = 10_000;
+const CREDENTIALS = new Set(["authorization", "cookie", "x-api-key"]);
+/** How often a service that was not there at startup is asked again. */
+const RETRY_MS = 30_000;
 
 /** Within a declaration: what the config's `kinds` narrows the plugin's own to. Never wider. */
 export function effectiveKinds(declared: Declared, narrowed: Declared | null): Declared {
@@ -268,6 +271,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 interface Loaded {
   name: string;
   decl: PluginDecl;
+  /** Kept across a retry, so what a service was given at startup stays valid. */
+  token: string;
   declared: Declared;
   needs: Needs;
   kinds: Declared;
@@ -304,46 +309,70 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
 export class Plugins {
   private loaded: Loaded[] = [];
   private tokens = new Map<string, string>();
+  private retrying: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private cfg: HearthConfig, private log: Logger, private opts: { off: boolean; selfUrl: () => string }) {}
 
-  /** Loads every plugin. One that fails is turned off and logged, unless it is `required`. */
+  /** Loads every plugin. One that fails is turned off and logged, unless it is `required`; a service is tried again until it answers. */
   async start(): Promise<void> {
     for (const [name, decl] of Object.entries(this.cfg.plugins)) {
-      const l: Loaded = { name, decl, declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {}, served: { calls: 0, errors: 0 } };
+      const l: Loaded = { name, decl, token: randomBytes(24).toString("base64url"), declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {}, served: { calls: 0, errors: 0 } };
       this.loaded.push(l);
       if (this.opts.off) continue;
-      try {
-        const token = randomBytes(24).toString("base64url");
-        this.tokens.set(token, name);
-        const internal = { url: this.opts.selfUrl(), token };
-        // A plugin that only serves an API hooks nothing, so it has no manifest to read.
-        const { declared, needs, hooks } = decl.use === null ? { declared: {}, needs: {}, hooks: {} }
-          : decl.trust === "code" ? await this.loadCode(name, decl, decl.use, internal) : await this.loadService(name, decl, decl.use, internal);
-        const wider = widened(name, declared, decl.kinds);
-        if (wider) throw new Error(wider);
-        l.declared = declared;
-        l.needs = needs;
-        l.kinds = effectiveKinds(declared, decl.kinds);
-        const misplaced = this.misplaced(name, l.kinds, needs);
-        if (misplaced) throw new Error(misplaced);
-        l.hooks = hooks;
-        l.state = "running";
-        const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
-        this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
-        if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
-          this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
-        }
-      } catch (e) {
-        l.state = "failed";
-        l.error = e instanceof Error ? e.message : String(e);
-        this.log.error("plugin.failed_to_start", { plugin: name, error: l.error });
-        if (decl.required) throw new Error(`plugin ${name} is required and did not start: ${l.error}`);
+      this.tokens.set(l.token, name);
+      await this.load(l);
+      if (l.state === "failed" && decl.required) throw new Error(`plugin ${name} is required and did not start: ${l.error}`);
+    }
+    if (this.loaded.some((l) => l.state === "failed" && l.decl.trust === "http")) {
+      this.retrying = setTimeout(() => void this.retryFailed(), RETRY_MS);
+      this.retrying.unref();
+    }
+  }
+
+  /** A service may come up after hearth does; code that failed fails the same way until it is changed, so only a restart tries it. */
+  async retryFailed(): Promise<void> {
+    const left = this.loaded.filter((l) => l.state === "failed" && l.decl.trust === "http");
+    for (const l of left) await this.load(l);
+    if (this.retrying === null || !left.some((l) => l.state === "failed")) return;
+    this.retrying = setTimeout(() => void this.retryFailed(), RETRY_MS);
+    this.retrying.unref();
+  }
+
+  /** Reads what one plugin handles and turns it on, or marks it failed with the reason. */
+  private async load(l: Loaded): Promise<void> {
+    const { name, decl } = l;
+    try {
+      const internal = { url: this.opts.selfUrl(), token: l.token };
+      // A plugin that only serves an API hooks nothing, so it has no manifest to read.
+      const { declared, needs, hooks } = decl.use === null ? { declared: {}, needs: {}, hooks: {} }
+        : decl.trust === "code" ? await this.loadCode(name, decl, decl.use, internal) : await this.loadService(name, decl, decl.use, internal);
+      const wider = widened(name, declared, decl.kinds);
+      if (wider) throw new Error(wider);
+      l.declared = declared;
+      l.needs = needs;
+      l.kinds = effectiveKinds(declared, decl.kinds);
+      const misplaced = this.misplaced(name, l.kinds, needs);
+      if (misplaced) throw new Error(misplaced);
+      l.hooks = hooks;
+      l.state = "running";
+      l.error = null;
+      const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
+      this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
+      if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+        this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
       }
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      // A retry says something only when the reason changes.
+      if (error !== l.error) this.log.error("plugin.failed_to_start", { plugin: name, error });
+      l.state = "failed";
+      l.error = error;
     }
   }
 
   async stop(): Promise<void> {
+    if (this.retrying !== null) clearTimeout(this.retrying);
+    this.retrying = null;
     for (const l of this.loaded) await Promise.resolve(l.hooks.stop?.()).catch(() => {});
   }
 
@@ -652,7 +681,8 @@ export class Plugins {
       const { body, headers, ...rest } = r as HookExchange;
       const out: Record<string, unknown> = { ...rest };
       if (decl.reads.includes("messages")) out.body = body;
-      if (decl.reads.includes("headers")) out.headers = headers;
+      // The caller's credentials stay here, as a served API's do.
+      if (decl.reads.includes("headers")) out.headers = Object.fromEntries(Object.entries(headers).filter(([k]) => !CREDENTIALS.has(k.toLowerCase())));
       if (!decl.reads.includes("reply")) delete out.reply;
       return out;
     };
