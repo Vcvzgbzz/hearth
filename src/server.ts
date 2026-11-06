@@ -1172,6 +1172,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
           });
           if (!up.ok) {
             const detail = await up.text();
+            if (up.status === 429) peers.rateCapped(peer.name, decision.theirModel, up.headers["retry-after"]);
             throw new PeerStatusError(peer.name, up.status, detail.slice(0, 200));
           }
           peers.served(peer.name);
