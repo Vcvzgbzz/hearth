@@ -74,15 +74,20 @@ It answers `200` with counts, or `503` when every backend it is watching has
 gone:
 
 ```json
-{"ok":true,"name":"web",
+{"ok":true,"degraded":false,"name":"web",
  "backends":{"total":9,"watched":2,"connected":2},
- "peers":{"total":1,"up":1}}
+ "peers":{"total":1,"up":1},
+ "plugins":{"total":1,"failed":0}}
 ```
 
 `watched` is the backends whose event stream hearth holds open — llama-swap,
 today. That connection is the signal: when the backend dies the stream drops,
 and hearth knows within a reconnect without having asked it anything. `503`
 means every one of them is gone.
+
+`degraded` is true while the node serves with part of it gone: a watched stream
+is down, or a plugin did not start. The status stays `200`, so point an uptime
+monitor at the body as well if a partial outage should page you.
 
 With a [canary](canary.md#canary) configured the body also carries
 `"canary":{"degraded":0}`: how many models are answering, but not with an

@@ -1169,6 +1169,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
             // the local backend. This turns that into a fallback instead of a
             // hang. 0 disables it.
             ...(cfg.peerFirstByteMs > 0 ? { headersTimeoutMs: cfg.peerFirstByteMs } : {}),
+            // A peer that goes silent mid-answer is cut as a local backend is.
+            ...(cfg.backendIdleMs > 0 ? { idleTimeoutMs: cfg.backendIdleMs } : {}),
           });
           if (!up.ok) {
             const detail = await up.text();
@@ -1371,8 +1373,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     }
 
     // A plugin's own token: a local caller whose requests no plugin sees, so a hook cannot call itself.
+    // It reaches model calls and nothing else: not the config, keys or control routes.
     const plugin = plugins.internalCaller(bearer(req));
-    if (plugin !== null) return { ...base, peer: null, caller: "plugin:" + plugin, models: null, internal: true };
+    if (plugin !== null) {
+      if (r.scoped !== true && !(r.path === "*" && url.pathname.startsWith("/v1/"))) {
+        refuse(res, 403, "a plugin's token reaches /v1 model calls only", env);
+        return null;
+      }
+      return { ...base, peer: null, caller: "plugin:" + plugin, models: null, internal: true };
+    }
 
     // A live operator session is a full local identity: no scope, so nothing below it can refuse.
     let asLocal = localCaller(req);
@@ -1562,8 +1571,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     const watched = local.filter((b) => b.state.watched());
     const connected = watched.filter((b) => b.state.streamingNow());
     const ok = watched.length === 0 || connected.length > 0;
+    const pluginsFailed = plugins.status().filter((p) => p.state === "failed").length;
     return {
       ok,
+      // Still serving, with part of it gone: a stream down, or a plugin that did not start.
+      degraded: connected.length < watched.length || pluginsFailed > 0,
       name: cfg.name,
       backends: {
         total: local.length,
@@ -1574,6 +1586,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         total: cfg.peers.length,
         up: peers.all().filter((p) => p.up).length,
       },
+      plugins: { total: Object.keys(cfg.plugins).length, failed: pluginsFailed },
       // Only with a canary configured, and as a count: this endpoint is unauthenticated
       // and may be bound wide, so it says how many models are out, never which.
       ...(canary ? { canary: { degraded: canary.degradedCount() } } : {}),
@@ -2786,12 +2799,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       json(c.res, 429, { error: "too many failed logins — try again in a few minutes" });
       return;
     }
+    // Counted before scrypt yields, or a parallel burst all passes the check above.
+    loginThrottle.note(user, ip, now);
     // An unknown username burns one full scrypt, so response time says nothing about it.
     const ok = user !== "" && secretEq(user, cfg.operator.user)
       ? await verifyPassword(pass, cfg.operator.passHash)
       : await verifyDecoy(pass);
     if (!ok) {
-      loginThrottle.note(user, ip, now);
       log.warn("login.failed", { ip, user: user === "" ? null : user });
       json(c.res, 401, { error: "bad username or password" });
       return;

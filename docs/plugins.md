@@ -307,22 +307,20 @@ this request, and `line`, the flow and step it was placed on (`null` for an `eve
 
 ## Writing a `code` plugin
 
-```ts
-import { definePlugin } from "@vcvzgbzz/hearth/plugin";
+A plugin is an ES module whose default export has `apiVersion`, `kinds` and `setup`:
 
-export default definePlugin({
-  name: "redact-emails",
+```js
+export default {
   apiVersion: 1,
   kinds: { chat: ["routed"] },            // hearth never calls it for anything else
   setup(ctx) {
     return { routed: async (r) => ({ body: redact(r.body) }) };
   },
-});
+};
 ```
 
-`setup` receives `ctx.config` (its settings), `ctx.models.chat / embed / rerank` (calls into hearth's
-scheduler, marked internal, below), `ctx.log`, `ctx.store` (a small key-value store per plugin),
-`ctx.metrics` and `ctx.every(ms, fn)`.
+`setup` receives `ctx.name`, `ctx.config` (its settings), `ctx.log` and `ctx.internal` (`url` and `token`, to
+call hearth's `/v1` model routes as internal traffic, below). It returns the hooks, plus an optional `stop`.
 
 ## Writing an `http` plugin
 
@@ -342,8 +340,8 @@ hearth sends one POST per hook, with `Authorization: Bearer <key>` when the plug
 ```
 
 and expects `{ "decision": { … } }` back. An `http` plugin states its kinds and stages at
-`GET {url}/manifest`, which hearth reads at startup and holds it to. Only the fields in `reads` are sent. `log` and `error` calls are
-not answered. `internal.token` lets the plugin call hearth's `/v1` back as internal traffic, during a hook or later
+`GET {url}/manifest`, which hearth reads at startup and holds it to. A service that does not answer then is asked again every 30 seconds, so it can come up after hearth does; until it does, `/healthz` says `degraded`. Only the fields in `reads` are sent, and `headers` never includes the caller's `authorization`, `cookie` or `x-api-key`. `log` and `error` calls are
+not answered. `internal.token` lets the plugin call hearth's `/v1` model routes back as internal traffic, during a hook or later
 (a memory service extracting in the background); it is the plugin's alone and changes when hearth restarts.
 
 A plugin with a page of its own serves it under its URL and declares it; hearth adds a sidebar entry and

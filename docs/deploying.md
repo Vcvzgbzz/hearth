@@ -39,9 +39,9 @@ A unit that fails a bad config at deploy time rather than at 3am:
 [Service]
 WorkingDirectory=/opt/hearth
 EnvironmentFile=/etc/hearth.env
-ReadWritePaths=/etc/hearth.yaml
-ExecStartPre=/usr/bin/node /opt/hearth/dist/cli.js serve --config /etc/hearth.yaml --check
-ExecStart=/usr/bin/node /opt/hearth/dist/cli.js serve --config /etc/hearth.yaml
+ReadWritePaths=/etc/hearth
+ExecStartPre=/usr/bin/node /opt/hearth/dist/cli.js serve --config /etc/hearth/hearth.yaml --check
+ExecStart=/usr/bin/node /opt/hearth/dist/cli.js serve --config /etc/hearth/hearth.yaml
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45
@@ -50,6 +50,10 @@ TimeoutStopSec=45
 `ReadWritePaths=` is what lets console edits write your config.
 `ProtectSystem=strict` leaves nothing outside `WorkingDirectory` writable, so
 without it every edit is refused with a message saying the file is not writable.
+Give the config a directory of its own: hearth stages each save beside the file
+and keeps the version history and the console's draft there. With only the file
+writable a save is written in place, so a crash mid-write can leave it cut short,
+and no history or draft is kept.
 Leave it out if you would rather the config were only ever edited by hand.
 
 `--check` validates and exits, so a typo in a peer's model map stops the deploy
@@ -85,7 +89,7 @@ cannot quietly eat a job every five seconds.
 ## Reporting a bug
 
 ```bash
-hearth report --config /etc/hearth.yaml
+hearth report --config /etc/hearth/hearth.yaml
 ```
 
 writes `hearth-report-<date>.md` in the current directory: the hearth, Node and
