@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config.js";
-import { addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
+import { peerChoices, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
 import type { UiData } from "../src/console/types.js";
 
 const doc = (): Doc => ({
@@ -562,6 +562,14 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.equal(step(off).plugins, undefined, "none left takes the key away");
   assert.equal(directTo("x", { inputs: ["x"], steps: [{ to: "m", plugins: ["a"] }] }), null, "a line with plugins is drawn as a rule");
   assert.deepEqual(placedOn({ plugins: [{ name: "a", models: { embed: "e" } }] }), [{ name: "a", models: { embed: "e" } }], "the node's own report of a line reads the same");
+}
+
+// A peer lending several models offers each of them by name, not only "whatever was asked for".
+{
+  const doc = { peers: { far: { url: "http://far", models: { chat: "their-chat", voice: "their-voice" } } } };
+  assert.deepEqual(peerChoices(doc, ""), [{ peer: "far", model: null }, { peer: "far", model: "chat" }, { peer: "far", model: "voice" }]);
+  assert.deepEqual(peerChoices(doc, "voi"), [{ peer: "far", model: "voice" }], "a search for a model finds it on its peer");
+  assert.deepEqual(rawTo({ kind: "peer", peer: "far", model: "voice" }), { peer: "far", model: "voice" }, "and the line names it");
 }
 
 console.log("draft.test.ts ok");

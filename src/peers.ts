@@ -100,6 +100,11 @@ const STRIKES_BEFORE_DOWN = 2;
 
 /** How long to leave a peer alone after it rate-limits our polling. */
 const RATE_CAP_BACKOFF_MS = 5 * 60_000;
+/** How long to stop sending a peer one model after it rate-limits a request for it, when it gives no Retry-After. */
+const REQUEST_CAP_BACKOFF_MS = 60_000;
+/** Bounds on a peer's Retry-After, so a missing or absurd value can neither hammer it nor lock it out for good. */
+const RETRY_AFTER_MIN_MS = 5_000;
+const RETRY_AFTER_MAX_MS = 10 * 60_000;
 
 export class PeerRegistry {
   private readonly status = new Map<string, PeerStatus>();
@@ -111,6 +116,8 @@ export class PeerRegistry {
   private readonly readAt = new Map<string, number>();
   /** When each peer last answered one of our requests. */
   private readonly servedAt = new Map<string, number>();
+  /** peer + their model id -> until when requests for it stay home: it rate-limited one. */
+  private readonly capped = new Map<string, number>();
   /** Our requests to each peer still open, with when they were sent. */
   private readonly open = new Map<string, Set<{ theirModel: string; at: number }>>();
 
@@ -242,11 +249,29 @@ export class PeerRegistry {
     return this.byName.get(peer)?.models[model];
   }
 
-  /** Peers that are up and map this model, in preference order. */
+  /** Peers that are up, map this model and are not rate-limiting it, in preference order. */
   candidates(model: string, preferred: string[]): string[] {
     // Borrowing paused: no candidates, and every policy path already handles that.
     if (!this.controls.borrowingOn) return [];
-    return peersMapping(model, preferred, [...this.byName.values()]).filter((n) => this.isUp(n));
+    return peersMapping(model, preferred, [...this.byName.values()]).filter((n) => this.isUp(n) && this.cappedFor(n, this.theirModelId(n, model) ?? "") === 0);
+  }
+
+  /** A peer refused one of our requests with 429: stop sending it that model for a while, so every
+   *  request in the meantime goes straight to the fallback instead of being refused first. */
+  rateCapped(name: string, theirModel: string, retryAfter?: string | string[]): void {
+    const secs = Number(Array.isArray(retryAfter) ? retryAfter[0] : retryAfter);
+    const ms = Number.isFinite(secs) && secs > 0 ? Math.min(RETRY_AFTER_MAX_MS, Math.max(RETRY_AFTER_MIN_MS, secs * 1000)) : REQUEST_CAP_BACKOFF_MS;
+    const key = `${name}\0${theirModel}`, already = this.cappedFor(name, theirModel) > 0;
+    this.capped.set(key, Date.now() + ms);
+    if (!already) this.log.warn("peer.request_rate_capped", { peer: name, model: theirModel, backoffSec: Math.round(ms / 1000) });
+  }
+
+  /** How long until this peer takes this model again, in ms; 0 when it is not rate-limiting it. */
+  cappedFor(name: string, theirModel: string): number {
+    const key = `${name}\0${theirModel}`, until = this.capped.get(key);
+    if (until === undefined) return 0;
+    if (Date.now() >= until) { this.capped.delete(key); return 0; }
+    return until - Date.now();
   }
 
   async pollOnce(name: string, timeoutMs = POLL_HEADERS_TIMEOUT_MS): Promise<void> {

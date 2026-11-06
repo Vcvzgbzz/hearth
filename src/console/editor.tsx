@@ -7,7 +7,7 @@ import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Redo2, Refr
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
 import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
@@ -334,7 +334,7 @@ export function Picker() {
   // Every model a backend serves or a route of its names, and every one the file describes.
   const models = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => [...list(obj(b).serves), ...(Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).model)).filter(Boolean)]).concat(Object.keys(obj(draft.models))))].filter(hit)
     .filter((m) => !chat || q.trim() !== "" || known?.kind(m) !== "paths");
-  const peers = Object.keys(obj(draft.peers)).filter(hit);
+  const peers = peerChoices(draft, q);
   // A flow that only says where one name runs is a line on the map, not a rule to hand work to.
   const flows = Object.entries(obj(draft.flows)).filter(([f, v]) => f !== self && hit(f) && !list(obj(v).inputs).includes("*")
     && directTo(f, { inputs: list(obj(v).inputs), steps: (Array.isArray(obj(v).steps) ? (obj(v).steps as unknown[]) : []).map(obj) }) === null).map(([f]) => f);
@@ -377,7 +377,9 @@ export function Picker() {
               : hw.length > 0 && <span className="ml-auto shrink-0 font-sans text-[10px] uppercase text-dim" title={`runs on ${hw.join(", ")}, behind the ${on} backend`}>{hw.join(" · ")}</span>}</button>;
           })}
           {peers.length > 0 && <div className={head}>a peer</div>}
-          {peers.map((p) => <button key={p} className={row} onClick={() => send({ kind: "peer", peer: p, model: null })}>{p}</button>)}
+          {peers.map(({ peer, model }) => model === null
+            ? <button key={peer} className={row} onClick={() => send({ kind: "peer", peer, model: null })}>{peer}<span className="ml-auto shrink-0 text-[11px] text-dim">whatever was asked for</span></button>
+            : <button key={`${peer}/${model}`} className={cx(row, mono)} onClick={() => send({ kind: "peer", peer, model })}><span className="truncate">{model}</span><span className="ml-auto shrink-0 font-sans text-[11px] text-dim">on {peer}</span></button>)}
           {!ends && flows.length > 0 && <div className={head}>another routing rule</div>}
           {!ends && flows.map((f) => <button key={f} className={cx(row, mono)} onClick={() => send({ kind: "flow", flow: f })}>{f}</button>)}
         </div>

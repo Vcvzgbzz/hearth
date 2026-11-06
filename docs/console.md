@@ -314,13 +314,14 @@ must not also say the opposite, which is easy to miss because both lines look
 like hardening:
 
 ```ini
-ReadWritePaths=/etc/hearth.yaml
+ReadWritePaths=/etc/hearth                  # the directory that holds hearth.yaml
 ReadOnlyPaths=/opt/hearth /etc/hearth.env   # NOT the config as well
 ```
 
-`ReadOnlyPaths` wins for a path named in both, silently. Only the file needs to
-be writable, not `/etc` — hearth writes in place when it cannot stage a temp
-file beside the config, which is exactly what that pairing produces.
+`ReadOnlyPaths` wins for a path named in both, silently. Not all of `/etc` needs
+to be writable, only a directory for the config: saves are staged beside it, and
+its version history and draft live there too. With only the file writable hearth
+still saves, in place, but keeps no versions or draft.
 
 ### Editing the file over HTTP
 

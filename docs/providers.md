@@ -119,3 +119,14 @@ backends:
   (4096 when the request names none: this API requires one), `temperature`,
   `top_p`, `stop`, and streaming. Reasoning text comes back as
   `reasoning_content`. Other request fields are not sent.
+- `reasoning_effort` goes out as `output_config.effort` (`low`, `medium`,
+  `high`, `xhigh`, `max`). `none` and `minimal` are sent as `low`: the API
+  has no level below it, and several models refuse a request that turns
+  thinking off. A model without effort support answers such a request with
+  an error, so leave `reasoning_effort` off for one.
+- A request with an effort above `none` and `minimal` also asks for
+  `thinking: { type: adaptive, display: summarized }`: the API otherwise
+  returns the thinking empty. The summary comes back as `reasoning_content`.
+  The model still decides how much to think, and on an easy prompt it may
+  not think at all. Thinking blocks are not sent back on later turns; the API
+  accepts a conversation without them, tool calls included.

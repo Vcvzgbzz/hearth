@@ -19,6 +19,12 @@ export const ANTHROPIC_VERSION = "2023-06-01";
 /** What an answer may run to when the request does not say; the Messages API will not choose. */
 const DEFAULT_MAX_TOKENS = 4096;
 
+/**
+ * `reasoning_effort` as the Messages API's `output_config.effort`. Its lowest level stands in for
+ * none and minimal: several models refuse any way of switching thinking off.
+ */
+const EFFORT: Record<string, string> = { none: "low", minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+
 /** A message's text, whether it was sent as a string or as parts. */
 const textOf = (content: unknown): string =>
   typeof content === "string" ? content : list(content).map((p) => (isObj(p) && typeof p.text === "string" ? p.text : "")).join("");
@@ -95,6 +101,9 @@ export function toAnthropic(body: Doc, cache: boolean, ttl: CacheTtl = "5m"): Do
   const choice = body.tool_choice;
   const stop = typeof body.stop === "string" ? [body.stop] : list(body.stop).filter((s) => typeof s === "string");
   const limit = [body.max_tokens, body.max_completion_tokens].find((n) => typeof n === "number" && n > 0);
+  const effort = typeof body.reasoning_effort === "string" ? EFFORT[body.reasoning_effort] : undefined;
+  // A caller that asks for an effort is asked for the thinking too: the API returns it empty unless summarized.
+  const thinks = effort !== undefined && body.reasoning_effort !== "none" && body.reasoning_effort !== "minimal";
   return {
     model: body.model,
     max_tokens: limit ?? DEFAULT_MAX_TOKENS,
@@ -107,6 +116,8 @@ export function toAnthropic(body: Doc, cache: boolean, ttl: CacheTtl = "5m"): Do
     ...(typeof body.temperature === "number" ? { temperature: body.temperature } : {}),
     ...(typeof body.top_p === "number" ? { top_p: body.top_p } : {}),
     ...(stop.length > 0 ? { stop_sequences: stop } : {}),
+    ...(effort !== undefined ? { output_config: { effort } } : {}),
+    ...(thinks ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
     ...(body.stream === true ? { stream: true } : {}),
   };
 }
