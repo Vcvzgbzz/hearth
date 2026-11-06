@@ -2903,7 +2903,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         // Unreadable: refused below as naming no model.
       }
       if (model === "" || !inScope(c.models, model, isType)) {
-        fail(c.res, new Refusal(403, `this key may not run "${model}"`, "permission_error"));
+        fail(c.res, new Refusal(403, model === "" ? "this key needs a request that names a model" : `this key may not run "${model}"`, "permission_error"));
         return;
       }
     }
