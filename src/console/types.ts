@@ -302,6 +302,12 @@ export interface PluginView {
   /** The service's own API, answered at /plugins/<name>/; null when it has none. */
   serves: string | null;
   served: { calls: number; errors: number };
+  /** Requests served now, or within the last moment, by id: drawn as dots on the map. */
+  live: string[];
+  /** For a plugin that speaks MCP: whether its server answers, its name, and how many tools it has. */
+  mcp: { transport: "http" | "stdio"; server: string | null; tools: number | null; error: string | null; checkedAt: number; /** Under /plugins/<name>. */ path: string } | null;
+  /** The program a plugin that runs an MCP server starts, as its command line. */
+  run: string | null;
   when: { asked?: string[]; askedNot?: string[]; caller?: string[]; callerNot?: string[]; lane?: string[]; target?: string[]; header?: Record<string, string[]> } | null;
   timeoutMs: number;
   onError: "skip" | "refuse";

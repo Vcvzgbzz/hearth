@@ -310,13 +310,13 @@ function pruneUnmapped(cfg: HearthConfig): void {
     if (flow.inputs.length > 1) flow.inputs = flow.inputs.filter((id) => open.every((e) => maps(e.peer, id)));
     const dead = (e: FlowEnd) => "peer" in e && (e.model === null ? flow.inputs.some((id) => !maps(e.peer, id)) : !maps(e.peer, e.model));
     flow.steps = flow.steps.flatMap((s): Flow["steps"] => {
-      if ("flow" in s.to || "refuse" in s.to || "asked" in s.to) return [s];
+      if ("flow" in s.to || "refuse" in s.to || "asked" in s.to || "plugin" in s.to) return [s];
       if (!("fastest" in s.to)) return dead(s.to) ? [] : [s];
       const left = s.to.fastest.filter((e) => !dead(e));
       return left.length === 0 ? [] : [{ ...s, to: left.length === 1 ? left[0]! : { fastest: left } }];
     });
     if (JSON.stringify(flow) === before) continue;
-    const idle = flow.steps.every((s) => "refuse" in s.to || (!("flow" in s.to) && !("fastest" in s.to) && !("peer" in s.to) && ("asked" in s.to || flow.inputs.includes(s.to.model)) && s.do.length === 0 && s.params === null && s.lane === null));
+    const idle = flow.steps.every((s) => "refuse" in s.to || (!("flow" in s.to) && !("plugin" in s.to) && !("fastest" in s.to) && !("peer" in s.to) && ("asked" in s.to || flow.inputs.includes(s.to.model)) && s.do.length === 0 && s.params === null && s.lane === null));
     if (flow.steps.length === 0 || flow.inputs.length === 0 || idle) { delete cfg.flows[name]; continue; }
     // What is left still has to end in a step that always applies.
     const last = flow.steps.at(-1)!;

@@ -105,6 +105,12 @@ try {
   assert.deepEqual(got.at(-1), { method: "POST", url: "/api/crawl?depth=2", auth: "Bearer svc-secret", caller: "key:app", body: '{"urls":["a"]}' },
     "the caller's key stays here, the plugin's goes on, and who is calling cannot be forged");
 
+  // A request just served stays in `live` long enough for the map to draw it, then is let go.
+  const live = () => node.plugins.status().find((p) => p.name === "crawl")!.live;
+  assert.equal(live().length, 1, "the map sees even a quick request");
+  await new Promise((r) => setTimeout(r, 1_700));
+  assert.deepEqual(live(), [], "and it is gone once it has been seen");
+
   // A stream reaches the caller before the service has finished writing it.
   const r2 = await call("/plugins/crawl/stream", { key: "k-app" });
   assert.equal(r2.headers.get("mcp-session-id"), "s1");
