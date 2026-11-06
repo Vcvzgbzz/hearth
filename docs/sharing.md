@@ -151,6 +151,10 @@ used a model's tokens for the day is shown a node that does not lend that model,
 on the same poll that reports capacity, so its flows stop choosing you instead of
 sending work to be refused. One that asks anyway gets a `429` that says so.
 
+A node refused with a `429` stops asking that peer for that model for as long as its
+`Retry-After` says, held between 5 seconds and 10 minutes, or for a minute without
+one. Its requests take the next line of their flow meanwhile.
+
 The same poll tells each peer, for every model it is lent, the three limits it is
 held to and how many of the day's tokens it has used. Its console shows them
 beside the models it borrows. A node that predates this says nothing, and is shown

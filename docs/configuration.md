@@ -58,6 +58,7 @@ which rewrites it in place, comments kept, with the original saved beside it.
 | `models.<id>.lane` | the client's | lane this model's requests queue in, over the one the client asked for |
 | `models.<id>.as` | unset | the id this one goes out as: an alias for another model. See [Advertising a nicer id](models.md#advertising-a-nicer-id-than-the-backend-uses) |
 | `models.<id>.params` | unset | request fields stamped on every call (`temperature`, `reasoning_effort`, …). See [One resident model, several ids](models.md#one-resident-model-several-ids-different-defaults) |
+| `models.<id>.efforts` | unset | request fields stamped when a call asks for one `reasoning_effort`, keyed by level. See [A model with its own thinking switch](models.md#a-model-with-its-own-thinking-switch) |
 | `flows.<name>.inputs` | none | the ids whose requests enter this flow. An id enters at most one. See [Flows](routing.md#flows) |
 | `flows.<name>.steps` | — | where those requests go: tried in order, first match wins, the last always applies. A step's `plugins:` run, in order, on what it sends to a model. See [Where a plugin runs](plugins.md#where-a-plugin-runs) |
 | `flows.<name>.takes` | chat | request paths this flow answers besides chat, each as a backend declares it under `routes:`. See [Types](routing.md#types) |
@@ -144,14 +145,15 @@ it stays a hash.
 
 A key can also be **scoped** with `models:`. Every key above is a full local
 caller — chat on anything, the passthrough, `/v1/warm`, `/control`. A scoped
-key gets `POST /v1/chat/completions` and `POST /v1/messages` for exactly the ids it names and a
-`/v1/models` filtered to them, and every other route answers 403:
+key gets `POST /v1/chat/completions`, `POST /v1/messages` and `POST /v1/embeddings` for exactly
+the ids it names and a `/v1/models` filtered to them, and every other route answers 403:
 
 ```yaml
 apiKeys:
   - { key: env:HEARTH_APP_KEY, label: app }              # full
   - { key: env:VOICE_KEY, label: voice, models: [voice] }      # chat on one id, nothing else
   - { key: env:GUEST_KEY, label: guest, models: [chat] }       # a name a flow takes, in any of its variants
+  - { key: env:MEMORY_KEY, label: memory, models: [embed] }   # embeddings through the flow that takes embed
 ```
 
 A scope names models, or names a [flow](routing.md#flows) takes. Held to a

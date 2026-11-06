@@ -17,6 +17,7 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/backends/probe` | local | `POST { url, key?, format? }` asks that server for its model list with that key and answers `{ ok, url, models }` or `{ ok: false, problem }`. Nothing is kept; the console uses it before a provider is added |
 | `/keys/mint`, `/keys/revoke`, `/keys/rotate` | local | `POST { label, models?, expires?, limits? }` writes a new `apiKeys` entry and answers with its key, once; `POST { label }` removes the entry with that label, or for rotate gives it a new key, answered once, and keeps the rest of it (its label, and so its router, scope, limits and usage). An entry that reads its key from `env:NAME` is not rotated here. All take effect at once |
 | `/v1/messages` | local | `POST` a Messages API request: it is served as a chat completion, routed and queued like one, and answered in Messages shapes, streaming included. Text, images, tools and tool results carry over; thinking blocks and cache marks are dropped, and a model's reasoning comes back as a `thinking` block. Errors come in the Messages error shape. See [Messages API clients](#messages-api-clients) |
+| `/v1/embeddings` | local | `POST` passes through to the backend that serves the model, like any other path. A key scoped with `models:` may use it for the names in its scope; any other name answers 403 |
 | `/v1/evict` | local | `POST { model }` drops a resident model off the backend that serves it. `409` while it is answering a request, when it is not resident, or when the backend can only clear everything and holds other models |
 | `/lending` | local | `GET`: every peer with the requests and tokens it ran here (`lent`) and this node ran there (`borrowed`), today and over the 31 days kept, the limits it is held to as `terms` with those of its own named in `own`, `closed`: why it is turned away right now, or `null`, and the same use `byModel` and as tokens `byDay` |
 | `/plugins` | local | `GET`: each plugin's state, kinds, settings, fail-opens and per-stage calls, errors, refusals, skips and p50/p95. `POST {name, paused}`: pause or resume a running plugin until the next restart; a locked plugin is never paused (409) |
@@ -73,15 +74,20 @@ It answers `200` with counts, or `503` when every backend it is watching has
 gone:
 
 ```json
-{"ok":true,"name":"web",
+{"ok":true,"degraded":false,"name":"web",
  "backends":{"total":9,"watched":2,"connected":2},
- "peers":{"total":1,"up":1}}
+ "peers":{"total":1,"up":1},
+ "plugins":{"total":1,"failed":0}}
 ```
 
 `watched` is the backends whose event stream hearth holds open — llama-swap,
 today. That connection is the signal: when the backend dies the stream drops,
 and hearth knows within a reconnect without having asked it anything. `503`
 means every one of them is gone.
+
+`degraded` is true while the node serves with part of it gone: a watched stream
+is down, or a plugin did not start. The status stays `200`, so point an uptime
+monitor at the body as well if a partial outage should page you.
 
 With a [canary](canary.md#canary) configured the body also carries
 `"canary":{"degraded":0}`: how many models are answering, but not with an

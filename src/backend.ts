@@ -46,6 +46,8 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
 export class BackendState {
   private loadedIds: string[] = [];
+  /** When a warm read last answered; 0 for a backend that never has. */
+  private warmReadAt = 0;
   private loadingIds: string[] = [];
   private readonly loadEndedAt = new Map<string, number>();
   private placements = new Map<string, Placement>();
@@ -365,12 +367,15 @@ export class BackendState {
     this.catalogFault = catalog.status === "fulfilled" ? null : catalog.reason instanceof UpstreamError && catalog.reason.status !== undefined ? catalog.reason.status : 0;
 
     if (warm.status === "fulfilled" && warm.value !== null) {
+      this.warmReadAt = Date.now();
       this.setLoaded(warm.value.loaded.filter((m) => this.owns(m)));
       this.setLoading(warm.value.loading.filter((m) => this.owns(m)));
       if (warm.value.placements) this.placements = warm.value.placements;
-    } else {
+    } else if (Date.now() - this.warmReadAt >= STALE_MS) {
       // Missing warm endpoint isn't an error, it just means we never know
       // anything is warm, so the bonus never fires and readyNow stays empty.
+      // One failed read keeps the list: emptied, a neighbour would load on top of these
+      // models. Kept for good, a dead backend would hold its card, since it cannot unload.
       this.loadedIds = [];
     }
 

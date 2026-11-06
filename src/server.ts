@@ -1170,9 +1170,12 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
             // the local backend. This turns that into a fallback instead of a
             // hang. 0 disables it.
             ...(cfg.peerFirstByteMs > 0 ? { headersTimeoutMs: cfg.peerFirstByteMs } : {}),
+            // A peer that goes silent mid-answer is cut as a local backend is.
+            ...(cfg.backendIdleMs > 0 ? { idleTimeoutMs: cfg.backendIdleMs } : {}),
           });
           if (!up.ok) {
             const detail = await up.text();
+            if (up.status === 429) peers.rateCapped(peer.name, decision.theirModel, up.headers["retry-after"]);
             throw new PeerStatusError(peer.name, up.status, detail.slice(0, 200));
           }
           peers.served(peer.name);
@@ -1305,6 +1308,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     models: string[] | null;
     /** A plugin calling back in with the token hearth gave it: no plugin runs on this request. */
     internal?: boolean;
+    /** The request body, when a route already read it to check something before passing it on. */
+    body?: Buffer;
   }
 
   /** Who a route lets in, declared per path rather than re-derived in each handler. */
@@ -1369,8 +1374,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     }
 
     // A plugin's own token: a local caller whose requests no plugin sees, so a hook cannot call itself.
+    // It reaches model calls and nothing else: not the config, keys or control routes.
     const plugin = plugins.internalCaller(bearer(req));
-    if (plugin !== null) return { ...base, peer: null, caller: "plugin:" + plugin, models: null, internal: true };
+    if (plugin !== null) {
+      if (r.scoped !== true && !(r.path === "*" && url.pathname.startsWith("/v1/"))) {
+        refuse(res, 403, "a plugin's token reaches /v1 model calls only", env);
+        return null;
+      }
+      return { ...base, peer: null, caller: "plugin:" + plugin, models: null, internal: true };
+    }
 
     // A live operator session is a full local identity: no scope, so nothing below it can refuse.
     let asLocal = localCaller(req);
@@ -1482,6 +1494,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     // The Messages API, for clients that speak only that; peers borrow over chat completions.
     { path: "/v1/messages", methods: ["POST"], auth: "local", envelope: "openai", scoped: true,
       handler: routeMessages },
+    // Embeddings pass through as before; a scoped key may use them for the names in its scope.
+    { path: "/v1/embeddings", methods: ["POST"], auth: "local", envelope: "openai", scoped: true,
+      handler: routeEmbeddings },
 
     // Login and logout take no credential by definition; cross-origin POSTs are refused above.
     { path: "/login", methods: ["POST"], auth: "open", handler: routeLogin },
@@ -1557,8 +1572,11 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     const watched = local.filter((b) => b.state.watched());
     const connected = watched.filter((b) => b.state.streamingNow());
     const ok = watched.length === 0 || connected.length > 0;
+    const pluginsFailed = plugins.status().filter((p) => p.state === "failed").length;
     return {
       ok,
+      // Still serving, with part of it gone: a stream down, or a plugin that did not start.
+      degraded: connected.length < watched.length || pluginsFailed > 0,
       name: cfg.name,
       backends: {
         total: local.length,
@@ -1569,6 +1587,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         total: cfg.peers.length,
         up: peers.all().filter((p) => p.up).length,
       },
+      plugins: { total: Object.keys(cfg.plugins).length, failed: pluginsFailed },
       // Only with a canary configured, and as a count: this endpoint is unauthenticated
       // and may be bound wide, so it says how many models are out, never which.
       ...(canary ? { canary: { degraded: canary.degradedCount() } } : {}),
@@ -2818,12 +2837,13 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       json(c.res, 429, { error: "too many failed logins — try again in a few minutes" });
       return;
     }
+    // Counted before scrypt yields, or a parallel burst all passes the check above.
+    loginThrottle.note(user, ip, now);
     // An unknown username burns one full scrypt, so response time says nothing about it.
     const ok = user !== "" && secretEq(user, cfg.operator.user)
       ? await verifyPassword(pass, cfg.operator.passHash)
       : await verifyDecoy(pass);
     if (!ok) {
-      loginThrottle.note(user, ip, now);
       log.warn("login.failed", { ip, user: user === "" ? null : user });
       json(c.res, 401, { error: "bad username or password" });
       return;
@@ -2920,6 +2940,29 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     }
   }
 
+  async function routeEmbeddings(c: Call): Promise<void> {
+    if (c.models !== null) {
+      try {
+        c.body = await readBody(c.req, cfg.maxBodyBytes);
+      } catch (e) {
+        fail(c.res, e);
+        return;
+      }
+      let model = "";
+      try {
+        const parsed = JSON.parse(c.body.toString()) as { model?: unknown };
+        if (typeof parsed.model === "string") model = parsed.model;
+      } catch {
+        // Unreadable: refused below as naming no model.
+      }
+      if (model === "" || !inScope(c.models, model, isType)) {
+        fail(c.res, new Refusal(403, model === "" ? "this key needs a request that names a model" : `this key may not run "${model}"`, "permission_error"));
+        return;
+      }
+    }
+    return routePassthrough(c);
+  }
+
   /** Everything not claimed above, proxied to a backend as-is. */
   async function routePassthrough(c: Call): Promise<void> {
     const { req, res, url } = c;
@@ -2931,7 +2974,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     const who = c.caller;
     let body: Buffer | undefined;
     try {
-      body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, cfg.maxBodyBytes);
+      body = c.body ?? (req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, cfg.maxBodyBytes));
     } catch (e) {
       fail(res, e);
       return;

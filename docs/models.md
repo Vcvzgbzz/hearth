@@ -112,6 +112,31 @@ The rules:
   on the seat covers every id that fronts it. Slots belong to the weights, not
   to the name you reached them by.
 
+### A model with its own thinking switch
+
+Some chat templates ignore `reasoning_effort` and are turned off another way,
+most often `chat_template_kwargs: { enable_thinking: false }`. `efforts` on the
+model stamps fields according to the effort a call asks for, so a client that
+only knows `reasoning_effort` still reaches the switch:
+
+```yaml
+models:
+  my-model:
+    backend: swap
+    efforts:
+      none: { chat_template_kwargs: { enable_thinking: false } }
+```
+
+- The level is the one the call ends up with: the id's own `params` first,
+  else the client's `reasoning_effort`. A level with no entry stamps nothing.
+- `efforts` on the seat applies to every id that runs on it here, `follow`
+  ids included while that seat is the one loaded. An id may carry its own
+  `efforts` too; the id's wins over the seat's, and `params` wins over both.
+- The fields are checked like `params`. A seat's `efforts` are not sent to a
+  peer: its template is its own. An id's own `efforts` are, like its `params`:
+  the id means the same thing wherever it lands. Put a template switch on the
+  seat, not on an id that may spill over to a peer.
+
 ## Keeping answers
 
 `cacheMs` on a model keeps each answer for that long. A request that names the
