@@ -45,6 +45,7 @@ as named, so `to: chat-model` inside the flow that takes `chat-model` means
 | `{ fastest: [a, { peer: b }, …] }` | runs wherever it would start soonest, by queue depth and whether the model is loaded. A tie stays with the one listed first |
 | `{ refuse: "why" }` | is answered 503 with that reason |
 | `{ asked: true }` | runs here as the id that was asked for. See [Types](#types) |
+| `{ plugin: name }` | for a request to a plugin's own API, goes to that plugin. A model request passes this step over. See [Plugins on the router](#plugins-on-the-router) |
 
 **A step's `when`** holds when every condition in it does:
 
@@ -322,6 +323,38 @@ flows:
       - to: { model: my-model }
         plugins: [memory]
 ```
+
+### Plugins on the router
+
+A request to the API a plugin serves (`/plugins/<name>/*`) is asked of the caller's router the way a model
+is: as `MCP:<name>` for a plugin that speaks MCP and `API:<name>` for any other, so `MCP` and `API` are
+types and the plugin is the variant. The steps decide whether it goes on, and where:
+
+```yaml
+routers:
+  partners:
+    flows:
+      tools:
+        inputs: [MCP, API]
+        steps:
+          - when: { variant: [search] }
+            to: { asked: true }              # the plugin it names
+          - when: { variant: [web-search] }
+            to: { plugin: search }           # a name of the router's own: /plugins/web-search/ goes to search
+          - to: { refuse: "only search is open to partners" }
+      rest: { inputs: ["*"], steps: [{ to: { asked: true } }] }
+```
+
+- A name that is no plugin's own is asked as `API:<name>`, then `MCP:<name>`, so a router can give its callers
+  names of its own and decide which plugin answers each; a request by a plugin's own name is then the router's
+  to refuse, like any other.
+- `{ asked: true }` lets it through to the plugin it names, and `{ plugin: name }` sends it to another;
+  `refuse` turns it away (403, with the step's words). A step that sends to a model or a peer is passed over.
+- A model request passes over a step that names a plugin, so such a step cannot be a flow's last.
+- Every condition a step can test applies: the caller, a header, the time of day.
+- With no flow for `MCP` or `API`, a router's flow for every other name decides, as it does for a name no
+  rule takes: one that runs it as itself lets every plugin through, and one that refuses refuses every plugin
+  until a flow for `MCP` or `API` is added.
 
 ### Actions
 
