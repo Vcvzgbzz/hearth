@@ -9,6 +9,7 @@ import { KINDS } from "./kinds.js";
 import type { Logger } from "./log.js";
 import { mergeStats, type ModelStats, type Need } from "./stats.js";
 import { ResourceArbiter } from "./resources.js";
+import { KeyTally } from "./keytally.js";
 import { Scheduler } from "./scheduler.js";
 import { send } from "./upstream.js";
 
@@ -54,6 +55,9 @@ export interface ModelCapacity {
 
 export class BackendPool {
   private readonly slots: BackendSlot[] = [];
+  /** What each key is running here, across every backend. */
+  readonly tally = new KeyTally();
+  private kickQueued = false;
   private readonly byName = new Map<string, BackendSlot>();
   /** Complained-about ambiguous ids, so a duplicate warns once and not per request. */
   private readonly warned = new Set<string>();
@@ -85,6 +89,12 @@ export class BackendPool {
     private readonly resumeAfterMs = RESIDENT_RESUME_MS,
   ) {
     this.arbiter.onRelease(() => this.scheduleResume());
+    // A key's waiter may be on another backend. One microtask, so a burst of endings looks once.
+    this.tally.onEnded(() => {
+      if (this.kickQueued) return;
+      this.kickQueued = true;
+      queueMicrotask(() => { this.kickQueued = false; this.kickAll(); });
+    });
     for (const b of cfg.backends) {
       const state = new BackendState(b.url, b.kind, log, this.mineOn(b), backendAuth(b.format, b.key, b.headers));
       const slot: BackendSlot = {
@@ -120,6 +130,7 @@ export class BackendPool {
           // Ask overlapping backends to unload before we load; weights stay resident after a run.
           evict: !b.resident && this.arbitrated(b.resources).length > 0 ? () => this.evictFor(b) : undefined,
           heldOff: (lane) => this.heldOff(b, lane),
+          tally: this.tally,
         }),
       };
       this.slots.push(slot);
@@ -681,6 +692,16 @@ export class BackendPool {
       for (const [lane, n] of Object.entries(c.queued)) queued[lane] = (queued[lane] ?? 0) + n;
     }
     return { slots, free, running, offbox, queued, resident: this.loaded()[0] ?? null };
+  }
+
+  /** Give every backend's scheduler these lanes and order settings. Pair with `kickAll`. */
+  retune(s: HearthConfig["scheduler"]): void {
+    for (const slot of this.slots) slot.scheduler.retune({ lanes: s.lanes, agePerSecond: s.agePerSecond, warmBonus: s.warmBonus, maxPerLane: s.maxPerLane });
+  }
+
+  /** Look at every queue again: something outside them changed what may start. */
+  kickAll(): void {
+    for (const s of this.slots) s.scheduler.kick();
   }
 
   /** Every job in flight anywhere, tagged with the backend running it. */

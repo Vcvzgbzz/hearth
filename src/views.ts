@@ -3,9 +3,10 @@
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
 import { createHash } from "node:crypto";
+import type { ReachType } from "./reach.js";
 import type { Row } from "./usage.js";
 import { CONSOLE_HTML } from "./ui.js";
-import type { HearthConfig, KeyRule, LendTerms } from "./config.js";
+import { DEFAULT_ROUTER, WARM_LANE, laneDefaults, type HearthConfig, type KeyRule, type LendTerms } from "./config.js";
 import { flowsOf } from "./route.js";
 import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
@@ -57,6 +58,15 @@ export interface KeyInfo {
   month: Spent;
   /** When it expires and what it is limited to; null for a bare key. */
   rule: KeyRule | null;
+  /** The rulebook it goes by, and everything that rulebook can land on. */
+  router: string;
+  reach: ReachType[];
+  /** The lane it names; null leaves it to the request. */
+  lane: string | null;
+  /** Its use by the id each job ran as, today (UTC) and over the days that are kept. */
+  byModel: { today: Record<string, Row>; month: Record<string, Row> };
+  /** Its jobs in flight right now, by model. */
+  now: Record<string, { running: number; waiting: number }>;
 }
 
 /** A caller that is not a key: this machine with none, or a peer. */
@@ -177,6 +187,30 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       flowHits: flowHits(),
       // Every api key, by label and scope, with when it last authenticated here.
       keys: keys(),
+      keySettings: {
+        routers: [DEFAULT_ROUTER, ...Object.keys(cfg.routers)],
+        lanes: Object.entries(cfg.scheduler.lanes).filter(([name]) => name !== WARM_LANE).sort((a, b) => a[1].priority - b[1].priority)
+          .map(([name, l]) => ({ name, priority: l.priority, ...(l.concurrency !== undefined ? { ceiling: l.concurrency } : {}) })),
+      },
+      // Every lane and the order settings, for the Scheduler page.
+      scheduler: {
+        lanes: Object.entries(cfg.scheduler.lanes)
+          .sort((a, b) => a[1].priority - b[1].priority)
+          .map(([name, l]) => ({
+            name,
+            priority: l.priority,
+            ...(l.concurrency !== undefined ? { ceiling: l.concurrency } : {}),
+            ...(l.maxWaitMs !== undefined ? { maxWaitMs: l.maxWaitMs } : {}),
+            ...(name === WARM_LANE ? { builtIn: true as const } : {}),
+          })),
+        order: {
+          agePerSecond: cfg.scheduler.agePerSecond,
+          warmBonus: cfg.scheduler.warmBonus,
+          maxPerLane: cfg.scheduler.maxPerLane,
+          maxPerCaller: cfg.scheduler.maxPerCaller,
+        },
+        defaults: laneDefaults(cfg),
+      },
       others: others(),
       ledger: ledger(),
       lendDefaults: lendDefaults(),

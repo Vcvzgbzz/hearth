@@ -120,7 +120,8 @@ Every chat answer carries `x-hearth-model`, the id the request ran as, since
 one name may run as several. `modelHeader: false` leaves it off, for a node
 whose callers should not see what is behind a name.
 
-A step may set the `lane` the request queues in, which wins over the target's
+A key's `lane` takes the place of the one a request asks for. A step may set
+the `lane` the request queues in, which wins over the target's
 own and the client's, and `params` to stamp on the request; the target model's
 own `params` still apply over those.
 

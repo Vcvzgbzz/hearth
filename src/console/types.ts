@@ -153,8 +153,18 @@ export interface Job {
   state: "running" | "queued";
   position: number;
   since: number;
+  /** Set on a queued job while its key is at its limit. */
+  held?: "key";
+  /** Set on a queued job that waits; undefined for running jobs and queued jobs with no blocker. */
+  why?: WaitReason;
   offbox?: boolean;
 }
+
+/** hearth.yaml as `GET /config` serves it: the text, its hash, and the parsed document when it parses. */
+export type File = { text: string; hash: string; doc: Record<string, unknown> | null };
+
+/** Why a queued job is waiting, in priority order. */
+export type WaitReason = "key" | "card" | "hold" | "lane" | "model" | "pool" | "share" | "slots";
 
 export interface Capacity {
   free: number;
@@ -275,6 +285,21 @@ export interface Used { requests: number; failed: number; in: number; out: numbe
 export interface ModelLimits { tokensPerDay: number; maxConcurrent: number; rateLimit: number }
 
 /** What one peer may take: the models it may run, and how much of each; `limits` is each model's own. */
+/** What one model is held to for one key. */
+export interface KeyModelRule { maxConcurrent?: number; tokensPerDay?: number; requestsPerMinute?: number }
+
+/** One place a key's rulebook can land: a model, here or on peers, or a plugin. */
+export interface ReachEnd { id: string; plugin?: true; peers: string[]; here: boolean; /** Tokens are counted here. */ chat: boolean; /** Where it lands whatever the key says; null takes the key's, `varies` where its rules differ. */ lane: string | null }
+
+/** One key, as the keys page draws it. */
+export interface KeyRow {
+  label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used;
+  rule?: { expires: number | null; requestsPerMinute: number; tokensPerDay: number; dollarsPerDay?: number; lane?: string | null; maxConcurrent?: number; models?: Record<string, KeyModelRule> } | null;
+  router: string; reach: { type: string; ends: ReachEnd[]; /** A name no rule takes runs as itself. */ asAsked?: true }[]; lane: string | null;
+  byModel: { today: Record<string, Used>; month: Record<string, Used> };
+  now: Record<string, { running: number; waiting: number }>;
+}
+
 export interface LendTerms extends ModelLimits { models: string[]; off?: boolean; limits?: Record<string, Partial<ModelLimits>> }
 
 /** A model's limits as the peer lending it states them, with how much of today this node has used. */
@@ -330,6 +355,24 @@ export interface PluginsView {
   pending: { name: string; change: "added" | "changed" | "removed" }[];
 }
 
+/** Where a request that names no lane lands. Repeated here because the page does not import server code. */
+export interface LaneDefaults {
+  /** The first declared lane: what an empty flow step runs in. */
+  first: string;
+  /** `lending.lane`, else the lowest-priority lane. */
+  peers: string;
+  /** What a backend route that names no lane runs in: the lowest-priority lane. */
+  routes: string;
+}
+
+/** The lane and order settings the Scheduler page edits, with where a request that names no lane lands. */
+export interface SchedulerView {
+  /** Sorted by priority, lowest number first. `warm` is included and marked builtIn. */
+  lanes: { name: string; priority: number; ceiling?: number; maxWaitMs?: number; builtIn?: true }[];
+  order: { agePerSecond: number; warmBonus: number; maxPerLane: number; maxPerCaller: number };
+  defaults: LaneDefaults;
+}
+
 export interface UiData {
   /** Which console the node serves now; the page reloads when it stops being the one it was loaded from. */
   build?: string;
@@ -367,7 +410,9 @@ export interface UiData {
   /** The canary's verdict per model. Absent only on an older server's payload. */
   canary?: Canary;
   /** Every api key: its label (or hash where unlabeled), its model scope, and the last time it spoke here. */
-  keys?: { label: string; id: string; models: string[] | null; lastSeen: number | null; today?: Used; month?: Used; rule?: { expires: number | null; requestsPerMinute: number; tokensPerDay: number; dollarsPerDay?: number } | null }[];
+  keys?: KeyRow[];
+  /** What a key can be set to: the rulebooks there are, and the lanes by priority. */
+  keySettings: { routers: string[]; lanes: { name: string; priority: number; ceiling?: number }[] };
   /** Callers that are not keys (this machine with none, peers) and what they used. */
   others?: { caller: string; today: Used; month: Used }[];
   /** Each peer's lines in the ledger: tokens it ran here, tokens this node ran there, and why it is turned away now, if it is. */
@@ -382,4 +427,6 @@ export interface UiData {
   recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }[];
   /** Plugins, for the Plugins page and the Routing map. Absent on an older server's payload. */
   plugins?: PluginsView;
+  /** The lanes, the order settings and the lane defaults, for the Scheduler page. */
+  scheduler: SchedulerView;
 }

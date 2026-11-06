@@ -53,6 +53,23 @@ const loadYaml = (): Record<string, unknown> => ({ name: "n", backends: { main: 
 bad('{"key":"k","label":"a","expires":"next week"}', /expires/);
 bad('{"key":"k","label":"a","limits":{"requestsPerMinute":-1}}', /requestsPerMinute/);
 bad('{"key":"k","label":"a","limits":{"perHour":5}}', /perHour/);
+bad('{"key":"k","label":"a","limits":{"models":{"":{"maxConcurrent":1}}}}', /limits\.models/);
+bad('{"key":"k","label":"a","limits":{"models":{"  ":{"maxConcurrent":1}}}}', /limits\.models/);
+
+// A key's lane, its jobs at once, and a model's own limits.
+const ruleFor = (entry: unknown) => parseConfig({ ...loadYaml(), apiKeys: [entry] }).apiKeyRules[0]!;
+const full = ruleFor({ key: "k", label: "a", lane: "batch", limits: { maxConcurrent: 6, models: { "my-model:latest": { maxConcurrent: 2, tokensPerDay: 100, requestsPerMinute: 5 } } } });
+assert.equal(full.lane, "batch");
+assert.equal(full.maxConcurrent, 6);
+assert.deepEqual(full.models, { "my-model:latest": { maxConcurrent: 2, tokensPerDay: 100, requestsPerMinute: 5 } });
+const plain = ruleFor({ key: "k", label: "a" });
+assert.deepEqual([plain.lane, plain.maxConcurrent, plain.models], [null, 0, {}], "a key that names none of them is held to none of them");
+assert.deepEqual(ruleFor({ key: "k", label: "a", limits: { models: { gone: { tokensPerDay: 5 } } } }).models, { gone: { tokensPerDay: 5 } }, "a limit on a model no longer here loads: a router can change under it");
+bad('{"key":"k","label":"a","lane":"nope"}', /apiKeys\[0\]\.lane.*nope.*chat, batch/);
+bad('{"key":"k","label":"a","limits":{"maxConcurrent":0}}', /apiKeys\[0\]\.limits\.maxConcurrent/);
+bad('{"key":"k","label":"a","limits":{"maxConcurrent":1.5}}', /apiKeys\[0\]\.limits\.maxConcurrent/);
+bad('{"key":"k","label":"a","limits":{"models":{"m":{"tokensPerDay":-1}}}}', /apiKeys\[0\]\.limits\.models\.m\.tokensPerDay/);
+bad('{"key":"k","label":"a","limits":{"models":{"m":{"perHour":5}}}}', /perHour/);
 
 const node = createNode(loadConfig(cfgPath), silentLogger);
 node.start();
@@ -106,4 +123,141 @@ assert.ok(!readFileSync(cfgPath, "utf8").includes("label: bad"), "and nothing ma
 
 await node.close();
 backend.close();
+
+// --- a key's lane and jobs at once, on a backend that answers when told to -----------
+const gates: (() => void)[] = [];
+const slow = createServer((req, res) => {
+  req.resume();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  if (req.url === "/v1/models") { res.end(JSON.stringify({ data: [] })); return; }
+  gates.push(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "hi" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } })));
+});
+await new Promise<void>((r) => slow.listen(0, "127.0.0.1", r));
+const slowUrl = `http://127.0.0.1:${(slow.address() as AddressInfo).port}`;
+const heldPath = join(mkdtempSync(join(tmpdir(), "hearth-held-")), "hearth.yaml");
+writeFileSync(heldPath, `name: held-under-test
+scheduler:
+  maxPerCaller: 1
+  lanes: {chat: {priority: 0}, batch: {priority: 100}}
+backends:
+  main:
+    url: ${slowUrl}
+    kind: none
+    serves: [one, pinned, free, stepped-to]
+    concurrency: 8
+    routes:
+      - {path: /v1/rank, model: ranker, lane: chat}
+  second:
+    url: ${slowUrl}
+    kind: none
+    serves: [two]
+    concurrency: 8
+models:
+  pinned: {lane: chat}
+flows:
+  stepped: {inputs: [stepped], steps: [{to: stepped-to, lane: chat}]}
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+apiKeys:
+  - {key: boss-secret, label: boss}
+  - {key: uncapped-secret, label: uncapped, limits: {maxConcurrent: 3}}
+  - {key: single-secret, label: single, limits: {maxConcurrent: 1}}
+  - {key: bulk-secret, label: bulk, lane: batch}
+  - {key: thrifty-secret, label: thrifty, limits: {models: {one: {tokensPerDay: 20, requestsPerMinute: 3}, two: {maxConcurrent: 1}}}}
+  - {key: ranker-secret, label: rankers, lane: batch, limits: {maxConcurrent: 1}}
+`);
+const heldNode = createNode(loadConfig(heldPath), silentLogger);
+heldNode.start();
+await new Promise<void>((r) => heldNode.server.listen(0, "127.0.0.1", r));
+const heldUrl = `http://127.0.0.1:${(heldNode.server.address() as AddressInfo).port}`;
+const ask = (key: string, model: string, extra: Record<string, unknown> = {}) =>
+  fetch(`${heldUrl}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }], ...extra }) });
+const queue = async () => ((await (await fetch(`${heldUrl}/queue`, { headers: { Authorization: "Bearer boss-secret" } })).json()) as { jobs: { caller: string; lane: string; model: string; state: string; held?: string }[] }).jobs;
+const settle = () => new Promise<void>((r) => setTimeout(r, 40));
+const open = async (n: number) => { for (let i = 0; i < 100 && gates.length < n; i++) await settle(); assert.equal(gates.length, n); };
+const letGo = async () => { while (gates.length > 0) gates.shift()!(); await settle(); };
+
+// A key over its jobs at once waits, on any backend, and is answered.
+const waits = [ask("single-secret", "one"), ask("single-secret", "two")];
+await open(1);
+await settle();
+assert.deepEqual((await queue()).filter((j) => j.state === "queued").map((j) => [j.caller, j.held]), [["key:single", "key"]], "held across backends, and the queue says why");
+const row = async (label: string) => ((await (await fetch(`${heldUrl}/ui/data`, { headers: { Authorization: "Bearer boss-secret" } })).json()) as { keys: { label: string; router: string; lane: string | null; now: Record<string, { running: number; waiting: number }>; reach: { type: string; ends: { id: string }[] }[]; byModel: { today: Record<string, { in: number }> } }[] }).keys.find((k) => k.label === label)!;
+const single = await row("single");
+assert.equal(single.router, "default");
+assert.equal(single.lane, null);
+assert.deepEqual(single.reach.map((t) => t.type), ["stepped", "anything else"], "what its rulebook names, and that the rest runs as asked");
+const busy = Object.values(single.now);
+assert.deepEqual([busy.reduce((n, m) => n + m.running, 0), busy.reduce((n, m) => n + m.waiting, 0)], [1, 1], "what the page shows as running and waiting; either may have started first");
+await letGo();
+await open(1);
+await letGo();
+assert.deepEqual((await Promise.all(waits)).map((r) => r.status), [200, 200], "waiting is not a refusal");
+
+// scheduler.maxPerCaller refuses, unless the key says how many it may run.
+const capped = [ask("boss-secret", "one"), ask("uncapped-secret", "one")];
+await open(2);
+const overCap = await ask("boss-secret", "one");
+assert.equal(overCap.status, 429, "a key with no limit of its own still meets the node's cap");
+assert.equal((await Promise.race([ask("uncapped-secret", "one").then((r) => r.status), settle().then(() => "still running")])), "still running", "a key with its own limit does not");
+await open(3);
+await letGo();
+await Promise.all(capped);
+
+// A key's lane sits under a model's or a step's own, and over the request's.
+const lanesAre = async (key: string, model: string, extra?: Record<string, unknown>) => {
+  const r = ask(key, model, extra);
+  await open(1);
+  const lane = (await queue()).find((j) => j.state === "running")!.lane;
+  await letGo();
+  await r;
+  return lane;
+};
+assert.equal(await lanesAre("bulk-secret", "free"), "batch", "the key's lane");
+assert.equal((await row("bulk")).lane, "batch");
+assert.equal((await row("bulk")).byModel.today.free!.in, 10, "its use, model by model");
+assert.equal(await lanesAre("bulk-secret", "free", { lane: "chat" }), "batch", "a key's lane beats the request's");
+assert.equal(await lanesAre("bulk-secret", "pinned"), "chat", "a model's own lane beats the key's");
+assert.equal(await lanesAre("bulk-secret", "stepped"), "chat", "and so does a step's");
+assert.equal(await lanesAre("boss-secret", "free", { lane: "batch" }), "batch", "a key with no lane leaves it to the request");
+
+// A route keeps its lane under a key with one, and the key's jobs at once holds there too.
+const rank = () => fetch(`${heldUrl}/v1/rank`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer ranker-secret" }, body: "{}" });
+const ranks = [rank(), rank()];
+await open(1);
+await settle();
+const ranking = await queue();
+assert.equal(ranking.find((j) => j.state === "running")!.lane, "chat", "a route's lane beats the key's");
+assert.equal(ranking.find((j) => j.state === "queued")?.held, "key", "and its limit holds on a route as well");
+await letGo();
+await open(1);
+await letGo();
+await Promise.all(ranks);
+
+// A model's own limits: tokens and requests refuse, and name the model.
+const once = async (model: string) => { const r = ask("thrifty-secret", model); await open(1); await letGo(); return (await r).status; };
+assert.equal(await once("one"), 200);
+assert.equal(await once("one"), 200);
+const noTokens = await ask("thrifty-secret", "one");
+assert.equal(noTokens.status, 429);
+assert.match(await noTokens.text(), /20 tokens of one for today/);
+assert.equal(await once("two"), 200, "one model's limit is not another's");
+
+// A change frees a waiter at once, and a lane a key names cannot be taken away.
+const patch = (ops: unknown[]) => fetch(`${heldUrl}/config`, { method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer boss-secret" }, body: JSON.stringify({ ops }) });
+const first = ask("single-secret", "one");
+await open(1);
+const second = ask("single-secret", "one");
+await settle();
+assert.equal(gates.length, 1);
+const raised = await patch([{ path: ["apiKeys", 2, "limits", "maxConcurrent"], value: 2 }]);
+assert.equal(raised.status, 200);
+await open(2);
+await letGo();
+await Promise.all([first, second]);
+const orphan = await patch([{ path: ["scheduler", "lanes", "batch"], delete: true }]);
+assert.ok(orphan.status >= 400 && orphan.status < 500);
+assert.match(await orphan.text(), /apiKeys\[\d\]\.lane of key .{0,2}bulk/, "the refusal names the key");
+
+await heldNode.close();
+slow.close();
 console.log("key-limits.test.ts ok");

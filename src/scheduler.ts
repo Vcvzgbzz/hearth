@@ -6,10 +6,12 @@
  * above it only admits more of the model already running, so a swap stays serialized.
  * A lane's `concurrency` caps how many slots that lane holds at once, and a job blocked
  * only by it is passed over, since the slots it may not take are free to the other lanes.
+ * A job whose key is at its limit is passed over the same way, across every backend.
  * `offbox` jobs hold no slot but still count against the caller's cap.
  */
 import { randomUUID } from "node:crypto";
 
+import type { KeyLimit, KeyTally } from "./keytally.js";
 import type { ResourceArbiter } from "./resources.js";
 
 export interface LaneConfig {
@@ -22,12 +24,10 @@ export interface LaneConfig {
   maxWaitMs?: number;
 }
 
-export interface SchedulerOptions {
+/** The settings that change while the scheduler runs. */
+export interface Tuning {
   /** Lanes and their base priority. */
   lanes: Record<string, LaneConfig>;
-  /** Jobs allowed to hold the backend at once. One per GPU is the honest
-   *  answer. Raise it only if your backend really does serve in parallel. */
-  concurrency?: number;
   /** Priority earned per second of waiting. Also the starvation bound: lanes
    *  100 apart at a weight of 1 means the low one overtakes after 100s. */
   agePerSecond?: number;
@@ -37,6 +37,12 @@ export interface SchedulerOptions {
   /** Refuse work rather than take an unbounded backlog. Someone told "full" can
    *  retry. Someone queued behind 400 jobs just waits for a timeout. */
   maxPerLane?: number;
+}
+
+export interface SchedulerOptions extends Tuning {
+  /** Jobs allowed to hold the backend at once. One per GPU is the honest
+   *  answer. Raise it only if your backend really does serve in parallel. */
+  concurrency?: number;
   /** What's loaded right now, for display in capacity(). Return null if you
    *  don't know. */
   resident?: () => string | null;
@@ -61,6 +67,8 @@ export interface SchedulerOptions {
   evict?: () => Promise<void>;
   /** Is this lane kept off our hardware right now by a neighbour's `hold`? Its jobs stay queued and are passed over. */
   heldOff?: (lane: string) => boolean;
+  /** What each key is running across every backend, shared by all their schedulers. */
+  tally?: KeyTally;
 }
 
 export interface JobSpec {
@@ -93,6 +101,8 @@ export interface JobSpec {
   claimHardware?: boolean;
   /** Live position while waiting. 0 means next. */
   onPosition?: (position: number) => void;
+  /** The key's limit on jobs at once. Over it the job waits, and others pass it. Read each time, so a change applies to jobs already waiting. */
+  keyLimit?: () => KeyLimit;
 }
 
 /** How a status surface sees a job. */
@@ -109,17 +119,26 @@ export interface JobView {
   offbox: boolean;
   /** Set only on off-box jobs. */
   peer?: string;
+  /** Set on a queued job while its key is at its limit. */
+  held?: "key";
+  /** Set on a queued job that waits; undefined for running jobs and queued jobs with no blocker. */
+  why?: WaitReason;
 }
+
+/** Why a queued job is waiting, in priority order. */
+export type WaitReason = "key" | "card" | "hold" | "lane" | "model" | "pool" | "share" | "slots";
 
 export class QueueFullError extends Error {
   constructor(
-    public readonly reason: "caller_cap" | "lane_full",
+    public readonly reason: "caller_cap" | "lane_full" | "key_full",
     public readonly lane: string,
   ) {
     super(
       reason === "caller_cap"
         ? `too many concurrent jobs in the ${lane} lane`
-        : `the ${lane} queue is full`,
+        : reason === "key_full"
+          ? `this key's queue is full in the ${lane} lane`
+          : `the ${lane} queue is full`,
     );
     this.name = "QueueFullError";
   }
@@ -160,6 +179,7 @@ interface Job<T = unknown> {
   reject: (e: unknown) => void;
   onPosition?: (position: number) => void;
   lastPosition: number;
+  keyLimit?: () => KeyLimit;
   detach?: () => void;
   waitTimer?: ReturnType<typeof setTimeout>;
 }
@@ -172,11 +192,11 @@ const DEFAULTS = {
 };
 
 export class Scheduler {
-  private readonly lanes: Record<string, LaneConfig>;
+  private lanes!: Record<string, LaneConfig>;
   private readonly concurrency: number;
-  private readonly agePerSecond: number;
-  private readonly warmBonusValue: number;
-  private readonly maxPerLane: number;
+  private agePerSecond!: number;
+  private warmBonusValue!: number;
+  private maxPerLane!: number;
   private readonly resident: () => string | null;
   private readonly isWarm: (model: string) => boolean;
   private readonly slotsOf: (model: string) => number | null;
@@ -193,6 +213,7 @@ export class Scheduler {
   private readonly arbiter?: ResourceArbiter;
   private readonly evict?: () => Promise<void>;
   private readonly heldOff?: (lane: string) => boolean;
+  private readonly tally?: KeyTally;
 
   private readonly queued: Job[] = [];
   private readonly running = new Set<Job>();
@@ -203,11 +224,8 @@ export class Scheduler {
   private preparing: Promise<void> | null = null;
 
   constructor(opts: SchedulerOptions) {
-    this.lanes = opts.lanes;
+    this.retune(opts);
     this.concurrency = opts.concurrency ?? DEFAULTS.concurrency;
-    this.agePerSecond = opts.agePerSecond ?? DEFAULTS.agePerSecond;
-    this.warmBonusValue = opts.warmBonus ?? DEFAULTS.warmBonus;
-    this.maxPerLane = opts.maxPerLane ?? DEFAULTS.maxPerLane;
     this.resident = opts.resident ?? (() => null);
     this.isWarm = opts.warm ?? ((m) => m === this.resident());
     this.slotsOf = opts.slots ?? (() => null);
@@ -221,8 +239,21 @@ export class Scheduler {
     this.arbiter = this.resources.length > 0 ? opts.arbiter : undefined;
     this.evict = opts.evict;
     this.heldOff = opts.heldOff;
+    this.tally = opts.tally;
     // A queue blocked on someone else's hardware wakes when it is released.
     this.arbiter?.onRelease(() => this.pump());
+  }
+
+  /**
+   * Replace the lanes and the order and queue settings, with the constructor's defaults for any left out.
+   * Nothing running is stopped and nothing is pumped: call `kick` after. A lane's `maxWaitMs` and
+   * `maxPerLane` bind jobs submitted from now on.
+   */
+  retune(t: Tuning): void {
+    this.lanes = t.lanes;
+    this.agePerSecond = t.agePerSecond ?? DEFAULTS.agePerSecond;
+    this.warmBonusValue = t.warmBonus ?? DEFAULTS.warmBonus;
+    this.maxPerLane = t.maxPerLane ?? DEFAULTS.maxPerLane;
   }
 
   /** Lane priority, or something large for an unknown lane, so a typo sorts to
@@ -238,13 +269,20 @@ export class Scheduler {
     return s;
   }
 
-  /** How many go before this one: everything running, plus anything queued that
-   *  outranks it. */
-  private positionOf(job: Job, now: number, resident: string | null): number {
+  /** The queued jobs whose key is at its limit, read once per pass so a pass costs one key read per job. */
+  private keyHeld(): Set<Job> {
+    const held = new Set<Job>();
+    for (const j of this.queued) if (this.keyFull(j)) held.add(j);
+    return held;
+  }
+
+  /** How many go before this one: everything running, plus every queued job that can actually take a turn ahead of it. */
+  private positionOf(job: Job, now: number, resident: string | null, keyHeld: Set<Job>): number {
     const mine = this.score(job, now, resident);
     let ahead = this.running.size;
+    // A job its key holds is passed over, so it holds no place in line.
     for (const j of this.queued) {
-      if (j !== job && this.score(j, now, resident) < mine) ahead++;
+      if (j !== job && this.score(j, now, resident) < mine && !keyHeld.has(j)) ahead++;
     }
     return ahead;
   }
@@ -277,16 +315,27 @@ export class Scheduler {
     });
     for (const j of this.running) out.push(running(j));
     for (const j of this.offbox) out.push(running(j));
+    // One walk per queued job; `key` is first, so a "key" reason is the same thing as a held job.
+    const reasons = new Map<Job, WaitReason | null>();
+    const keyHeld = new Set<Job>();
     for (const j of this.queued) {
+      const reason = this.blockedBy(j, false);
+      reasons.set(j, reason);
+      if (reason === "key") keyHeld.add(j);
+    }
+    for (const j of this.queued) {
+      const reason = reasons.get(j) ?? null;
       out.push({
         id: j.id,
         lane: j.lane,
         model: j.model,
         caller: j.caller,
         state: "queued",
-        position: this.positionOf(j, now, resident),
+        position: this.positionOf(j, now, resident, keyHeld),
         since: j.enqueuedAt,
         offbox: false,
+        ...(reason === "key" ? { held: "key" as const } : {}),
+        ...(reason !== null ? { why: reason } : {}),
       });
     }
     return out;
@@ -319,7 +368,7 @@ export class Scheduler {
     if (!this.arbiter) return;
     let oldest = Infinity;
     if (!this.holding) {
-      for (const j of this.queued) if (!this.held(j) && j.enqueuedAt < oldest) oldest = j.enqueuedAt;
+      for (const j of this.queued) if (!this.held(j) && !this.keyFull(j) && j.enqueuedAt < oldest) oldest = j.enqueuedAt;
     }
     this.arbiter.claim(this, this.resources, oldest === Infinity ? null : oldest);
   }
@@ -345,7 +394,8 @@ export class Scheduler {
   /** Nothing is running: keep the hardware while we have work, unless our turn is up and someone waits. */
   private settleHold(): void {
     if (!this.arbiter || !this.holding) return;
-    if (this.queued.length === 0 || this.arbiter.owed(this.resources, this)) this.dropHold();
+    // Jobs their keys hold cannot use the card, so it does not wait for them.
+    if (this.queued.every((j) => this.keyFull(j)) || this.arbiter.owed(this.resources, this)) this.dropHold();
   }
 
   /** Would this job overflow its model's shared pool? A job alone always fits. */
@@ -372,27 +422,42 @@ export class Scheduler {
     return held >= ceiling;
   }
 
+  /** Is this job's key at its limit? It is passed over, and it is no load on anyone: it claims no card and fills no lane. */
+  private keyFull(job: Pick<Job, "caller" | "model" | "keyLimit">): boolean {
+    return this.tally !== undefined && job.keyLimit !== undefined && this.tally.full(job.caller, job.model, job.keyLimit());
+  }
+
   /**
-   * May this job start now? Its lane's ceiling, its model's, then the backend's; above
-   * `concurrency` only alongside jobs of the same model.
+   * May this job start now? Answered by the same walk that names its blocker, so a job
+   * that is shown a reason is exactly a job that is not admitted.
    */
   private canAdmit(job: Job): boolean {
-    // Hardware first; our own hold never blocks us. A job that claims nothing
-    // (a canary probe) is not gated on it either — it is not going to use it.
-    if (job.claimHardware && !this.hardwareFree()) return false;
-    if (this.held(job)) return false;
-    if (this.laneFull(job)) return false;
-    if (this.heldBy(job.model) >= this.limitFor(job.model)) return false;
-    if (this.overPool(job)) return false;
-    if (this.tooSoonToShare(job)) return false;
-    if (this.running.size < this.concurrency) return true;
-    const wire = this.wireOf(job.model);
-    for (const j of this.running) if (this.wireOf(j.model) !== wire) return false;
-    return true;
+    return this.blockedBy(job, true) === null;
+  }
+
+  /**
+   * Why this job is blocked, in priority order; null if it may start.
+   * When `arm` is true, tooSoonToShare arms its timer.
+   */
+  private blockedBy(job: Job, arm: boolean): WaitReason | null {
+    if (this.keyFull(job)) return "key";
+    if (job.claimHardware && !this.hardwareFree()) return "card";
+    if (this.held(job)) return "hold";
+    if (this.laneFull(job)) return "lane";
+    // A model with no ceiling of its own is full on the backend's count, which is what the slots are.
+    if (this.heldBy(job.model) >= this.limitFor(job.model)) return this.slotsOf(job.model) === null ? "slots" : "model";
+    if (this.overPool(job)) return "pool";
+    if (this.tooSoonToShare(job, arm)) return "share";
+    // At its ceiling, a backend only takes more of the model already running.
+    if (this.running.size >= this.concurrency) {
+      const wire = this.wireOf(job.model);
+      for (const j of this.running) if (this.wireOf(j.model) !== wire) return "slots";
+    }
+    return null;
   }
 
   /** Would joining now cut into a running turn's head start? Arms a wake-up for when the youngest crosses it. */
-  private tooSoonToShare(job: Job): boolean {
+  private tooSoonToShare(job: Job, arm: boolean): boolean {
     if (this.running.size === 0) return false;
     const share = this.shareAfter(job.model);
     if (share <= 0) return false;
@@ -400,7 +465,7 @@ export class Scheduler {
     for (const j of this.running) youngest = Math.max(youngest, j.startedAt ?? 0);
     const wait = youngest + share - Date.now();
     if (wait <= 0) return false;
-    if (!this.shareTimer) {
+    if (arm && !this.shareTimer) {
       this.shareTimer = setTimeout(() => { this.shareTimer = null; this.pump(); }, wait + 1);
       this.shareTimer.unref?.();
     }
@@ -464,7 +529,7 @@ export class Scheduler {
   } {
     const queued: Record<string, number> = {};
     for (const lane of Object.keys(this.lanes)) queued[lane] = 0;
-    for (const j of this.queued) queued[j.lane] = (queued[j.lane] ?? 0) + 1;
+    for (const j of this.queued) if (!this.keyFull(j)) queued[j.lane] = (queued[j.lane] ?? 0) + 1;
     // No free slots while another backend holds our hardware: peers score us on this number.
     const free = this.hardwareFree() ? Math.max(0, this.concurrency - this.running.size) : 0;
     return {
@@ -489,8 +554,9 @@ export class Scheduler {
   private sync(): void {
     const now = Date.now();
     const resident = this.resident();
+    const keyHeld = this.keyHeld();
     for (const j of this.queued) {
-      const pos = this.positionOf(j, now, resident);
+      const pos = this.positionOf(j, now, resident, keyHeld);
       if (pos !== j.lastPosition) {
         j.lastPosition = pos;
         j.onPosition?.(pos);
@@ -549,7 +615,7 @@ export class Scheduler {
       if (!best) return null;
       if (this.canAdmit(best)) return best;
       const ownCeiling =
-        this.held(best) || this.laneFull(best) || (this.coresident && this.heldBy(best.model) >= this.limitFor(best.model));
+        this.held(best) || this.laneFull(best) || this.keyFull(best) || (this.coresident && this.heldBy(best.model) >= this.limitFor(best.model));
       if (!ownCeiling) return null;
       passed.add(best);
     }
@@ -586,14 +652,17 @@ export class Scheduler {
         this.beginPrepare();
       }
       this.running.add(job);
+      if (job.keyLimit) this.tally?.started(job.caller, job.model);
       this.execute(job, () => {
         this.running.delete(job);
+        if (job.keyLimit) this.tally?.ended(job.caller, job.model);
         // Last one out. Letting go while a sibling still runs would let a
         // competing backend load on top of live work.
         if (this.running.size === 0) this.settleHold();
         this.sync();
       });
     }
+    if (this.running.size === 0) this.settleHold();
     this.updateClaim();
     this.sync();
   }
@@ -623,6 +692,7 @@ export class Scheduler {
         lane: spec.lane,
         model: spec.model,
         caller: spec.caller,
+        ...(spec.keyLimit ? { keyLimit: spec.keyLimit } : {}),
         offbox: spec.offbox === true,
         claimHardware: spec.claimHardware !== false,
         ...(spec.peer ? { peer: spec.peer } : {}),
@@ -693,10 +763,12 @@ export class Scheduler {
         return;
       }
 
-      const depth = this.queued.filter((j) => j.lane === job.lane).length;
+      // A job its key holds counts against that key's own line, never the lane everyone shares.
+      const mine = this.keyFull(job);
+      const depth = this.queued.filter((j) => j.lane === job.lane && (mine ? j.caller === job.caller : true) && this.keyFull(j) === mine).length;
       if (depth >= this.maxPerLane) {
         job.detach?.();
-        reject(new QueueFullError("lane_full", job.lane));
+        reject(new QueueFullError(mine ? "key_full" : "lane_full", job.lane));
         return;
       }
 
@@ -707,8 +779,8 @@ export class Scheduler {
         const arm = () => {
           job.waitTimer = setTimeout(() => {
             if (job.state !== "queued") return;
-            // A held job waits on a neighbour's app, not on this backend: the guard does not run against it.
-            if (this.lastStartAt > checked || this.held(job as Job)) {
+            // A held job waits on a neighbour's app or its own key, not on this backend: the guard does not run against it.
+            if (this.lastStartAt > checked || this.held(job as Job) || this.keyFull(job as Job)) {
               checked = Date.now();
               arm();
               return;

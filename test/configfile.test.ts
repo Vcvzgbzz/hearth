@@ -197,13 +197,16 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   assert.equal(r.status, 200);
   let out = (await r.json()) as Status;
   assert.deepEqual(out.restartPending, [], "an idle deadline is read per request");
-  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }] });
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backendDefaults", "concurrency"], value: 7 }] });
   out = (await r.json()) as Status;
-  assert.deepEqual(out.restartPending, ["scheduler"], "lanes and queues are built once, so they wait");
-  assert.equal(loadConfig(cfgPath).scheduler.maxPerLane, 7, "but the file has it now");
-  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], delete: true }] });
+  assert.deepEqual(out.restartPending, ["backends"], "a backend's slots are built once, so they wait");
+  assert.equal(loadConfig(cfgPath).backends[0]!.concurrency, 7, "but the file has it now");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backendDefaults", "concurrency"], delete: true }] });
   out = (await r.json()) as Status;
   assert.deepEqual(out.restartPending, [], "putting it back clears the restart");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }] });
+  out = (await r.json()) as Status;
+  assert.deepEqual(out.restartPending, [], "lanes and queues apply live");
 
   // Invalid: 422 with the field, and nothing written.
   const before = readFileSync(cfgPath, "utf8");
@@ -214,8 +217,8 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   assert.equal(readFileSync(cfgPath, "utf8"), before, "and the file is untouched");
 
   // A dry run shows the result without writing it.
-  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 9 }], dryRun: true });
-  assert.deepEqual(((await r.json()) as Status).restartPending, ["scheduler"], "a dry run says what its change would need");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backendDefaults", "concurrency"], value: 9 }], dryRun: true });
+  assert.deepEqual(((await r.json()) as Status).restartPending, ["backends"], "a dry run says what its change would need");
   r = await a.patch({ baseHash: out.hash, ops: [{ path: ["lending", "models"], value: [] }], dryRun: true });
   assert.match(((await r.json()) as { text: string }).text, /lending:\n  models: \[\]/);
   assert.equal(readFileSync(cfgPath, "utf8"), before, "a dry run writes nothing");
@@ -467,6 +470,112 @@ flows: {rest: {inputs: ["*"], steps: [{to: {asked: true}}]}}
   assert.equal((await at("/config", "PATCH", { ops: [{ path: ["name"], value: "renamed" }] })).status, 200, "a save still lands");
   assert.equal(readFileSync(listFile, "utf8"), later);
   await h.node.close();
+}
+
+/* ---------------------- a scalar's own comment, and a parent that holds nothing */
+
+// A block file, because these are about the lines a person wrote: a comment beside a value, a
+// block that holds only a comment, and a model written as an alias.
+{
+  const block = `version: 3
+name: block-writes
+backends:
+  main:
+    url: ${beUrl}
+    kind: none
+    serves: [mine]
+    concurrency: 2   # raised for the night
+# The scheduler block, waiting to be filled in.
+scheduler:
+flows:
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+models:
+  mine: &mine
+    concurrency: 1
+  plain:
+    concurrency: 3
+  alias: *mine
+`;
+  const path = join(dir, "block.yaml");
+  writeFileSync(path, block);
+  const a = await boot(path);
+  let out = (await a.file()) as Status & { text: string };
+
+  // A value with a comment beside it: the comment is the line's, not the value's, so it stays.
+  let r = await a.patch({ baseHash: out.hash, ops: [{ path: ["backends", "main", "concurrency"], value: 3 }] });
+  assert.equal(r.status, 200, "a scalar edit is written");
+  out = (await r.json()) as Status & { text: string };
+  const scalar = readFileSync(path, "utf8");
+  assert.match(scalar, /concurrency: 3 +# raised for the night/, `a comment beside a changed value stays beside it:\n${scalar}`);
+
+  // `scheduler:` holds nothing but a comment above it: it is an empty map, and a key goes under it.
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }] });
+  assert.equal(r.status, 200, "an empty block takes a key");
+  out = (await r.json()) as Status & { text: string };
+  assert.match(readFileSync(path, "utf8"), /^scheduler:\n {2}maxPerLane: 7/m, "the key lands under the block");
+  assert.equal(loadConfig(path).scheduler.maxPerLane, 7, "and the node loads it");
+
+  // A model written as an alias is not somewhere a key can go: that is refused by name, not thrown.
+  const before = readFileSync(path, "utf8");
+  const alias = await a.patch({ baseHash: out.hash, ops: [{ path: ["models", "alias", "concurrency"], value: 2 }] });
+  assert.equal(alias.status, 409, "writing through an alias is refused");
+  const refused = (await alias.json()) as { error: { message: string } };
+  assert.match(refused.error.message, /models\.alias/, "and the refusal names the path");
+  assert.equal(readFileSync(path, "utf8"), before, "nothing is written by a refusal");
+  await a.node.close();
+}
+
+// --- a comment on a block that holds nothing stays when the block gets its first key --------------
+{
+  const dir = mkdtempSync(join(tmpdir(), "hearth-null-comment-"));
+  const held = (head: string) => `version: 3
+name: held-comments
+backends:
+  main:
+    url: ${beUrl}
+    kind: none
+    serves: [mine]
+flows:
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+${head}
+models:
+  mine: {}
+`;
+  const writes: [string, { path: string[]; value: unknown }][] = [
+    ["a key under the block", { path: ["scheduler", "maxPerLane"], value: 7 }],
+    ["the block written whole", { path: ["scheduler"], value: { maxPerLane: 7 } }],
+  ];
+  const heads: [string, RegExp][] = [
+    ["scheduler:\n  # lanes kept for later", /# lanes kept for later/],
+    ["scheduler:   # keep this small", /# keep this small/],
+  ];
+  let n = 0;
+  for (const [head, note] of heads) {
+    for (const [what, op] of writes) {
+      const path = join(dir, `held-${n++}.yaml`);
+      writeFileSync(path, held(head));
+      const a = await boot(path);
+      const out = (await a.file()) as Status & { text: string };
+      const r = await a.patch({ baseHash: out.hash, ops: [op] });
+      assert.equal(r.status, 200, `${what} is written`);
+      const text = readFileSync(path, "utf8");
+      assert.match(text, note, `${what} keeps the comment:\n${text}`);
+      assert.match(text, /^scheduler:.*\n(?: {2}#.*\n)* {2}maxPerLane: 7/m, `and the key lands in the block:\n${text}`);
+      assert.equal(loadConfig(path).scheduler.maxPerLane, 7, "and the node loads it");
+      await a.node.close();
+    }
+    // A key two levels under the empty block: every empty map on the way takes a map.
+    const path = join(dir, `held-${n++}.yaml`);
+    writeFileSync(path, held(head));
+    const a = await boot(path);
+    const out = (await a.file()) as Status & { text: string };
+    const r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "lanes", "chat", "priority"], value: 5 }] });
+    assert.equal(r.status, 200, "a key deeper under the block is written");
+    const text = readFileSync(path, "utf8");
+    assert.match(text, note, `and the comment stays:\n${text}`);
+    assert.equal(loadConfig(path).scheduler.lanes.chat?.priority, 5, "and the node loads it");
+    await a.node.close();
+  }
 }
 
 backend.closeAllConnections();
