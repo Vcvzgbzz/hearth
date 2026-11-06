@@ -22,6 +22,16 @@ export function put(doc: Doc, section: string, id: string, value: unknown): Doc 
   return { ...doc, [section]: value === undefined ? rest : { ...obj(doc[section]), [id]: value } };
 }
 
+/** The places on peers a line can send to, matching a search: each peer as itself (it gets the id asked for)
+ *  when its name matches, and each model it lends by the id this node knows it as. */
+export function peerChoices(draft: Record<string, unknown>, q: string): { peer: string; model: string | null }[] {
+  const hit = (s: string) => s.toLowerCase().includes(q.trim().toLowerCase());
+  return Object.entries(obj(draft.peers)).flatMap(([peer, p]) => [
+    ...(hit(peer) ? [{ peer, model: null }] : []),
+    ...Object.keys(obj(obj(p).models)).filter((m) => hit(peer) || hit(m)).map((model) => ({ peer, model })),
+  ]);
+}
+
 /** Somewhere a request can run: a model here, or a peer's copy of one (null: the id asked for). */
 export type End = { kind: "model"; model: string } | { kind: "peer"; peer: string; model: string | null };
 /** A step's `to`, read the same way whether it came from the file or from the running node. */
