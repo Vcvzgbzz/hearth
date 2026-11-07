@@ -43,7 +43,7 @@ async function flip(body: Record<string, unknown>, done: string): Promise<void> 
  * A whole number that saves when it is left or Enter is pressed, and goes back to what is saved on
  * anything else. With `none`, 0 is that word and an empty field: the setting's way of saying no limit.
  */
-function Num({ value, label, min, onSave, className, none, disabled, title }: { value: number; label: string; min: number; onSave: (n: number) => void; className?: string; none?: string; disabled?: boolean; title?: string }) {
+export function Num({ value, label, min, onSave, className, none, disabled, title }: { value: number; label: string; min: number; onSave: (n: number) => void; className?: string; none?: string; disabled?: boolean; title?: string }) {
   const [text, setText] = useState<string | null>(null);
   const commit = () => {
     if (text === null) return;
@@ -159,7 +159,7 @@ function Machine({ peer }: { peer: string }) {
 const limitsOf = (t: LendTerms, model: string): ModelLimits => ({ tokensPerDay: t.tokensPerDay, maxConcurrent: t.maxConcurrent, rateLimit: t.rateLimit, ...t.limits?.[model] });
 
 /** Tokens used today against a day's limit, with a bar when there is one. */
-function Today({ used, limit }: { used: number; limit: number }) {
+export function Today({ used, limit }: { used: number; limit: number }) {
   return (
     <div className="tabular">
       <span className={used > 0 ? "text-fg" : "text-dim"}>{short(used)}</span>

@@ -60,8 +60,9 @@ Each of these is off until you ask for it in `hearth.yaml`.
 
   ![The routing map: a rule's lines, and the models, providers and peers they send to](docs/img/routing.jpg)
 - **A console.** `/ui` draws the node, its hardware, its callers and its rules,
-  shows the queue and recent requests, and edits the config with a review before
-  anything is written. See [The console](docs/console.md).
+  shows what is queued and why each job waits, sets every scheduler knob beside
+  those jobs, and edits the config with a review before anything is written. See
+  [The console](docs/console.md).
 
   ![The topology: callers, routers, hardware, a peer and cloud providers](docs/img/topology.jpg)
 - **Keys.** Each caller can have a key with its own models, expiry, rate and

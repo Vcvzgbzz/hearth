@@ -6,7 +6,7 @@ import type { UiData, Used } from "./types.js";
 import { Refs, refsOf, Value } from "./config.js";
 import { draftView, isObj, obj, put } from "./draft.js";
 import { change, useEdit } from "./editStore.js";
-import { control, doneWithKey, evict, go, mintKey, revokeKey, rotateKey, select, useStore, warm } from "./store.js";
+import { control, doneWithKey, evict, go, select, useStore, warm } from "./store.js";
 import { ago, Button, Card, cx, Dialog, Empty, mono, Pill, Switch, type Tone } from "./ui.js";
 
 const selfOf = (d: UiData) => d.net.nodes.find((n) => n.self)!;
@@ -306,10 +306,10 @@ const lentOnlyTo = (d: UiData, model: string): string[] =>
 export const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
 
 /** Dollars as a person reads them: cents for small sums, whole dollars for large ones. */
-const money = (n: number): string => `$${n < 10 ? n.toFixed(2) : n < 1000 ? n.toFixed(0) : short(Math.round(n))}`;
+export const money = (n: number): string => `$${n < 10 ? n.toFixed(2) : n < 1000 ? n.toFixed(0) : short(Math.round(n))}`;
 
 /** Requests and tokens over some days, as one cell. */
-function UsedCell({ used }: { used?: Used }) {
+export function UsedCell({ used }: { used?: Used }) {
   if (!used || used.requests === 0) return <span className="text-dim">—</span>;
   return (
     <span title={`${used.requests} requests, ${used.failed} failed · ${used.in} tokens in${used.cached ? ` (${used.cached} read from cache)` : ""}, ${used.out} out`}>
@@ -318,24 +318,6 @@ function UsedCell({ used }: { used?: Used }) {
       {used.failed > 0 && <span className="text-bad"> · {short(used.failed)} failed</span>}
     </span>
   );
-}
-
-type Rule = NonNullable<NonNullable<UiData["keys"]>[number]["rule"]>;
-
-/** What bounds a key, in a few words; red once it has run out or run past its day. */
-function limitsOf(rule: Rule | null | undefined, today?: Used) {
-  if (!rule) return "—";
-  const gone = rule.expires !== null && Date.now() >= rule.expires;
-  const spent = (rule.tokensPerDay > 0 && (today?.in ?? 0) + (today?.out ?? 0) >= rule.tokensPerDay) || ((rule.dollarsPerDay ?? 0) > 0 && (today?.cost ?? 0) >= rule.dollarsPerDay!);
-  const parts = [
-    rule.requestsPerMinute > 0 ? `${short(rule.requestsPerMinute)} req/min` : null,
-    rule.tokensPerDay > 0 ? `${short(rule.tokensPerDay)} tokens/day` : null,
-    (rule.dollarsPerDay ?? 0) > 0 ? `${money(rule.dollarsPerDay!)}/day` : null,
-    // The last day it works, as the file has it.
-    rule.expires !== null ? `${gone ? "expired" : "until"} ${new Date(rule.expires - 1).toISOString().slice(0, 10)}` : null,
-  ].filter(Boolean);
-  if (parts.length === 0) return "—";
-  return <span className={gone || spent ? "text-bad" : undefined} title={spent ? "today's allowance is used up; it works again at midnight UTC" : undefined}>{parts.join(" · ")}</span>;
 }
 
 /** A key just minted or rotated, shown once over whichever page made it. The keys page shows it in place instead. */
@@ -359,170 +341,7 @@ export function KeyOnce() {
   );
 }
 
-export function Keys() {
-  const keys = useStore((s) => s.data!.keys ?? []);
-  const others = useStore((s) => s.data!.others ?? []);
-  const catalog = useStore((s) => s.data!.catalog);
-  const [label, setLabel] = useState("");
-  const [scope, setScope] = useState("");
-  const [expires, setExpires] = useState("");
-  const [perMinute, setPerMinute] = useState("");
-  const [perDay, setPerDay] = useState("");
-  const [dollars, setDollars] = useState("");
-  const shown = useStore((s) => s.fresh);
-  const [copied, setCopied] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const mint = async () => {
-    const l = label.trim();
-    if (l === "" || busy) return;
-    setBusy(true);
-    const models = scope.split(",").map((s) => s.trim()).filter(Boolean);
-    const limits = { ...(Number(perMinute) > 0 ? { requestsPerMinute: Math.floor(Number(perMinute)) } : {}), ...(Number(perDay) > 0 ? { tokensPerDay: Math.floor(Number(perDay)) } : {}), ...(Number(dollars) > 0 ? { dollarsPerDay: Number(dollars) } : {}) };
-    const key = await mintKey(l, models.length > 0 ? models : null, { ...(expires ? { expires } : {}), ...(Object.keys(limits).length ? { limits } : {}) });
-    setBusy(false);
-    if (key !== null) {
-      setCopied(false);
-      setLabel("");
-      setScope("");
-      setExpires("");
-      setPerMinute("");
-      setPerDay("");
-      setDollars("");
-    }
-  };
-  const copy = async (key: string) => {
-    try {
-      await navigator.clipboard.writeText(key);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* the text stays selectable either way */ }
-  };
-  return (
-    <Card className="overflow-hidden">
-      <div className="border-b border-line px-4 py-2.5">
-        <div className="font-medium">Keys</div>
-        <div className="text-[11px] text-dim">Bearer keys for /v1 on this node. They live in hearth.yaml and a change takes effect at once; what is shown here is a label and a hash, never the secret. Days are UTC; tokens are the backend&rsquo;s own count where its answer carries one, and an estimate where it does not.</div>
-      </div>
-      <table className="w-full text-left">
-        <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
-          <tr>
-            <th className="px-4 py-2 font-medium">label</th>
-            <th className="px-4 py-2 font-medium">id</th>
-            <th className="px-4 py-2 font-medium">may run</th>
-            <th className="px-4 py-2 font-medium">limits</th>
-            <th className="px-4 py-2 font-medium">today</th>
-            <th className="px-4 py-2 font-medium">31 days</th>
-            <th className="px-4 py-2 text-right font-medium">last seen</th>
-            <th className="w-20" />
-          </tr>
-        </thead>
-        <tbody>
-          {keys.map((k) => (
-            <tr key={k.label || k.id} className="border-b border-line/60 last:border-0">
-              <td className="px-4 py-2">{k.label !== "" ? k.label : <span className="text-dim">unlabeled</span>}</td>
-              <td className={cx("px-4 py-2 text-dim", mono)}>{k.id}</td>
-              <td className="px-4 py-2 text-dim">{k.models === null || k.models.length === 0 ? "everything" : k.models.join(", ")}</td>
-              <td className="px-4 py-2 text-dim">{limitsOf(k.rule, k.today)}</td>
-              <td className="tabular px-4 py-2"><UsedCell used={k.today} /></td>
-              <td className="tabular px-4 py-2"><UsedCell used={k.month} /></td>
-              <td className={cx("tabular px-4 py-2 text-right", k.lastSeen === null ? "text-dim" : "text-fg")}>{k.lastSeen === null ? "never" : ago(k.lastSeen)}</td>
-              <td className="px-4 py-2 text-right">
-                <button disabled={busy || k.label === ""} title={k.label === "" ? "a key with no label is changed in the config file" : "a new secret for this key, shown once; the old one stops working straight away"}
-                        onClick={() => { if (confirm(`Rotate ${k.label}? Whatever uses the old key stops working until it is given the new one.`)) void rotateKey(k.label); }}
-                        className="mr-3 text-[12px] text-dim hover:text-fg hover:underline disabled:opacity-40">
-                  rotate
-                </button>
-                <button disabled={busy || k.label === ""} title={k.label === "" ? "a key with no label is removed in the config file" : undefined}
-                        onClick={() => { if (confirm(`Revoke ${k.label}? It stops working straight away.`)) void revokeKey(k.label); }}
-                        className="text-[12px] text-bad hover:underline disabled:opacity-40">
-                  revoke
-                </button>
-              </td>
-            </tr>
-          ))}
-          {/* Whoever else used the node: this machine with no key, and peers. */}
-          {others.map((o) => (
-            <tr key={o.caller} className="border-b border-line/60 last:border-0">
-              <td className="px-4 py-2 text-dim">{o.caller === "local" ? "this machine, no key" : o.caller.startsWith("peer:") ? `peer ${o.caller.slice(5)}` : o.caller}</td>
-              <td className="px-4 py-2 text-dim">—</td>
-              <td className="px-4 py-2 text-dim">—</td>
-              <td className="px-4 py-2 text-dim">—</td>
-              <td className="tabular px-4 py-2"><UsedCell used={o.today} /></td>
-              <td className="tabular px-4 py-2"><UsedCell used={o.month} /></td>
-              <td className="px-4 py-2 text-right text-dim">—</td><td />
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {keys.length === 0 && <Empty>No keys yet. Without any, only this machine may call /v1.</Empty>}
-      <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">
-        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" maxLength={40}
-               className="h-8 w-40 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
-        <input value={scope} onChange={(e) => setScope(e.target.value)} placeholder="models, comma-separated (blank = everything)"
-               className="h-8 w-72 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
-        <input value={perMinute} onChange={(e) => setPerMinute(e.target.value)} type="number" min={0} placeholder="req / min" aria-label="requests a minute, blank for no limit"
-               className="h-8 w-24 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
-        <input value={perDay} onChange={(e) => setPerDay(e.target.value)} type="number" min={0} placeholder="tokens / day" aria-label="tokens a day, blank for no limit"
-               className="h-8 w-28 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
-        <input value={dollars} onChange={(e) => setDollars(e.target.value)} type="number" min={0} placeholder="$ / day" aria-label="dollars a day, blank for no limit" step="any"
-               className="h-8 w-28 rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
-        <label className="flex items-center gap-1.5 text-[11px] text-dim">expires
-          <input value={expires} onChange={(e) => setExpires(e.target.value)} type="date" aria-label="the last day it works, blank for never"
-                 className="h-8 rounded-md border border-line bg-bg px-2 text-[12px] text-fg focus:border-accent focus:outline-none" />
-        </label>
-        <button disabled={busy || label.trim() === ""} onClick={() => void mint()}
-                className="h-8 rounded-md bg-accent px-3 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40">
-          {busy ? "minting…" : "mint a key"}
-        </button>
-        {catalog.length > 0 && <span className="text-[11px] text-dim">here: {catalog.join(", ")}</span>}
-      </div>
-      {shown !== null && (
-        <div className="border-t border-line bg-muted/40 px-4 py-3">
-          <div className="text-[12px] text-dim">The {shown.rotated ? "new key" : "key"} for <b className="text-fg">{shown.label}</b> — shown once; after this it exists only in hearth.yaml.</div>
-          <div className="mt-1.5 flex items-center gap-2">
-            <code className={cx("flex-1 select-all overflow-x-auto whitespace-nowrap rounded-md border border-line bg-bg px-3 py-2", mono)}>{shown.key}</code>
-            {navigator.clipboard && <button onClick={() => void copy(shown.key)} className="h-8 rounded-md border border-line px-3 text-[12px] hover:bg-muted">{copied ? "copied" : "copy"}</button>}
-            <button onClick={doneWithKey} className="h-8 rounded-md px-2 text-[12px] text-dim hover:text-fg">done</button>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/* ----------------------------------------------------------------- queue */
-
-export function Queue() {
-  const jobs = useStore((s) => s.data!.q.jobs);
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const rows = [...jobs].sort((a, b) => (a.state === b.state ? a.since - b.since : a.state === "running" ? -1 : 1));
-  return (
-    <Card className="overflow-hidden">
-      <table className="w-full text-left">
-        <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
-          <tr>{["state", "model", "lane", "caller", "where", "time"].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.map((j) => (
-            <tr key={j.id} className="border-b border-line/60 last:border-0">
-              <td className="px-4 py-2">{j.state === "running" ? <Pill tone="accent" pulse>running</Pill> : <Pill tone="dim">#{j.position + 1} queued</Pill>}</td>
-              <td className={cx("px-4 py-2", mono)}>{j.model}</td>
-              <td className="px-4 py-2">{j.lane}</td>
-              <td className="px-4 py-2 text-dim">{j.caller}</td>
-              <td className="px-4 py-2 text-dim">{j.offbox ? `${j.peer} (peer)` : j.backend}</td>
-              <td className="tabular px-4 py-2 text-dim">{ago(j.since)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length === 0 && <Empty>Nothing queued or running.</Empty>}
-    </Card>
-  );
-}
+/* --------------------------------------------------------------- history */
 
 const pct = (xs: number[], p: number) => {
   if (xs.length === 0) return 0;
@@ -630,7 +449,10 @@ function CallsPanel({ calls }: { calls: Call[] }) {
   );
 }
 
-/** Finished requests per model over the last ten minutes or the last day: how many, how long they waited and ran. */
+/**
+ * Finished requests per model over the last ten minutes or the last day: how many, how long they
+ * waited and ran. It is a tab of the Scheduler page, inside that page's card.
+ */
 export function History() {
   const [range, setRange] = useState<"10m" | "24h">("10m");
   const [open, setOpen] = useState<string | null>(null);
@@ -642,12 +464,9 @@ export function History() {
   const rows = [...by.entries()].sort((a, b) => b[1].length - a[1].length);
   const longest = Math.max(1, ...rows.map(([, cs]) => pct(cs.map((c) => c.waitedMs + c.ms), 95)));
   return (
-    <Card className="mt-4 overflow-hidden">
-      <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
-        <div className="mr-auto">
-          <div className="font-medium">Recent requests</div>
-          <div className="text-[11px] text-dim">Per model. The bar is p95 time: waiting, then running.</div>
-        </div>
+    <div>
+      <div className="flex items-center gap-3 border-b border-line px-4 py-2">
+        <div className="mr-auto text-[11px] text-dim">Recent requests per model. The bar is p95 time: waiting, then running.</div>
         <div role="group" aria-label="range" className="flex rounded-lg border border-line p-0.5 text-[12px]">
           {(["10m", "24h"] as const).map((r) => (
             <button key={r} type="button" aria-pressed={range === r} onClick={() => setRange(r)}
@@ -658,9 +477,10 @@ export function History() {
         </div>
       </div>
       {range === "24h" && day && <DayChart day={day} />}
+      <div className="overflow-x-auto">
       <table className="w-full text-left">
-        <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
-          <tr>{["model", "requests", "failed", "wait p50", "run p50", "run p95", ""].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
+        <thead className="border-b border-line text-[11px] text-dim">
+          <tr>{["model", "requests", "failed", "wait p50", "run p50", "run p95", ""].map((h) => <th key={h} className="whitespace-nowrap px-4 py-2 font-medium">{h}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map(([m, cs]) => {
@@ -703,7 +523,8 @@ export function History() {
           })}
         </tbody>
       </table>
+      </div>
       {rows.length === 0 && <Empty>{range === "24h" && !day ? "loading…" : "No requests finished in this window."}</Empty>}
-    </Card>
+    </div>
   );
 }

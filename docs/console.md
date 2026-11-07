@@ -10,7 +10,7 @@ single response and still adds **nothing** to what `npm install` pulls down —
 the browser half is bundled from devDependencies and the package keeps its one
 runtime dependency.
 
-Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
+Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
 
 - **Topology**: this node, its backends, the hardware they share, and its peers,
   with requests drawn as they flow, over a strip of the last ten minutes. Click
@@ -53,17 +53,63 @@ Seven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
   evicted from its row.
-- **Keys**: every api key by label, what it may run, its limits and expiry,
+- **Keys**: every api key by label, the router it goes by, its limits and expiry,
   what it used today and over 31 days, and when it last spoke to this node. Mint one (shown once), revoke one by its label, or rotate one: a new key for the same label, shown once, with the old one refused from then on.
-- **Queue**: jobs in flight, and finished requests per model with how long they
-  waited and ran, over the last ten minutes or the last day; a row opens to
-  its individual calls. The day view adds
-  a chart of requests per 15 minutes, failures in red, with queue depth behind.
+  A key opens to set its router, its lane and its limits, and to list what its
+  router reaches with each model's use, what is running and waiting, and its own
+  limits: dashed values are the key's, solid ones the model's own. What a key
+  reaches is changed on the routing map. A limit on tokens shows only where tokens
+  are counted, and one on jobs at once only for work that queues here.
+- **Scheduler**: every setting that changes which job runs next or how many run
+  at once, over one draft of `hearth.yaml`. The title row carries the order
+  settings as chips: `agePerSecond` with how long a lane takes to overtake the
+  closest one ahead of it, `warmBonus`, `maxPerLane` and `maxPerCaller` (`off` at
+  0). Under it a strip that stays at the top while the page scrolls counts the
+  changes in the draft and says what they are, with **discard** and **review &
+  apply**; a refused write is said there too.
+  The **lane board** is one row per lane, the lowest priority number at the top
+  and `warm`, hearth's own lane, last and dimmed. Each row names what sends work
+  there (the defaults the parser makes it, and the models, keys and rules that
+  name it), draws the lane's slots, and says how many run against its ceiling and
+  why the rest wait. A ceiling counts on each backend apart, so a lane with jobs on
+  several backends draws one track per backend, each as many slots wide as that
+  backend runs; an idle lane draws the widest. Running jobs fill slots, waiting
+  ones are outlined chips under the track (dashed when their key holds them), and
+  a ceiling changed in the draft is a faint second line until it is applied. The
+  slots and jobs are the node's own, so the board is drawn even when the file
+  cannot be read, read-only, with the reason above it.
+  Clicking a lane, a chip or a row opens it in the **inspector** beside the board
+  (under it on a narrow screen), the only place a value is typed. A lane shows
+  where it stands in line, its priority, ceiling and max wait (a cleared ceiling
+  or max wait is no limit; priority may be negative), what sends work to it, its
+  jobs, and either why it cannot be removed or the button that removes it. A lane
+  is removed only when nothing names it and nothing is waiting in it; `+ lane`
+  adds one last in the file.
+  Under the board, one tab at a time: **Jobs**, the queue with why each job
+  waits; **Models**, every id in `models:` behind a filter box, with its ceiling,
+  lane, the head start a running turn gets and the token pool its turns share;
+  **Callers**, the keys, the peers and the lending default, with the lane their
+  work queues in and the jobs at once they may have (an unlabelled key is
+  read-only, and a caller's own limit on one model links to Keys or Lending);
+  **Backends**, the jobs each backend runs at once and the idle time of the lanes
+  it holds, both marked `restart` in the inspector, with what a backend runs on
+  edited on Config; **Lane pins**, every model, route, rule step, hold and key
+  that names a lane, and the three lanes the parser works out for work that names
+  none; and **History**, finished requests per model with how long each waited
+  and ran, over the last ten minutes or the last day. Each tab shows its count,
+  and a dot while the draft holds an edit of its. Nothing is written until the
+  review says what the file becomes and whether the change applies at once or at
+  the next restart. It is the page the former Queue page held, so an old `#queue`
+  address opens it.
 - **Logs**: hearth's recent log lines as sentences, newest first, with a level
   filter, a model filter, a search, and the raw fields a click away.
-- **Config**: `hearth.yaml` by section, or as text. See below.
+- **Config**: `hearth.yaml` by section, or as text. See below. Its **Lanes &
+  queues** section is a pointer: everything in `scheduler:` is edited on the
+  Scheduler page, and the section offers the button that opens it rather than a
+  second form for the same keys. The section stays in place, so that an old habit
+  lands somewhere.
 
-Behind the Models, Keys, Lending and Queue pages a faint ASCII smoke rises,
+Behind the Models, Keys, Lending and Scheduler pages a faint ASCII smoke rises,
 and beside the Topology and Routing maps it rises behind the sidebar instead,
 thicker and quicker the more the node has queued and running. The load is a
 fire under it: coals along the bottom light the nearest wisps in the theme's
@@ -292,10 +338,15 @@ route or a mapping takes its comments with it, because they belong to the thing
 being deleted.
 
 Most of the config applies as soon as it is written: models and routes, sharing,
-notes, peers' model maps, api keys and peer tokens, and the deadlines and limits
-read per request. The rest — listen addresses, backends, servers, resources, lanes, and
-adding or changing a peer — is written immediately but takes effect on the next
-restart, and the console lists those keys until then.
+notes, peers' model maps, api keys and peer tokens, every setting under
+`scheduler:` — lanes, their priorities and ceilings, `maxWaitMs`,
+`agePerSecond`, `warmBonus`, `maxPerLane` and `maxPerCaller` — and the
+deadlines and limits read per request. The rest — listen addresses, backends,
+servers, resources, adding or changing a peer — is written immediately but takes
+effect on the next restart, and the console lists those keys until then. Three
+scheduler settings sit with those: a backend's `concurrency`, the lanes a `hold`
+keeps off its hardware, and the lane in a backend's `routes`. The Scheduler page
+marks each one `restart`, and the review says the same before it writes.
 
 Hand edits work the same way. hearth watches the file and loads an edit as soon
 as it is saved; an edit that does not load is reported with the reason, and the
@@ -342,9 +393,18 @@ An op can also rename a map key in place, keeping its value and comments:
 `{"path": ["peers", "old-name"], "rename": "new-name"}`. Renaming onto a name
 that exists is a 400, and renaming something that is not there is a 409.
 
-Add `"dryRun": true` to see the resulting text without writing it. A refusal is
-`{"error": {"message", "path"}}`: 422 for a config that would not load (with the
-field), 409 for a conflict.
+A value written where the file holds a scalar replaces that scalar in place, so
+the comment beside it stays beside it. A mapping written under a key that holds
+nothing — `scheduler:` with only a comment under it — becomes a block mapping.
+A comment beside or under that empty key is kept, as the last line of the new
+block. A path the file cannot take, such as one that goes through an `*alias`, is
+refused with the path in the error rather than a bare parser message.
+
+Add `"dryRun": true` to see the resulting text without writing it; the reply also
+adds `defaults`, where a request that names no lane would land under `before`
+and `after` the edit, so a lane change that moves borrowed work can be seen
+before it is saved. A refusal is `{"error": {"message", "path"}}`: 422 for a
+config that would not load (with the field), 409 for a conflict.
 
 ### The console
 

@@ -46,7 +46,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     lending: { type: "object", scope: "lending", desc: "What peers may run here, and how much of it.", seed: { models: [] } },
     borrowing: { type: "object", scope: "borrowing", desc: "How this node reads and waits on its peers.", seed: {} },
     backendDefaults: { type: "object", scope: "backendDefaults", desc: "Defaults every backend takes unless it sets its own.", seed: {} },
-    apiKeys: { type: "list", desc: "Keys allowed on /v1/*. Empty means loopback only; setting it means loopback needs a key too. An entry may carry a label, the models it may run, a day it expires and limits." },
+    apiKeys: { type: "list", desc: "Keys allowed on /v1/*. Empty means loopback only; setting it means loopback needs a key too. An entry may carry a label, the models it may run, a lane, a day it expires and limits." },
     maxBodyBytes: { type: "number", min: 1024, desc: "Largest accepted request body, in bytes.", def: 33554432 },
     modelHeader: { type: "bool", desc: "Send `x-hearth-model` on every chat answer: the id the request ran as. Turn off where callers should not see what is behind a name.", def: true },
     updateCheck: { type: "bool", desc: "Ask the npm registry once a day whether a newer hearth is out, and say so in the console. Only the package name is sent.", def: true },
@@ -127,7 +127,7 @@ export const FIELDS: Record<Scope, Record<string, Field>> = {
     agePerSecond: { type: "number", min: 0, desc: "Priority earned per second waited, which is also the starvation bound.", def: 1 },
     warmBonus: { type: "number", min: 0, desc: "Priority discount for a model already loaded.", def: 40 },
     maxPerLane: { type: "number", min: 1, desc: "How long one lane's queue may get before new work is refused.", def: 100 },
-    maxPerCaller: { type: "number", min: 0, desc: "Queued-or-running jobs per caller per lane. 0 is off.", def: "0, or 2 with apiKeys" },
+    maxPerCaller: { type: "number", min: 0, desc: "Queued-or-running jobs per caller per lane, refused past it. 0 is off. A key with its own limits.maxConcurrent skips it.", def: "0, or 2 with apiKeys" },
   },
   lane: {
     priority: { type: "number", desc: "Base priority. Lower goes first.", def: 0 },

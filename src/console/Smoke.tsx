@@ -1,6 +1,6 @@
 /**
  * A slice of rising smoke, lit by a fanned sheet of light and drawn in ASCII,
- * behind the Queue, Models, Keys and Lending pages. The busier the node, the
+ * behind the Scheduler, Models, Keys and Lending pages. The busier the node, the
  * thicker and quicker it rises, the warmer the coals glow under it, and the
  * more embers come off them.
  * WebGL2 in two passes: the first works out, for each character cell, how

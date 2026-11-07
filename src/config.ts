@@ -564,6 +564,31 @@ const WARM_LANE_PRIORITY = 200;
 
 export { WARM_LANE };
 
+/** The lane with the highest priority number, leaving out `warm`; the first declared wins a tie. */
+export function lowestLane(lanes: Record<string, { priority: number }>): string {
+  let best: string | null = null;
+  let bestPriority = -Infinity;
+  for (const [name, lane] of Object.entries(lanes)) {
+    if (name === WARM_LANE) continue;
+    if (lane.priority > bestPriority) {
+      best = name;
+      bestPriority = lane.priority;
+    }
+  }
+  // A file may declare only `warm`, which is then the lane every request that names none lands in.
+  return best ?? WARM_LANE;
+}
+
+/** Where a request that names no lane lands. */
+export interface LaneDefaults {
+  /** The first declared lane: what an empty flow step runs in. */
+  first: string;
+  /** `lending.lane`, else the lowest-priority lane. */
+  peers: string;
+  /** What a backend route that names no lane runs in: the lowest-priority lane. */
+  routes: string;
+}
+
 /**
  * A validation finding. `path` is the field it is about (e.g. `backends.card.kind`),
  * or null for a whole-config one; the sentence keeps the field too, because a
@@ -1227,8 +1252,21 @@ export interface KeyRule {
   tokensPerDay: number;
   /** What it may spend in a UTC day, in dollars, on models that carry a `price`. 0 is no limit. */
   dollarsPerDay: number;
+  /** The lane its requests queue in where neither the model nor a route says; null leaves it to the request. */
+  lane: string | null;
+  /** Jobs it may run at once over every model; more wait in line. 0 is no limit. */
+  maxConcurrent: number;
+  /** One model's own limits, each beside the key's. Keyed by the id a job runs as; an id no longer reached does nothing. */
+  models: Record<string, KeyModelRule>;
 }
-const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0, dollarsPerDay: 0 };
+
+/** What one model is held to for one key. */
+export interface KeyModelRule {
+  maxConcurrent?: number;
+  tokensPerDay?: number;
+  requestsPerMinute?: number;
+}
+const NO_RULE: KeyRule = { expires: null, requestsPerMinute: 0, tokensPerDay: 0, dollarsPerDay: 0, lane: null, maxConcurrent: 0, models: {} };
 
 /** Every name a flow takes, in `flows:` and in each router's: what a client may ask for besides a model. Read off the file as written. */
 function typeNames(root: Record<string, unknown>): string[] {
@@ -1243,7 +1281,7 @@ function typeNames(root: Record<string, unknown>): string[] {
 
 /** `apiKeys:` entries: a bare secret, or `{ key, label }`. Labels are shown wherever caller ids are. */
 function apiKeyList(
-  v: unknown, where: string, routeIds: Set<string>,
+  v: unknown, where: string, routeIds: Set<string>, lanes: readonly string[],
 ): { keys: string[]; labels: string[]; models: (string[] | null)[]; rules: KeyRule[] } {
   if (v === undefined) return { keys: [], labels: [], models: [], rules: [] };
   if (!Array.isArray(v)) throw bad(where, "must be a list");
@@ -1287,7 +1325,7 @@ function apiKeyList(
       return;
     }
     const entry = asRecord(raw, at);
-    only(entry, ["key", "label", "models", "expires", "limits"], at);
+    only(entry, ["key", "label", "models", "expires", "limits", "lane"], at);
     const key = resolveSecret(str(entry.key, `${at}.key`), `${at}.key`);
     // A blank label is a typo, not "no label" — the string form is how you say
     // no label — so it is refused rather than silently falling back to the hash.
@@ -1315,13 +1353,39 @@ function apiKeyList(
       expires = t + 86_400_000;
     }
     const limits = entry.limits === undefined ? {} : asRecord(entry.limits, `${at}.limits`);
-    only(limits, ["requestsPerMinute", "tokensPerDay", "dollarsPerDay"], `${at}.limits`);
+    only(limits, ["requestsPerMinute", "tokensPerDay", "dollarsPerDay", "maxConcurrent", "models"], `${at}.limits`);
     const cap = (k: "requestsPerMinute" | "tokensPerDay"): number => {
       const n = num(limits[k], `${at}.limits.${k}`, 0);
       if (!Number.isInteger(n) || n < 0) throw bad(`${at}.limits.${k}`, "must be a whole number, 0 or more");
       return n;
     };
-    take(key, label, at, scope, { expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay"), dollarsPerDay: atLeast(limits.dollarsPerDay, `${at}.limits.dollarsPerDay`, 0) });
+    const jobs = (raw: unknown, here: string): number => {
+      const n = num(raw, here, 0);
+      if (!Number.isInteger(n) || n < 1) throw bad(here, "must be a whole number, 1 or more");
+      return n;
+    };
+    const lane = entry.lane === undefined ? null : str(entry.lane, `${at}.lane`);
+    if (lane !== null && !lanes.includes(lane)) throw bad(`${at}.lane`, `of key "${label}" is "${lane}", which is not in scheduler.lanes (${lanes.join(", ")})`);
+    const own: Record<string, KeyModelRule> = {};
+    for (const [id, raw] of Object.entries(limits.models === undefined ? {} : asRecord(limits.models, `${at}.limits.models`))) {
+      const here = `${at}.limits.models.${id}`;
+      if (id.trim() === "") throw bad(`${at}.limits.models`, "names a model with an empty id");
+      const m = asRecord(raw, here);
+      only(m, ["maxConcurrent", "tokensPerDay", "requestsPerMinute"], here);
+      const rule: KeyModelRule = {};
+      if (m.maxConcurrent !== undefined) rule.maxConcurrent = jobs(m.maxConcurrent, `${here}.maxConcurrent`);
+      for (const k of ["tokensPerDay", "requestsPerMinute"] as const) {
+        if (m[k] === undefined) continue;
+        const n = num(m[k], `${here}.${k}`, 0);
+        if (!Number.isInteger(n) || n < 0) throw bad(`${here}.${k}`, "must be a whole number, 0 or more");
+        rule[k] = n;
+      }
+      own[id] = rule;
+    }
+    take(key, label, at, scope, {
+      expires, requestsPerMinute: cap("requestsPerMinute"), tokensPerDay: cap("tokensPerDay"), dollarsPerDay: atLeast(limits.dollarsPerDay, `${at}.limits.dollarsPerDay`, 0),
+      lane, maxConcurrent: limits.maxConcurrent === undefined ? 0 : jobs(limits.maxConcurrent, `${at}.limits.maxConcurrent`), models: own,
+    });
   });
   return { keys, labels, models, rules };
 }
@@ -1585,6 +1649,11 @@ function canaryDecl(v: unknown, backends: readonly BackendConfig[]): CanaryConfi
 /** The layout of hearth.yaml this build reads and writes. A file that names a later one is refused, never half-read. */
 export const CONFIG_VERSION = 3;
 
+/** Where a request that names no lane lands, read off a parsed config as a dry run would read it. */
+export function laneDefaults(cfg: Pick<HearthConfig, "scheduler" | "peerLane">): LaneDefaults {
+  return { first: Object.keys(cfg.scheduler.lanes)[0]!, peers: cfg.peerLane, routes: lowestLane(cfg.scheduler.lanes) };
+}
+
 export function parseConfig(raw: unknown): HearthConfig {
   const root = asRecord(raw, "config");
   if (root.version !== undefined) {
@@ -1786,9 +1855,7 @@ export function parseConfig(raw: unknown): HearthConfig {
   }
 
   // Route defaults need the lanes: the lowest-priority lane, since a named path is usually the heavy work.
-  const fallbackLane = Object.entries(lanes)
-    .filter(([n]) => n !== WARM_LANE)
-    .sort((a, b) => b[1].priority - a[1].priority)[0]![0];
+  const fallbackLane = lowestLane(lanes);
   const claimedPaths = new Map<string, string>();
   for (const b of backends) {
     for (const [ri, r] of b.routes.entries()) {
@@ -1974,7 +2041,7 @@ export function parseConfig(raw: unknown): HearthConfig {
   }
 
   const { keys: apiKeys, labels: apiKeyLabels, models: apiKeyModels, rules: apiKeyRules } =
-    apiKeyList(root.apiKeys, "apiKeys", new Set([...Object.keys(models), ...typeNames(root)]));
+    apiKeyList(root.apiKeys, "apiKeys", new Set([...Object.keys(models), ...typeNames(root)]), Object.keys(lanes).filter((l) => l !== WARM_LANE));
 
   const mainListen = {
     // Loopback by default. Anyone who wants it on the network says so, and
@@ -2052,9 +2119,7 @@ export function parseConfig(raw: unknown): HearthConfig {
         return named;
       }
       // The lowest-priority lane, excluding warm, which is reserved for speculative preloading.
-      const eligible = Object.entries(lanes).filter(([n]) => n !== WARM_LANE);
-      const pick = eligible.length > 0 ? eligible : Object.entries(lanes);
-      return pick.sort((a, b) => b[1].priority - a[1].priority)[0]![0];
+      return lowestLane(lanes);
     })(),
     peerMaxConcurrent: count(lending.maxConcurrent, "lending.maxConcurrent", 2, 1),
     lendTokensPerDay: count(lending.tokensPerDay, "lending.tokensPerDay", 0, 0),

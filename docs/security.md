@@ -16,6 +16,10 @@ The defaults assume a private network: Tailscale, WireGuard, a LAN you trust.
 - A `cloud` backend is the one place a prompt leaves your network for a party
   that is not a hearth you chose to trust. It is used only where your config
   names it, and its `key` never reaches the console or a client.
+- A key's router and limits hold what it asks for through `/v1`, for clients that
+  behave. They are not a boundary: a key with no `models` list is a full local
+  caller, and only `models` keeps a key to a list. See
+  [Configuration](configuration.md).
 - Peer tokens are separate from api keys, so peer traffic is attributable.
 - A peer's token can be bound to its tailnet machine with `tailnet`, so a copy of
   the token is useless anywhere else: see
