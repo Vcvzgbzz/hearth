@@ -71,7 +71,7 @@ export function pluginRoutes(ctx: RouteContext) {
     const path = m?.[2] ?? "/";
     // The plugin that answers if this one cannot: it serves the same API, so it is sent the same request.
     const fb = plugins.fallbackOf(name);
-    const to = plugins.serve(name);
+    const to = plugins.serve(name, c.caller);
     if ("why" in to && fb === null) {
       json(res, to.status, { error: to.why });
       return;
@@ -152,7 +152,7 @@ export function pluginRoutes(ctx: RouteContext) {
       return;
     }
     // A fallback is one hop: it answers with its own API, and its own fallback is not followed.
-    const alt = plugins.serve(fb!.plugin);
+    const alt = plugins.serve(fb!.plugin, c.caller);
     log.info("plugin.fallback", { plugin: name, to: fb!.plugin, why: failure, caller: c.caller });
     if ("why" in alt || "stdio" in alt) {
       if ("done" in alt) alt.done(false);

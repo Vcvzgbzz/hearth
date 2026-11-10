@@ -332,8 +332,8 @@ export interface PluginView {
   /** The plugin that answers when this one cannot. */
   fallback?: { plugin: string } | null;
   served: { calls: number; errors: number };
-  /** Requests served now, or within the last moment, by id: drawn as dots on the map. */
-  live: string[];
+  /** Requests served now, or within the last moment, by id and caller: drawn as dots on the map, from the caller on. */
+  live: { id: string; caller: string }[];
   /** For a plugin that speaks MCP: whether its server answers, its name, and how many tools it has. */
   mcp: { transport: "http" | "stdio"; server: string | null; tools: number | null; error: string | null; checkedAt: number; /** Under /plugins/<name>. */ path: string } | null;
   /** The program a plugin that runs an MCP server starts, as its command line. */
