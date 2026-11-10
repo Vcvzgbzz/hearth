@@ -7,7 +7,7 @@ import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Redo2, Refr
 import { Fragment, useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
 import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
@@ -54,7 +54,7 @@ export function finding(draft: Doc): Choice[] {
   const rules = flows.filter((f) => directTo(f.name, f) === null);
   const ends = flows.flatMap((f) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "fastest" ? t.of : t.kind === "model" || t.kind === "peer" ? [t] : []; }));
   const models = [...new Set(ends.flatMap((e) => (e.kind === "model" ? [e.model] : [])))];
-  const peers = [...new Set(ends.flatMap((e) => (e.kind === "peer" ? [e.peer] : [])))];
+  const peers = [...new Map(ends.flatMap((e) => (e.kind === "peer" ? [[peerNode(e.peer, e.model), e] as const] : []))).entries()];
   const names = [...new Set(flows.flatMap((f) => f.inputs))];
   const group = (label: string, items: Choice[]): Choice[] => (items.length ? [{ label, head: true }, ...items] : []);
   return [
@@ -62,7 +62,7 @@ export function finding(draft: Doc): Choice[] {
     ...group("actions", Object.keys(obj(draft.actions)).map((a) => ({ label: a, value: `action:${a}`, mono: true }))),
     ...group("types that are routed", names.map((n) => ({ label: n, value: `name:${n}`, mono: true, hint: `goes into ${flows.find((f) => f.inputs.includes(n))!.name}` }))),
     ...group("models a line ends at", models.map((m) => ({ label: m, value: `model:${m}`, mono: true }))),
-    ...group("peers a line ends at", peers.map((p) => ({ label: p, value: `peer:${p}`, mono: true }))),
+    ...group("peers a line ends at", peers.map(([node, e]) => ({ label: toText(e), value: node, mono: true }))),
   ];
 }
 
@@ -184,6 +184,8 @@ export function EditBar() {
       // Several nodes picked out together are acted on together, before the one that is open.
       const several = s.many.length > 1;
       if (k === "/" && !mod) openSearch(innerWidth / 2 - 150, 120);
+      // With a rule open in its dialog the key belongs to the dialog, not to the map under it.
+      else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.opened) return;
       else if ((e.key === "Backspace" || e.key === "Delete") && !mod && several) removeMany();
       else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.sel) remove(s.sel);
       else if (mod && k === "d" && several) { if (copyMany()) paste(); }
@@ -318,7 +320,7 @@ export function Picker() {
   const picking = useEdit((s) => s.picking);
   const draft = useEdit((s) => s.draft);
   const [q, setQ] = useState("");
-  useEffect(() => setQ(""), [picking]);
+  useEffect(() => setQ(picking?.q ?? ""), [picking]);
   if (!picking || !draft) return null;
   const from = picking.from;
   const send = (to: To) => { if (from) wire(from, to); pick(null); };
@@ -359,9 +361,12 @@ export function Picker() {
         <div className="border-b border-line p-2">
           <input autoFocus aria-label="send it to" placeholder="send these requests to…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => {
                    if (e.key === "Escape") pick(null);
-                   // Enter takes the first model that fits what was typed.
-                   const first = models.find((m) => !chat || known?.kind(m) !== "paths");
-                   if (e.key === "Enter" && q.trim() && first) send({ kind: "model", model: first });
+                   // Enter takes the first place that fits what was typed: a model here, else one a peer lends.
+                   const first = forPlugins ? undefined : models.find((m) => !chat || known?.kind(m) !== "paths");
+                   const lent = forPlugins ? undefined : peers.find((p) => p.model !== null);
+                   if (e.key !== "Enter" || !q.trim()) return;
+                   if (first) send({ kind: "model", model: first });
+                   else if (lent) send({ kind: "peer", ...lent });
                  }}
                  className="h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         </div>

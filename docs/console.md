@@ -284,7 +284,15 @@ line; **+ type** brings one onto the map.
   a model and brings it into view. **Right-click** the map to add a rule or an
   action there, or a rule or an action to edit it, duplicate it, switch it off
   or delete it.
-- **Keys**: with a rule or an action selected, Delete or Backspace removes it,
+- **Peers**: a model a peer lends has a box of its own once a line uses it, so
+  two lines to one peer show which model each runs as. A line let go on a peer
+  that lends several models opens the list of them to choose from. A line the
+  file would refuse is marked `!` where it stands: one sent to a rule that is
+  gone, a last line that ends at a peer, or a peer sent an id it does not lend.
+- **Deleting a rule** leaves the types it took on the Router, marked, to be
+  sent somewhere else.
+- **Keys**: with a rule or an action selected, Delete or Backspace removes it
+  (not while a rule is open in its dialog),
   Ctrl/⌘+D makes a second one, and Ctrl/⌘+C then Ctrl/⌘+V pastes a copy. A
   copied rule takes no names until you give it some. Ctrl/⌘+Z undoes and
   Ctrl/⌘+Shift+Z redoes, across routers and both pages; Escape closes the panel. A rule
