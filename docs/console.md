@@ -161,6 +161,29 @@ It is written every minute and at shutdown, and read once at startup. Under
 systemd, `StateDirectory=hearth` makes `/var/lib/hearth` writable. The full log
 is still whatever captures stdout, journald usually; the page shows the tail.
 
+### The Playground
+
+The Playground page talks to any name the node serves for chat: each type
+(types first, as in **Try a request**) and each model by its own name. A type
+whose rule `takes` other paths is not chat and is not offered. **compare** adds
+a second pane, side by side on a wide screen and stacked on a narrow one; the
+message box at the bottom sends the same message to every pane, each to the
+name it has picked. Enter sends, Shift+Enter starts a new line, and **stop**
+ends the answers still streaming. The system prompt, max tokens (1024 unless
+changed) and temperature (the backend's own when left empty) apply to both
+panes; **Clear** empties the conversations.
+
+Each request is a real streamed `POST /v1/chat/completions`, sent with the
+signed-in session or the stored key, the same as **send it**. Under each answer
+one line says the model it ran as, the backend or peer that ran it, the wait,
+the time to the first token, the total, the tokens and the rate, from the
+node's record of that request (`/ui/requests/<id>`), with a **trace** link to
+it; where that record is out of reach, the line is built from the response
+headers and the page's own clock. When both panes have finished, the quicker
+answer is marked **faster**. Conversations live in the browser tab only: a walk
+to another page keeps them, a reload clears them, and the node keeps nothing
+of them beyond its usual record of each request.
+
 ### Changing things from the page
 
 Besides the config editor, the Topology and Models pages change three things

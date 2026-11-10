@@ -336,12 +336,12 @@ export async function request<T = Record<string, unknown>>(method: string, path:
   return d as T;
 }
 
-/** The node's answer with whatever credential it takes, asking for a key as `request` does; a 401 that stands is thrown. */
-async function authed(method: string, path: string, body?: unknown): Promise<Response> {
+/** The node's answer with whatever credential it takes, asking for a key as `request` does; a 401 that stands is thrown. The body is left unread, so it can be streamed. */
+export async function authed(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
   const doFetch = (k: string): Promise<Response> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (k) headers.Authorization = `Bearer ${k}`;
-    return fetch(path, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return fetch(path, { method, headers, signal, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   };
   let key = storedKey() ?? "";
   let r = await doFetch(key);

@@ -19,6 +19,8 @@ import { changes as configChanges, useConfig } from "./configStore.js";
 import { changes, useSched } from "./schedStore.js";
 import { Plugins } from "./Plugins.js";
 import { Routing } from "./Routing.js";
+import { MessageSquare } from "lucide-react";
+import { Playground } from "./Playground.js";
 import { Lending } from "./Lending.js";
 import { Topology } from "./Topology.js";
 import { Button, Card, cx, Dialog, Pill } from "./ui.js";
@@ -26,6 +28,7 @@ import { Button, Card, cx, Dialog, Pill } from "./ui.js";
 const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "routing", label: "Routing", icon: Split },
+  { id: "playground", label: "Playground", icon: MessageSquare },
   { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "models", label: "Models", icon: Boxes },
   { id: "lending", label: "Lending", icon: Handshake },
@@ -479,6 +482,7 @@ export default function App() {
               <TryStrip />
             </Card>
           </div>
+        ) : page === "playground" ? (<div className="flex min-h-0 flex-1 flex-col p-5"><Playground /></div>
         ) : page === "logs" ? (
           <div className="flex min-h-0 flex-1 flex-col p-5"><Logs /></div>
         ) : (
