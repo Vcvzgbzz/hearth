@@ -13,13 +13,13 @@ export const failed = (e: LogEntry): boolean => e.msg === "request" && e.fields.
 export const passes = (e: LogEntry, level: "all" | "warn" | "error"): boolean =>
   level === "all" || (level === "warn" ? e.level !== "info" && e.level !== "debug" || failed(e) : e.level === "error");
 
-/** A key per entry that survives the ring rotating: time, message and request id, then its place among identical ones. */
+/** A key per entry that survives lines arriving and the ring rotating: time, message and fields, with a repeat count only among identical lines. */
 export function keysOf(entries: LogEntry[]): string[] {
   const seen = new Map<string, number>();
   return entries.map((e) => {
-    const base = `${e.t}|${e.msg}|${String(e.fields.id ?? "")}`;
+    const base = `${e.t}|${e.msg}|${JSON.stringify(e.fields)}`;
     const n = seen.get(base) ?? 0;
     seen.set(base, n + 1);
-    return `${base}|${n}`;
+    return n === 0 ? base : `${base}|${n}`;
   });
 }
