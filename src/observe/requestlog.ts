@@ -16,7 +16,7 @@ import { RequestStore } from "./requests.js";
 import type { RequestTrace } from "./uidata.js";
 
 /** One request this node asked for, where it ran, and how it ended; `backend` and `peer` are both absent when it never ran. */
-export interface RecentCall { t: number; model: string; caller: string; backend?: string; peer?: string; target?: "cache"; ms: number; ok: boolean }
+export interface RecentCall { t: number; /** The request id, as `/ui/requests/<id>` finds it. */ id?: string; model: string; caller: string; backend?: string; peer?: string; target?: "cache"; ms: number; ok: boolean }
 const RECENT_KEPT = 12;
 
 /** Per-request timing for the one-line request log; `waitedMs` shows whether admission queued it. */
@@ -139,16 +139,16 @@ export class RequestLog {
       if (fields.target === "peer" && typeof fields.peer === "string") this.borrowed.add(fields.peer, fields.model, ok, used);
     }
     // What this node asked for, wherever it ran, for the console's rail; work done for a peer is not this node's request.
+    const id = this.asking.getStore()?.id;
     if (fields.forPeer === undefined && typeof fields.model === "string") {
       this.latest.unshift({
-        t: Date.now(), model: fields.model, caller: typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : "local",
+        t: Date.now(), ...(id ? { id } : {}), model: fields.model, caller: typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : "local",
         ...(fields.target === "peer" && typeof fields.peer === "string" ? { peer: fields.peer } : t.startedAt > 0 ? { backend: String(fields.backend ?? "") } : fields.target === "cache" ? { target: "cache" as const } : {}),
         ms: t.startedAt > 0 ? Date.now() - started : 0, ok,
       });
       if (this.latest.length > RECENT_KEPT) this.latest.length = RECENT_KEPT;
     }
     const headers = this.testedHeaders();
-    const id = this.asking.getStore()?.id;
     const now = Date.now();
     const firstByteMs = t.startedAt > 0 && t.firstByteAt !== undefined ? t.firstByteAt - t.startedAt : undefined;
     const said = error ? String(error).slice(0, 200) : undefined;
