@@ -62,6 +62,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
   file). The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
   boundary around each page and the whole console is `Boundary.tsx`
+  file); the Config page's draft, which also outlives a walk away, is `configStore.ts`
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

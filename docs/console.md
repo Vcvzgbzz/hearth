@@ -31,7 +31,9 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   ones first, then the last twelve that ended, each with who asked, where it
   ran and how long it took. Point at one and the backend or peer that ran it
   lights up on the map; click it for that box's settings. The rail folds away
-  with its arrow, and the browser remembers.
+  with its arrow, and the browser remembers. In a window narrower than 1024px
+  the rail is hidden, and below 1280px a box's settings lie over the right of
+  the map instead of beside it, so the map keeps its width.
   A right-click on the empty part of the picture offers what the strip over it
   does, where the pointer is: a new backend, hardware, machine or provider, the
   published versions, and fitting the picture in view.
@@ -199,7 +201,11 @@ is focused. **add setting** searches every setting the entry can take, including
 those inside a group (`stats.vision`), and goes to one that is already set.
 Click an entry's name to rename it; the rename changes only the key, so its
 comments and layout stay. Nothing is written until **review & save** has shown
-the diff and said whether it applies live or needs a restart.
+the diff and said whether it applies live or needs a restart. Unsaved edits stay
+when you walk to another page and back, and the header counts them with the
+Routing and Scheduler drafts; a click on that count opens the page holding them.
+If the file changes under unsaved edits, the edits stay on the file they were
+made on, the page says so, and saving them is refused until they are reverted.
 
 When a change is waiting for a restart, the header offers **restart**. hearth
 finishes what is in flight, then exits with status `75` so a supervisor that
