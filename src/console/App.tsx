@@ -217,6 +217,8 @@ function MoreFindings({ rest }: { rest: Finding[] }) {
 /** One sentence answering "is anything wrong?": the worst finding, or what is working when nothing is. */
 function Health() {
   const d = useStore((s) => s.data);
+  const worst0 = d ? findings(d)[0]?.text : undefined;
+  useEffect(() => { document.title = worst0 === undefined ? "hearth" : `(!) ${worst0} — hearth`; }, [worst0]);
   if (!d) return null;
   const f = findings(d);
   if (f.length === 0) {
@@ -316,10 +318,10 @@ function LoginCard() {
             : "From another machine this page needs a login. It opens the whole console — status, config, controls — from anywhere on your network."}</p>
           <input autoFocus value={user} onChange={(e) => setUser(e.target.value)} placeholder="username" aria-label="username" autoComplete="username"
                  className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
-          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password" aria-label="password"
+          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password" aria-label="password" autoComplete={setup ? "new-password" : "current-password"}
                  className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           {setup && (
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again" aria-label="password again"
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again" aria-label="password again" autoComplete="new-password"
                    className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           )}
           {err !== null && <div className="mt-2 text-sm text-bad">{err}</div>}
