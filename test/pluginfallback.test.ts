@@ -21,7 +21,7 @@ import { pathToFileURL } from "node:url";
 
 import { loadConfig, parseConfig } from "../src/config/config.js";
 import { ConfigError } from "../src/config/read.js";
-import { silentLogger } from "../src/observe/log.js";
+import { silentLogger, type Logger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 // --- config -----------------------------------------------------------------
@@ -171,8 +171,16 @@ plugins:
   wrap: {use: 'file:${wrapPath}', trust: code, timeoutMs: 200}
   hollow: {use: 'file:${hollowPath}', trust: code}
   searxng-to-degoog: {use: 'file:${adapterPath}', trust: code}
+  lonely: {use: 'file:${hollowPath}', trust: code}
 `);
-const node = createNode(loadConfig(cfgPath), silentLogger);
+const said: { msg: string; fields: Record<string, unknown> }[] = [];
+const kept: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: (msg, fields) => said.push({ msg, fields: fields ?? {} }),
+  error: (msg, fields) => said.push({ msg, fields: fields ?? {} }),
+};
+const node = createNode(loadConfig(cfgPath), kept);
 node.start();
 await node.startPlugins();
 await new Promise<void>((r) => node.server.listen(free, "127.0.0.1", r));
@@ -231,6 +239,10 @@ try {
   assert.equal(shown.hollow!.state, "failed");
   assert.match(String(shown.hollow!.error), /named as an adapter \(plugins\.hollowed\.fallback\.adapt\)/);
   assert.equal(shown.wrap!.state, "running", "an adapter that hooks nothing runs");
+  // An adapter runs where a fallback that names it does, so it is not a plugin that runs nowhere: only a
+  // code plugin no line and no fallback names is warned about.
+  const warned = said.filter((s) => s.msg === "plugin.on_no_line").map((s) => s.fields["plugin"]);
+  assert.deepEqual(warned, ["lonely"], "the adapter is not warned about; a plugin on no line still is");
   assert.equal((await call("/plugins/hollowed/x")).status, 503, "with its adapter down, the caller gets the plugin's own failure");
 
   // A host that never answers the connection is given up on in seconds, not when the OS stops trying.

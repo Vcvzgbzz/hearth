@@ -404,7 +404,8 @@ export class Plugins {
       this.startMcp(l);
       const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
       this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
-      if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+      // An adapter runs where a fallback that names it does, so it is not a plugin that runs nowhere.
+      if (decl.use !== null && !decl.everyLine && namedBy === undefined && !placements(this.cfg).some((x) => x.plugin.name === name)) {
         this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
       }
     } catch (e) {
