@@ -490,7 +490,7 @@ side.close();
     name: "discovering",
     backends: [{ name: "a", url: only.url() }],
   }), silentLogger);
-  assert.equal(discovering.certainlyUnknown("anything"), false,
+  assert.equal(discovering.models.certainlyUnknown("anything"), false,
     "an undeclared backend could serve anything, so nothing is certain");
   only.close();
 }

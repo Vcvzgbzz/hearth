@@ -77,13 +77,13 @@ export function peerRoutes(ctx: RouteContext) {
     }
     // Loaded and served models ride with capacity, both filtered to what we share.
     const lent = limits.shared(who);
-    const warmAndShared = pool.loaded().filter((m) => lent.includes(m));
+    const warmAndShared = pool.models.loaded().filter((m) => lent.includes(m));
     const agg = pool.aggregate();
     // Protocol 2: capacity per shared model, beside the aggregate protocol-1 peers still read.
     const models: Record<string, unknown> = {};
     for (const m of lent) {
       // Per-model stats, absent until loaded; silence is not a claim of no limit.
-      const stats = pool.statsFor(m);
+      const stats = pool.models.statsFor(m);
       // The borrower is shown what it is held to here, and how much of today it has used.
       const ran = usage.byModel(`peer:${who}`, 1)[m];
       const terms = { ...limitsFor(termsFor(cfg, who), m), usedToday: ran ? ran.in + ran.out : 0 };

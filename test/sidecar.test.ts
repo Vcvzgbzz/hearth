@@ -116,7 +116,7 @@ try {
     assert.equal(swap.resident(), "trial", "so its resident is the seat, whatever order the URL reports");
     assert.deepEqual(swap.catalog(), ["main", "trial"], "nor as something it could load");
     assert.ok(side.loaded().includes("rerank-gpu"), "the sidecar still sees itself");
-    assert.ok(node.pool.loaded().includes("rerank"), "and it is still warm to the node, under the id it is advertised as");
+    assert.ok(node.pool.models.loaded().includes("rerank"), "and it is still warm to the node, under the id it is advertised as");
   }
 
   // --- THE POINT: a follow id rides the seat, never the sidecar -------------------------

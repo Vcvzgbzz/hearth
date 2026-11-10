@@ -20,7 +20,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   `actions.ts` is what a step can set off; `stats.ts` is what a model can take against what a
   request needs; `reach.ts` is who can reach what, for the console
 - `src/queue/`: when it runs: `scheduler.ts` (admission per backend), `pool.ts` (the backends
-  and their queues), `resources.ts` (shared hardware), `backend.ts` (one backend's state),
+  and their queues, and what they can take), `models.ts` (which backend serves a model, and what it is
+  called on each side), `hardware.ts` (backends taking turns on shared hardware: evictions, residents, holds), `resources.ts` (whose turn each resource is), `backend.ts` (one backend's state),
   `kinds.ts` (what each backend `kind` does; its names and the facts config checks are
   `config/kinds.ts`), `keytally.ts` (a key's jobs across backends)
 - `src/peers/`: peer health and capacity (`peers.ts`), lending terms (`lending.ts`), the
@@ -34,7 +35,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   file per section, each with its types and the code that reads them (`backends.ts`, `flows.ts`,
   `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`; `read.ts` is the field readers
   and `ConfigError` they share); `fields.ts` (the settings table the parser and the console both read),
-  `configfile.ts` (live edits to hearth.yaml), `migrate.ts`, `yamlq.ts`
+  `configfile.ts` (live edits to hearth.yaml), `derived.ts` (a value derived from the live config, rebuilt when
+  a key it reads is replaced), `migrate.ts`, `yamlq.ts`
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
   (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)

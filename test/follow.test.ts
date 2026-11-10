@@ -143,12 +143,12 @@ try {
   {
     card.load("trial");
     await node.pool.first().state.refresh();
-    const loaded = node.pool.loaded();
+    const loaded = node.pool.models.loaded();
     assert.ok(loaded.includes("loaded") && loaded.includes("loaded-off"), "follow ids warm on the trial seat");
     assert.ok(!loaded.includes("main"), "and the default seat is still honestly cold");
     card.load(null);
     await node.pool.first().state.refresh();
-    assert.ok(!node.pool.loaded().includes("loaded"), "nothing resident, nothing warm");
+    assert.ok(!node.pool.models.loaded().includes("loaded"), "nothing resident, nothing warm");
   }
 
   // --- the shared pool is the followed seat's, like its slots -----------------
@@ -158,16 +158,16 @@ try {
     const need = { tokens: 500, output: 200, images: false, tools: false };
     card.load("trial");
     await node.pool.first().state.refresh();
-    assert.equal(node.pool.poolTokens("loaded", need), 364, "the trial seat's output cap applies");
+    assert.equal(node.pool.models.poolTokens("loaded", need), 364, "the trial seat's output cap applies");
     card.load("main");
     await node.pool.first().state.refresh();
-    assert.equal(node.pool.poolTokens("loaded", need), 500, "and the default seat's pool when that is loaded");
+    assert.equal(node.pool.models.poolTokens("loaded", need), 500, "and the default seat's pool when that is loaded");
   }
 
   // --- the way back from the backend's vocabulary never lands on a follow id --
   // The status page and history name a resident model by its advertised id; a
   // follow id is not a name for `main`, it is a name for "whatever is loaded".
-  assert.equal(node.pool.advertised("main"), "main");
+  assert.equal(node.pool.models.advertised("main"), "main");
   console.log("follow: ok");
 } finally {
   await node.close();

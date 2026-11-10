@@ -14,6 +14,7 @@ import type { Logger } from "../observe/log.js";
 import type { PeerRegistry } from "../peers/peers.js";
 import type { BackendPool, BackendSlot } from "../queue/pool.js";
 import type { LocalLoad, resolve, World } from "./route.js";
+import { derived } from "../config/derived.js";
 
 /** Conversations a sticky flow remembers before the oldest is forgotten. */
 const PLACED_MAX = 5000;
@@ -41,8 +42,7 @@ export class Worlds {
   /** Requests open per model id right now. */
   private readonly open = new Map<string, number>();
   /** How many times each step of each flow has decided, since the flows last changed. */
-  private readonly hits = new Map<string, number[]>();
-  private hitsFor: HearthConfig["flows"];
+  private readonly hits = derived(() => [this.cfg.flows], () => new Map<string, number[]>());
   /** Where a sticky flow sent each conversation; a Map keeps insertion order, so the first key is the least recently placed. */
   private readonly placed = new Map<string, { end: FlowEnd; until: number }>();
   /** When each action last ran, for one that sets `every`. */
@@ -55,9 +55,7 @@ export class Worlds {
     private readonly pool: BackendPool,
     private readonly peers: PeerRegistry,
     private readonly log: Logger,
-  ) {
-    this.hitsFor = cfg.flows;
-  }
+  ) {}
 
   /** The router a caller goes by: the one `callers:` gives it by its key's label or `local`, else the one it gives everyone, else `default` for `flows:`. */
   routerNameOf(caller: string): string {
@@ -76,7 +74,7 @@ export class Worlds {
 
   /** Count a request that asked for this model as use of it until `res` closes. */
   using(model: string, res: ServerResponse): void {
-    const wire = this.pool.outboundId(model);
+    const wire = this.pool.models.outboundId(model);
     this.open.set(wire, (this.open.get(wire) ?? 0) + 1);
     res.once("close", () => {
       this.open.set(wire, (this.open.get(wire) ?? 1) - 1);
@@ -86,7 +84,7 @@ export class Worlds {
 
   /** How long since this model had work here, in ms; 0 while it has some. Unused since startup is idle since then. */
   idleMs(model: string): number {
-    const wire = this.pool.outboundId(model);
+    const wire = this.pool.models.outboundId(model);
     return (this.open.get(wire) ?? 0) > 0 ? 0 : Date.now() - (this.lastUse.get(wire) ?? this.bootAt);
   }
 
@@ -101,17 +99,17 @@ export class Worlds {
 
   /** Count each step a decision passed through. Only `flows:` is counted; a change to the flows starts the counts over. */
   countHits(path: readonly { flow: string; step: number }[]): void {
-    if (this.hitsFor !== this.cfg.flows) { this.hits.clear(); this.hitsFor = this.cfg.flows; }
+    const hits = this.hits();
     for (const p of path) {
-      const row = this.hits.get(p.flow) ?? [];
+      const row = hits.get(p.flow) ?? [];
       row[p.step] = (row[p.step] ?? 0) + 1;
-      this.hits.set(p.flow, row);
+      hits.set(p.flow, row);
     }
   }
 
   /** Each flow's hits per step, for the console. */
   flowHits(): Record<string, number[]> {
-    return this.hitsFor === this.cfg.flows ? Object.fromEntries([...this.hits].map(([flow, row]) => [flow, Array.from(row, (n) => n ?? 0)])) : {};
+    return Object.fromEntries([...this.hits()].map(([flow, row]) => [flow, Array.from(row, (n) => n ?? 0)]));
   }
 
   /**
@@ -161,11 +159,11 @@ export class Worlds {
    * backend, and not on any backend that shares exclusive hardware with it.
    */
   ready(model: string): boolean {
-    const slot = this.pool.for(model);
+    const slot = this.pool.models.for(model);
     const loaded = slot.state.loaded();
-    if (loaded.includes(model) || loaded.includes(this.pool.outboundId(model))) return true;
+    if (loaded.includes(model) || loaded.includes(this.pool.models.outboundId(model))) return true;
     if (loaded.length > 0) return false;
-    const exclusive = new Set(this.pool.resources().filter((r) => !r.shared).map((r) => r.name));
+    const exclusive = new Set(this.pool.hardware.resources().filter((r) => !r.shared).map((r) => r.name));
     const mine = slot.cfg.resources.filter((r) => exclusive.has(r));
     return !this.pool.all().some((o) => o !== slot && o.cfg.resources.some((r) => mine.includes(r)) && o.state.loaded().length > 0);
   }
@@ -179,7 +177,7 @@ export class Worlds {
       if (action?.on !== "decided") continue;
       this.act(a.name, action, {
         action: a.name, node: this.cfg.name, asked, model: r.model, target: r.target, peer: "", lane: r.lane, caller, tokens: 0, images: false, tools: false,
-        flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "", backend: r.target === "local" ? this.pool.for(r.model).name : "", id: "", queuedMs: 0, ranMs: 0,
+        flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "", backend: r.target === "local" ? this.pool.models.for(r.model).name : "", id: "", queuedMs: 0, ranMs: 0,
       });
     }
   }
@@ -188,8 +186,8 @@ export class Worlds {
   worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = this.rulesFor(caller), headers: World["headers"] = {}): World {
     return {
       cfg: from, peers: this.peers, caller, lane, need, headers,
-      local: (m) => localLoad(this.pool.for(m), m),
-      held: (m, l) => this.pool.heldOff(this.pool.for(m).cfg, l),
+      local: (m) => localLoad(this.pool.models.for(m), m),
+      held: (m, l) => this.pool.hardware.heldOff(this.pool.models.for(m).cfg, l),
       ready: (m) => this.ready(m),
       inFlight: (flow, step) => this.stepsBusy.get(`${flow}\0${step}`) ?? 0,
       idleMs: (m) => this.idleMs(m),
