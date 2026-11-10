@@ -18,7 +18,8 @@ import { MessagesResponse, chatOf } from "../wire/messages.js";
 import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins/plugins.js";
 import { type Timing, notRun } from "../observe/requestlog.js";
 import { type Resolution, type World, mayLeave, resolve } from "../routing/route.js";
-import { fitOutput, needsOf, unfit } from "../routing/stats.js";
+import type { BackendSlot } from "../queue/pool.js";
+import { fitOutput, type Need, needsOf, unfit } from "../routing/stats.js";
 import { send } from "../wire/upstream.js";
 import { type Meter, meter, withoutUsage } from "../observe/usage.js";
 import type { Call, RouteContext } from "./context.js";
@@ -208,102 +209,145 @@ export function chatRoutes(ctx: RouteContext) {
       ? { model: d.model, target: "peer", peer: d.peer ?? null, backend: null, leaves: true }
       : { model: d.model, target: "local", peer: null, backend: pool.for(d.model).name, leaves: offHere(d.model) };
 
-  /** Returns the status a local backend relayed, or 0 when a peer answered. */
-  async function route(r: ChatRequest, ended: ((error: string | null) => void)[]): Promise<number> {
-    const { payload, asked, lane: askedLane, caller, res, signal, onPosition, id, headers, checkLimits } = r;
-    const kept = r.plugins?.stayLocal === true;
-    // Refresh peer state only when a decision needs it, and only for requests that may leave.
-    if (mayLeave(cfg, asked)) await peers.ensureFresh();
+  /**
+   * One chat request from the routing decision to the answer. The fields are what routing has settled
+   * so far: the decision, the model and lane it landed on, and the backend here that serves that model.
+   * Anything that moves the request elsewhere goes through `land`, so they always agree.
+   */
+  class ChatTurn {
+    private readonly startedAt = Date.now();
+    private readonly world: World;
+    private readonly flowsNow: HearthConfig["flows"];
+    /** The conversation this turn belongs to, for a sticky flow; null for a request with no user turn. */
+    private readonly talk: { key: string; later: boolean } | null;
+    private decision!: Resolution;
+    private model = "";
+    private lane = "";
+    private local!: BackendSlot;
+    /** The request's size as it is queued, after the plugins that run once it is routed. */
+    private need!: Need;
+    /** Re-set as it is queued; set here too, so an action told how a refused request ended can read it. */
+    private t: Timing = notRun();
+    /** What the backend here answered, for the log and call history: a relayed 400 is a failure with a useful body. */
+    private localStatus = 0;
+    /** The backend here that last ran it, for an action told how it ended. */
+    private ranOn = "";
+    /** Actions already set off: each runs once per request, however many times it is re-routed. */
+    private readonly fired = new Set<string>();
+    /** Models whose own limits this request has been held to. */
+    private readonly limited = new Set<string>();
 
-    // The flow reads each model on the backend that would serve it here: a node with an idle
-    // embedder and a busy GPU has no single answer to "am I busy". Per model, like a peer's
-    // numbers, since a backend's flat count says "free" while THIS model's slots are full.
-    // What this request asks for goes with it, so a peer whose model is too small is passed over
-    // rather than sent the prompt across the network to be refused there.
-    const talk = worlds.conversation(caller, asked, payload);
-    const world: World = {
-      ...worlds.worldFor(caller, askedLane, needsOf(payload, cfg.models[asked]?.videoTokens), worlds.rulesFor(caller), headers),
-      // Only a later turn is held to where the conversation started; an opening turn is decided afresh.
-      ...(talk?.later ? { pinned: (flow: string) => worlds.pinned(flow, talk.key) } : {}),
-      // A plugin asked to keep this request on this machine: no peer, no cloud provider.
-      ...(kept ? { keepHere: offHere } : {}),
-    };
-    const startedAt = Date.now();
-    const flowsNow = world.cfg.flows;
-    let decision = resolve(asked, world);
-    // A name this node does not offer is not found, which is a different answer from one it will not run right now.
-    const paths = flowsNow[decision.via[0] ?? ""]?.takes;
-    const notHere = decision.unlisted ? decision.reason
-      // Nor is one that takes paths of its own a chat model.
-      : paths ? `"${asked}" is not offered as chat: it takes ${paths.join(", ")}` : null;
-    if (notHere !== null) {
-      requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, notHere);
-      throw new Refusal(404, notHere);
+    constructor(private readonly r: ChatRequest, private readonly ended: ((error: string | null) => void)[]) {
+      const { payload, asked, lane, caller, headers } = r;
+      // The flow reads each model on the backend that would serve it here: a node with an idle
+      // embedder and a busy GPU has no single answer to "am I busy". What this request asks for goes
+      // with it, so a peer whose model is too small is passed over rather than sent the prompt to refuse.
+      this.talk = worlds.conversation(caller, asked, payload);
+      const talk = this.talk;
+      this.world = {
+        ...worlds.worldFor(caller, lane, needsOf(payload, cfg.models[asked]?.videoTokens), worlds.rulesFor(caller), headers),
+        // Only a later turn is held to where the conversation started; an opening turn is decided afresh.
+        ...(talk?.later ? { pinned: (flow: string) => worlds.pinned(flow, talk.key) } : {}),
+        // A plugin asked to keep this request on this machine: no peer, no cloud provider.
+        ...(r.plugins?.stayLocal ? { keepHere: offHere } : {}),
+      };
+      this.flowsNow = this.world.cfg.flows;
     }
-    // What the flow chose, which a fallback from a failed peer may change again.
-    let model = decision.model;
-    let lane = decision.lane;
-    let local = pool.for(model);
-    const land = (r: { model: string; lane: string; params: Record<string, unknown> }): void => {
-      model = r.model;
-      lane = r.lane;
-      local = pool.for(model);
-      Object.assign(payload, r.params);
+
+    /** Route it, run it where it lands, and return the status a backend here relayed, or 0 when a peer answered. */
+    async run(): Promise<number> {
+      // Refresh peer state only when a decision needs it, and only for requests that may leave.
+      if (mayLeave(cfg, this.r.asked)) await peers.ensureFresh();
+      this.decide();
+      await this.afterRouted();
+      this.admit();
+      if (this.fromCache()) return 200;
+      const d = this.decision;
+      return d.target === "peer" ? this.runOnPeer(d) : this.runHere();
+    }
+
+    /** Ask the flow where this goes; a name it does not offer is a 404, which is not the same as one it will not run now. */
+    private decide(): void {
+      const { asked, lane, caller } = this.r;
+      const decision = resolve(asked, this.world);
+      const paths = this.flowsNow[decision.via[0] ?? ""]?.takes;
+      const notHere = decision.unlisted ? decision.reason
+        // Nor is one that takes paths of its own a chat model.
+        : paths ? `"${asked}" is not offered as chat: it takes ${paths.join(", ")}` : null;
+      if (notHere !== null) {
+        requests.record(notRun(), { model: asked, lane, caller, target: "refused" }, false, notHere);
+        throw new Refusal(404, notHere);
+      }
+      this.decision = decision;
+      this.land(decision);
+      this.fire(decision);
+    }
+
+    /** Move the request onto what a decision chose: its model, lane and params, and the backend here that serves it. */
+    private land(d: { model: string; lane: string; params: Record<string, unknown> }): void {
+      const { payload, asked, res } = this.r;
+      this.model = d.model;
+      this.lane = d.lane;
+      this.local = pool.for(d.model);
+      Object.assign(payload, d.params);
       // Our id for it, so the backend is asked for what the flow chose and not what the client named.
-      if (model !== asked) payload.model = model;
+      if (d.model !== asked) payload.model = d.model;
       // The caller can read off which model answered, since one name may run as several; a node may keep that to itself.
-      if (cfg.modelHeader && !res.headersSent) res.setHeader("x-hearth-model", model);
-    };
-    land(decision);
-    // Each action a deciding step names is set off once per request, however many times it is re-routed:
-    // as the step decides, or once the request has ended for one that waits to hear how.
-    const fired = new Set<string>();
-    const fire = (r: typeof decision): void => {
-      if (flowsNow === cfg.flows) worlds.countHits(r.path);
+      if (cfg.modelHeader && !res.headersSent) res.setHeader("x-hearth-model", d.model);
+    }
+
+    /** Count a decision, remember it for a sticky flow, hold it against step limits, and set off its actions. */
+    private fire(d: Resolution): void {
+      const { asked, caller, res, id } = this.r;
+      const { flowsNow, talk, world } = this;
+      if (flowsNow === cfg.flows) worlds.countHits(d.path);
       // A sticky flow remembers where it put this conversation, for its later turns.
-      const sticky = flowsNow[r.path.at(-1)?.flow ?? ""]?.sticky;
-      if (talk && sticky !== undefined && r.target !== "unavailable") {
-        worlds.place(r.path.at(-1)!.flow, talk.key, r.target === "peer" ? { peer: r.peer, model: r.model } : { model: r.model }, sticky);
+      const sticky = flowsNow[d.path.at(-1)?.flow ?? ""]?.sticky;
+      if (talk && sticky !== undefined && d.target !== "unavailable") {
+        worlds.place(d.path.at(-1)!.flow, talk.key, d.target === "peer" ? { peer: d.peer, model: d.model } : { model: d.model }, sticky);
       }
       // A step with a limit counts this request against it until the response closes.
-      for (const p of r.path) {
+      for (const p of d.path) {
         if (flowsNow[p.flow]?.steps[p.step]?.max !== undefined) worlds.occupy(p.flow, p.step, res);
       }
-      for (const a of r.actions) {
+      for (const a of d.actions) {
         const action = cfg.actions[a.name];
-        if (!action || fired.has(a.name)) continue;
-        fired.add(a.name);
+        if (!action || this.fired.has(a.name)) continue;
+        this.fired.add(a.name);
         const facts: ActionFacts = {
-          action: a.name, node: cfg.name, asked, model: r.model, target: r.target, peer: r.target === "peer" ? r.peer : "",
-          lane: r.lane, caller, tokens: world.need?.tokens ?? 0, images: world.need?.images ?? false, tools: world.need?.tools ?? false,
-          flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "",
-          backend: r.target === "local" ? pool.for(r.model).name : "", id: id ?? "", queuedMs: 0, ranMs: 0,
+          action: a.name, node: cfg.name, asked, model: d.model, target: d.target, peer: d.target === "peer" ? d.peer : "",
+          lane: d.lane, caller, tokens: world.need?.tokens ?? 0, images: world.need?.images ?? false, tools: world.need?.tools ?? false,
+          flow: a.flow, line: a.step + 1, reason: d.reason, outcome: "decided", ms: 0, error: "",
+          backend: d.target === "local" ? pool.for(d.model).name : "", id: id ?? "", queuedMs: 0, ranMs: 0,
         };
         if (action.on === "decided") worlds.act(a.name, action, facts);
-        else ended.push((error) => {
+        else this.ended.push((error) => {
           // One reading of the clock, so the time it ran is never more than the time it took.
           const now = Date.now();
-          const ms = now - startedAt;
+          const ms = now - this.startedAt;
           if ((action.on === "failed" && error === null) || (action.slowerThan > 0 && ms <= action.slowerThan)) return;
           // Where it ended up, which a failed backend or peer may have changed since the step decided.
-          const ran = t.startedAt > 0 ? now - t.startedAt : 0;
-          worlds.act(a.name, action, { ...facts, model, backend: ranOn, outcome: error === null ? "ok" : "failed", ms, error: error ?? "", queuedMs: ms - ran, ranMs: ran });
+          const ran = this.t.startedAt > 0 ? now - this.t.startedAt : 0;
+          worlds.act(a.name, action, { ...facts, model: this.model, backend: this.ranOn, outcome: error === null ? "ok" : "failed", ms, error: error ?? "", queuedMs: ms - ran, ranMs: ran });
         });
       }
-    };
-    fire(decision);
-    if (r.plugins && decision.target !== "unavailable") {
-      const p = r.plugins;
-      p.hook = { ...p.hook, ...where(decision), lane, body: payload };
+    }
+
+    /** The plugins that run once a request is routed; one that changes it, or keeps it here, has it routed once more. */
+    private async afterRouted(): Promise<void> {
+      const p = this.r.plugins;
+      if (!p || this.decision.target === "unavailable") return;
+      const { payload, asked, caller } = this.r;
+      p.hook = { ...p.hook, ...where(this.decision), lane: this.lane, body: payload };
       // The step that sent it to a model places its own plugins, after those that run on every line.
-      const step = decision.path.at(-1);
-      if (step) p.active = [...p.active, ...plugins.forLine("chat", flowsNow[step.flow]?.steps[step.step]?.plugins ?? [], { router: worlds.routerNameOf(caller), flow: step.flow, step: step.step })];
+      const step = this.decision.path.at(-1);
+      if (step) p.active = [...p.active, ...plugins.forLine("chat", this.flowsNow[step.flow]?.steps[step.step]?.plugins ?? [], { router: worlds.routerNameOf(caller), flow: step.flow, step: step.step })];
       let after;
       try {
         after = await plugins.run("routed", p.active, p.hook);
       } catch (e) {
         if (!(e instanceof PluginRefusal)) throw e;
-        requests.record(notRun(), { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+        requests.record(notRun(), { model: this.model, lane: this.lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
         throw new Refusal(e.status, e.message);
       }
       const changed = after.req.body !== p.hook.body;
@@ -313,100 +357,109 @@ export function chatRoutes(ctx: RouteContext) {
         for (const k of Object.keys(payload)) delete payload[k];
         Object.assign(payload, after.req.body);
       }
-      lane = after.req.lane;
+      this.lane = after.req.lane;
       // Changed after routing: routed once more, so a bigger prompt or a request kept here lands where it fits.
       if (changed || (p.stayLocal && p.hook.leaves)) {
-        const again = resolve(asked, { ...world, need: needsOf(payload, cfg.models[asked]?.videoTokens), ...(p.stayLocal ? { keepHere: offHere } : {}) });
-        if (again.target === "unavailable" || again.target !== decision.target || again.model !== decision.model) {
-          decision = again;
-          land(again);
-          fire(again);
+        const again = resolve(asked, { ...this.world, need: needsOf(payload, cfg.models[asked]?.videoTokens), ...(p.stayLocal ? { keepHere: offHere } : {}) });
+        if (again.target === "unavailable" || again.target !== this.decision.target || again.model !== this.decision.model) {
+          this.decision = again;
+          this.land(again);
+          this.fire(again);
           if (again.target !== "unavailable") p.hook = { ...p.hook, ...where(again) };
         }
       }
     }
-    if (model !== asked) {
-      refuseDegraded(model);
-      log.debug("route.flow", { asked, via: decision.via, as: model, reason: decision.reason });
-    } else if (decision.target === "local") {
-      worlds.using(model, res);
-    }
-    const need = needsOf(payload, cfg.models[model]?.videoTokens);
 
-    // What the local backend answered, for the log and the call history. A
-    // relayed 400 — "this prompt does not fit" is the common one — is a failed
-    // request that happens to carry a useful body.
-    let localStatus = 0;
-    /** The backend here that last ran it, for an action told how it ended. */
-    let ranOn = "";
-    const runLocal = async (spare = false): Promise<void> => {
-      ranOn = local.name;
-      await local.state.ensureFresh();
-    // Our id and the route's params on the way to the backend; untouched when neither is set.
-      localStatus = await sendLocal(local.cfg, model, payload, res, { signal, ...backendDeadline(local.cfg), ...(local.cfg.cloud && t.meter ? { count: t.meter } : {}) }, spare);
-    };
-
-    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (need?.tokens ?? 0) - (need?.output ?? 0)) };
-
-    if (decision.target === "unavailable") {
-      // Refusing is the point. The operator said this can't run here.
-      requests.record(t, { model, lane, caller, target: "unavailable" }, false, decision.reason);
-      // The flow's own words: a refusal step's reason, with why a peer was passed over when one was.
-      throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
-    }
-    // A flow that runs a name as itself still needs something here to serve it.
-    const instead = decision.target === "local" ? limits.unknownHere(model) : null;
-    if (instead !== null) {
-      const why = `no backend here serves "${model}" (${instead})`;
-      requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, why);
-      throw new Refusal(404, why);
-    }
-    checkLimits?.();
-    /** A model's own limits, checked once for each model this request lands on. */
-    const limited = new Set<string>();
-    const limitModel = (m: string): void => {
-      if (limited.has(m)) return;
-      limited.add(m);
-      limits.withinModelLimits(caller, m);
-    };
-    limitModel(model);
-
-    // A model that keeps its answers gives one back to a request identical to the one it answered.
-    // A stream opened early to report queue position is neither kept nor answered from what is.
-    const keepMs = cfg.models[model]?.cacheMs ?? 0;
-    if (keepMs > 0 && onPosition === undefined) {
-      const key = answers.key(model, payload);
-      const hit = answers.get(key);
-      if (hit !== null) {
-        res.writeHead(200, { "Content-Type": hit.type, "X-Hearth-Cache": "hit", "X-Accel-Buffering": "no", ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}) });
-        res.end(hit.body);
-        requests.record(t, { model, lane, caller, target: "cache" }, true);
-        return 200;
+    /** What must hold before it is queued: a model that is running, something here to serve it, and the caller's limits. */
+    private admit(): void {
+      const { payload, asked, lane: askedLane, caller, res, checkLimits } = this.r;
+      const { decision, model, lane } = this;
+      if (model !== asked) {
+        refuseDegraded(model);
+        log.debug("route.flow", { asked, via: decision.via, as: model, reason: decision.reason });
+      } else if (decision.target === "local") {
+        worlds.using(model, res);
       }
-      answers.keep(res, key, keepMs);
+      this.need = needsOf(payload, cfg.models[model]?.videoTokens);
+      this.t = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (this.need?.tokens ?? 0) - (this.need?.output ?? 0)) };
+      if (decision.target === "unavailable") {
+        // Refusing is the point: the flow's own words, with why a peer was passed over when one was.
+        requests.record(this.t, { model, lane, caller, target: "unavailable" }, false, decision.reason);
+        throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
+      }
+      // A flow that runs a name as itself still needs something here to serve it.
+      const instead = decision.target === "local" ? limits.unknownHere(model) : null;
+      if (instead !== null) {
+        const why = `no backend here serves "${model}" (${instead})`;
+        requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, why);
+        throw new Refusal(404, why);
+      }
+      checkLimits?.();
+      this.limitModel(model);
+    }
+
+    /** A model's own limits, checked once for each model this request lands on. */
+    private limitModel(m: string): void {
+      if (this.limited.has(m)) return;
+      this.limited.add(m);
+      limits.withinModelLimits(this.r.caller, m);
+    }
+
+    /**
+     * Answer from a model's kept answers when it keeps them and this exact request was answered; otherwise start
+     * keeping this answer. A stream opened early to report queue position is neither kept nor answered from one.
+     */
+    private fromCache(): boolean {
+      const { payload, res, onPosition, caller } = this.r;
+      const keepMs = cfg.models[this.model]?.cacheMs ?? 0;
+      if (keepMs <= 0 || onPosition !== undefined) return false;
+      const key = answers.key(this.model, payload);
+      const hit = answers.get(key);
+      if (hit === null) {
+        answers.keep(res, key, keepMs);
+        return false;
+      }
+      res.writeHead(200, { "Content-Type": hit.type, "X-Hearth-Cache": "hit", "X-Accel-Buffering": "no", ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}) });
+      res.end(hit.body);
+      requests.record(this.t, { model: this.model, lane: this.lane, caller, target: "cache" }, true);
+      return true;
+    }
+
+    /** Send it to the backend here that serves the current model. */
+    private async runLocal(spare = false): Promise<void> {
+      const { payload, res, signal } = this.r;
+      const local = this.local;
+      this.ranOn = local.name;
+      await local.state.ensureFresh();
+      this.localStatus = await sendLocal(local.cfg, this.model, payload, res, { signal, ...backendDeadline(local.cfg), ...(local.cfg.cloud && this.t.meter ? { count: this.t.meter } : {}) }, spare);
     }
 
     /**
      * Run it here. A backend that fails before anything reaches the client is passed over like a peer that
      * is down: the flow is asked again without it, and the request runs where that lands, here.
      */
-    const runHere = async (): Promise<number> => {
+    private async runHere(): Promise<number> {
+      const { payload, asked, caller, res, signal, onPosition, id } = this.r;
       const failed = new Set<string>();
-      let why = decision.reason;
+      let why = this.decision.reason;
+      const moveTo = (next: Resolution): void => {
+        failed.add(this.model);
+        this.land(next);
+        this.fire(next);
+        why = next.reason;
+      };
       for (;;) {
+        const { model, lane, local } = this;
         // A strict router's callers get the model its line names or its failure, so for them nothing is left to ask for.
-        const spare = (): ReturnType<typeof resolve> => (worlds.routerOf(caller)?.strict
-          ? { ...decision, target: "unavailable" as const, reason: "its router never falls back" }
-          : resolve(asked, { ...world, noPeers: true, skip: new Set([...failed, model]) }));
+        const spare = (): Resolution => (worlds.routerOf(caller)?.strict
+          ? { ...this.decision, target: "unavailable" as const, reason: "its router never falls back" }
+          : resolve(asked, { ...this.world, noPeers: true, skip: new Set([...failed, model]) }));
         // A backend that keeps failing is not made to fail once more for each request, while another line fits.
         if (local.state.restingMs() > 0 && !res.headersSent) {
           const next = spare();
           if (next.target === "local" && !failed.has(next.model) && next.model !== model) {
             log.debug("route.resting_trying_next", { asked, model, backend: local.name, next: next.model, restingMs: local.state.restingMs() });
-            failed.add(model);
-            land(next);
-            fire(next);
-            why = next.reason;
+            moveTo(next);
             continue;
           }
         }
@@ -414,81 +467,67 @@ export function chatRoutes(ctx: RouteContext) {
         const fitted = fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
         const tooMuch = unfit(pool.statsFor(model), fitted);
         if (tooMuch !== null) {
-          requests.record(t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
+          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
           throw new Refusal(400, `${model} ${tooMuch}`);
         }
         try {
-          limitModel(model);
+          this.limitModel(model);
           const elsewhere = spare().target === "local";
           await local.scheduler.submit(
             // A second try goes back through admission without re-applying the caller cap.
             { lane, model, caller, ...limits.keyLimitOf(caller, model), ...(failed.size === 0 ? { maxPerCaller: limits.capOf(caller, model), onPosition, ...(id ? { id } : {}) } : {}), signal, tokens: pool.poolTokens(model, fitted) },
             async () => {
-              t.startedAt = Date.now();
-              await runLocal(elsewhere);
+              this.t.startedAt = Date.now();
+              await this.runLocal(elsewhere);
             },
           );
         } catch (e) {
-          requests.record(t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e);
-          // Its own fault, not the caller's or a full queue's: counted towards resting it.
-          if (!signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal))) local.state.struck(cfg.backendRestMs);
-          const mayMove = !res.headersSent && !signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal));
-          const next = mayMove ? spare() : null;
+          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e);
+          // Its own fault, not the caller's or a full queue's: counted towards resting it, and a reason to move on.
+          const itsOwn = !signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal));
+          if (itsOwn) local.state.struck(cfg.backendRestMs);
+          const next = itsOwn && !res.headersSent ? spare() : null;
           if (!next || next.target !== "local" || failed.has(next.model) || next.model === model) throw e;
           log.warn("route.local_failed_trying_next", { asked, model, next: next.model, error: e instanceof Error ? e.message : String(e) });
-          failed.add(model);
-          land(next);
-          fire(next);
-          why = next.reason;
+          moveTo(next);
           continue;
         }
         // An answer of its own making that says it cannot serve (overloaded, rate limited) counts as a failure too.
-        if (localStatus >= 500 || localStatus === 429) local.state.struck(cfg.backendRestMs);
+        const status = this.localStatus;
+        if (status >= 500 || status === 429) local.state.struck(cfg.backendRestMs);
         else local.state.answered();
         requests.record(
-          t,
-          { model, lane, caller, backend: local.name, target: "local", reason: why,
-            ...(localStatus >= 400 ? { status: localStatus } : {}) },
-          localStatus < 400,
-          localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
+          this.t,
+          { model, lane, caller, backend: local.name, target: "local", reason: why, ...(status >= 400 ? { status } : {}) },
+          status < 400,
+          status >= 400 ? `backend answered ${status}` : undefined,
         );
-        return localStatus;
+        return status;
       }
-    };
+    }
 
     /** Run it on the peer the flow chose; one that fails before the first byte is retried here. */
-    const runOnPeer = async (decision: Extract<Resolution, { target: "peer" }>): Promise<number> => {
+    private async runOnPeer(decision: Extract<Resolution, { target: "peer" }>): Promise<number> {
+      const { payload, asked, caller, res, signal, id } = this.r;
       const peer = peers.config(decision.peer)!;
       let fellBack = false;
-      let lastTarget = "peer" as "peer" | "local";
-      log.debug("route.peer", { model, peer: decision.peer, reason: decision.reason });
-
+      log.debug("route.peer", { model: this.model, peer: decision.peer, reason: decision.reason });
+      const logged = () => ({ model: this.model, lane: this.lane, caller, backend: this.local.name, target: fellBack ? "local" : "peer", peer: peer.name });
       try {
-        await local.scheduler.submit(
-          {
-            lane,
-            model,
-            caller,
-            maxPerCaller: limits.capOf(caller, model),
-            // No local slot: this runs on their hardware, not ours.
-            offbox: true,
-            ...(id ? { id } : {}),
-            peer: decision.peer,
-            signal,
-          },
+        await this.local.scheduler.submit(
+          // No local slot: this runs on their hardware, not ours.
+          { lane: this.lane, model: this.model, caller, maxPerCaller: limits.capOf(caller, this.model), offbox: true, ...(id ? { id } : {}), peer: decision.peer, signal },
           async () => {
-            t.startedAt = Date.now();
+            this.t.startedAt = Date.now();
             // The peer's id, with the route's params still applied.
-            const body = pool.outboundBody(model, payload, decision.theirModel);
+            const body = pool.outboundBody(this.model, payload, decision.theirModel);
             const over = peers.sent(peer.name, decision.theirModel);
             try {
               const up = await send(`${peer.url}/v1/chat/completions`, {
                 json: body,
                 headers: { Authorization: `Bearer ${peer.token}` },
                 signal,
-                // A peer can accept the connection and then never answer, unlike
-                // the local backend. This turns that into a fallback instead of a
-                // hang. 0 disables it.
+                // A peer can accept the connection and never answer: this turns that into a fallback, not a hang. 0 disables it.
                 ...(cfg.peerFirstByteMs > 0 ? { headersTimeoutMs: cfg.peerFirstByteMs } : {}),
                 // A peer that goes silent mid-answer is cut as a local backend is.
                 ...(cfg.backendIdleMs > 0 ? { idleTimeoutMs: cfg.backendIdleMs } : {}),
@@ -505,42 +544,35 @@ export function chatRoutes(ctx: RouteContext) {
               over();
               if (res.headersSent) throw e;
               // Where the flow sends it with peers out of the picture; only somewhere here will do.
-              const home = resolve(asked, { ...world, noPeers: true });
+              const home = resolve(asked, { ...this.world, noPeers: true });
               if (home.target !== "local") throw e;
-              land(home);
-              fire(home);
+              this.land(home);
+              this.fire(home);
               // Nothing reached the client yet, so they'll never see this.
-              log.warn("route.peer_failed_retrying_local", {
-                model,
-                peer: peer.name,
-                error: e instanceof Error ? e.message : String(e),
-              });
+              log.warn("route.peer_failed_retrying_local", { model: this.model, peer: peer.name, error: e instanceof Error ? e.message : String(e) });
               fellBack = true;
-              lastTarget = "local";
               // A local retry goes back through admission, without re-applying the caller cap.
-              limitModel(model);
-              await local.scheduler.submit({ lane, model, caller, ...limits.keyLimitOf(caller, model), signal, tokens: pool.poolTokens(model, need) }, () => runLocal());
+              this.limitModel(this.model);
+              await this.local.scheduler.submit({ lane: this.lane, model: this.model, caller, ...limits.keyLimitOf(caller, this.model), signal, tokens: pool.poolTokens(this.model, this.need) }, () => this.runLocal());
             }
           },
         );
       } catch (e) {
-        // Log the actual last target, local fallback included, with its backend so the call ring counts it.
-        requests.record(t, { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name }, false, e);
+        // Logged as where it last ran, a local fallback included, with its backend so the call ring counts it.
+        requests.record(this.t, logged(), false, e);
         throw e;
       }
-      requests.record(
-        t,
-        { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name, offbox: !fellBack,
-          ...(fellBack && localStatus >= 400 ? { status: localStatus } : {}) },
-        // Only the fallback can have relayed a bad status: a peer's own 4xx threw
-        // a PeerStatusError further up and never reached here.
-        !fellBack || localStatus < 400,
-        fellBack && localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
-      );
-      return fellBack ? localStatus : 0;
-    };
+      const status = this.localStatus;
+      // Only the fallback can have relayed a bad status: a peer's own 4xx threw a PeerStatusError above.
+      const bad = fellBack && status >= 400;
+      requests.record(this.t, { ...logged(), offbox: !fellBack, ...(bad ? { status } : {}) }, !bad, bad ? `backend answered ${status}` : undefined);
+      return fellBack ? status : 0;
+    }
+  }
 
-    return decision.target === "local" ? runHere() : runOnPeer(decision);
+  /** Route a chat request and run it; returns the status a backend here relayed, or 0 when a peer answered. */
+  function route(r: ChatRequest, ended: ((error: string | null) => void)[]): Promise<number> {
+    return new ChatTurn(r, ended).run();
   }
 
   async function routeChat(c: Call): Promise<void> {
