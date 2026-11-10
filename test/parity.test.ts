@@ -7,7 +7,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { silentLogger } from "../src/observe/log.js";
-import { QueueTimeoutError, Scheduler } from "../src/queue/scheduler.js";
+import { Scheduler } from "../src/queue/scheduler.js";
+import { QueueTimeoutError } from "../src/errors.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

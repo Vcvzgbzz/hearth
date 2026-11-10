@@ -1,7 +1,7 @@
 /**
  * Backends: where each one is, what it speaks, what it serves, and the paths it queues.
  */
-import { type KindName, KINDS } from "../queue/kinds.js";
+import { KIND_SPECS, type KindName } from "./kinds.js";
 import { asRecord, atLeast, bad, bool, ConfigError, count, num, only, str, strList, trimUrl } from "./read.js";
 
 /** A backend's `kind`, one of the entries in kinds.ts. */
@@ -180,7 +180,7 @@ export function layoutDecl(raw: unknown): Record<string, { x: number; y: number 
   return out;
 }
 
-const WARM_SOURCES = Object.keys(KINDS) as WarmSource[];
+const WARM_SOURCES = Object.keys(KIND_SPECS) as WarmSource[];
 
 /** A backend's `kind`, defaulting to llama-swap. */
 export function warmSource(entry: Record<string, unknown>, where: string): WarmSource {

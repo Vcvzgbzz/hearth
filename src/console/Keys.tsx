@@ -7,7 +7,7 @@ import { choose } from "./editStore.js";
 import { Num, Today } from "./Lending.js";
 import { money, short, UsedCell } from "./pages.js";
 import { doneWithKey, go, mintKey, revokeKey, rotateKey, updateKey, useStore } from "./store.js";
-import type { KeyModelRule, KeyRow, ReachEnd, Used } from "./types.js";
+import type { KeyModelRule, KeyRow, ReachEnd, Used } from "../observe/uidata.js";
 import { ago, Card, cx, Empty, mono } from "./ui.js";
 
 type Rule = NonNullable<KeyRow["rule"]>;

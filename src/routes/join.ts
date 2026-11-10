@@ -5,7 +5,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
-import { Refusal } from "../access/admit.js";
+import { Refusal } from "../errors.js";
 import { fail, json } from "../wire/http.js";
 import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";

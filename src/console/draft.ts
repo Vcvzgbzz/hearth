@@ -7,7 +7,7 @@
  * place in Routing.tsx's layout.
  */
 import { opsBetween, type Op } from "./diff.js";
-import type { Backend, Flow, Node as NetNode, Resource, Routing, UiData } from "./types.js";
+import type { Backend, Flow, Node as NetNode, Resource, Routing, UiData } from "../observe/uidata.js";
 
 export type Doc = Record<string, unknown>;
 

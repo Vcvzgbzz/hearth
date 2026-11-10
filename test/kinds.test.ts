@@ -8,7 +8,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { ConfigError } from "../src/config/read.js";
-import { KINDS, type KindName } from "../src/queue/kinds.js";
+import { KIND_SPECS, type KindName } from "../src/config/kinds.js";
+import { KINDS } from "../src/queue/kinds.js";
 import { silentLogger } from "../src/observe/log.js";
 import { parseV1 } from "./v1.js";
 
@@ -116,4 +117,10 @@ parseV1({
 
 server.closeAllConnections();
 server.close();
+// config/kinds.ts states two facts about each kind for validation; the kind itself must agree.
+for (const [name, spec] of Object.entries(KIND_SPECS) as [KindName, (typeof KIND_SPECS)[KindName]][]) {
+  assert.equal(KINDS[name].knowsWarm, spec.knowsWarm, `${name}: knowsWarm agrees with config/kinds.ts`);
+  assert.equal(typeof KINDS[name].unload === "function", spec.unloads, `${name}: unloads agrees with config/kinds.ts`);
+}
+
 console.log("kinds.test.ts ok");

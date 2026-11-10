@@ -14,6 +14,7 @@ import { CONSOLE_CSP, CONSOLE_HTML } from "../ui.js";
 import { KEEP_DAYS, Usage } from "../observe/usage.js";
 import { type CallerUse, type KeyInfo, type LedgerRow, createViews } from "../observe/views.js";
 import type { Call, RouteContext } from "./context.js";
+import type { UiData } from "../observe/uidata.js";
 
 export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: ReadonlySet<{ id: string; backend: string; model: string | null }> }) {
   const { cfg, pool, peers, plugins, controls, config, canary, usage, borrowed, history, callers, limits, worlds, requests, notWork, lifecycle } = ctx;
@@ -177,7 +178,7 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
    * history appended. `operator` is per request and never in a patch.
    */
   const streams = new Set<ServerResponse>();
-  let lastSent: Record<string, unknown> | null = null;
+  let lastSent: UiData | null = null;
   let uiTimer: ReturnType<typeof setInterval> | null = null;
   let lastFlushAt = 0;
 
@@ -198,24 +199,23 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
     return null;
   }
 
-  function uiDiff(
-    prev: Record<string, unknown>,
-    next: Record<string, unknown>,
-  ): { set?: Record<string, unknown>; add?: { hist: unknown[] } } | null {
+  /** What changed between two payloads, key by key, with `hist` sent as what was appended to it. */
+  function uiDiff(prev: UiData, next: UiData): { set?: Partial<UiData>; add?: { hist: UiData["hist"] } } | null {
+    const before: Record<string, unknown> = { ...prev };
     const set: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(next)) {
       if (k === "hist" || k === "operator") continue;
-      if (JSON.stringify(v) !== JSON.stringify(prev[k])) set[k] = v;
+      if (JSON.stringify(v) !== JSON.stringify(before[k])) set[k] = v;
     }
-    let add: { hist: unknown[] } | undefined;
-    const ph = (prev.hist ?? []) as unknown[];
-    const nh = (next.hist ?? []) as unknown[];
+    let add: { hist: UiData["hist"] } | undefined;
+    const ph = prev.hist ?? [];
+    const nh = next.hist ?? [];
     if (JSON.stringify(ph) !== JSON.stringify(nh)) {
       const tail = appendedTail(ph, nh);
       // A tail of nothing means the ring rolled without gaining anything, which
       // cannot happen -- but sending `add: {hist: []}` would be a frame saying
       // nothing, so treat it as no change rather than as a resync.
-      if (tail && tail.length > 0) add = { hist: tail };
+      if (tail && tail.length > 0) add = { hist: tail as UiData["hist"] };
       else if (!tail) set.hist = nh;
     }
     if (Object.keys(set).length === 0 && !add) return null;
@@ -228,9 +228,9 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
   }
 
   /** The baseline, built at most once at a time: overlapping builds join, so the diff baseline never regresses. */
-  let inBuild: Promise<Record<string, unknown>> | null = null;
+  let inBuild: Promise<UiData> | null = null;
 
-  function build(): Promise<Record<string, unknown>> {
+  function build(): Promise<UiData> {
     inBuild ??= uiPayload()
       .then((d) => { lastSent = d; return d; })
       .finally(() => { inBuild = null; });

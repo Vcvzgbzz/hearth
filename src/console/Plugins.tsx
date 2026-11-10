@@ -10,7 +10,7 @@ import { AddPlugin } from "./AddPlugin.js";
 import { Review, type File, type Plan } from "./config.js";
 import { showRouter } from "./editStore.js";
 import { modelsOfKind } from "./flowNodes.js";
-import type { PluginStage, PluginView, PluginsView } from "./types.js";
+import type { PluginStage, PluginView, PluginsView } from "../observe/uidata.js";
 import { go, openYaml, pausePlugin, refresh, request, toast, useStore } from "./store.js";
 import { Button, Card, cx, mono, Switch } from "./ui.js";
 

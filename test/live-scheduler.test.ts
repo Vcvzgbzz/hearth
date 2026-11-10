@@ -14,7 +14,8 @@ import { join } from "node:path";
 
 import { loadConfig } from "../src/config/config.js";
 import { silentLogger } from "../src/observe/log.js";
-import { QueueFullError, QueueTimeoutError, Scheduler } from "../src/queue/scheduler.js";
+import { Scheduler } from "../src/queue/scheduler.js";
+import { QueueFullError, QueueTimeoutError } from "../src/errors.js";
 import { createNode } from "../src/server.js";
 
 const settle = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));

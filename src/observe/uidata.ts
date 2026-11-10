@@ -1,4 +1,7 @@
-/** The shape of `/ui/data`: the contract between the server's payload and the page. Only fields the page reads. */
+/**
+ * The shape of `/ui/data` and the console's event stream: the one contract between the server, which
+ * builds it in `views.ts`, and the page, which reads it. Both are compiled against this file.
+ */
 
 /** A declared path on a backend that fronts something that is not OpenAI-shaped. */
 export interface Route {
@@ -300,7 +303,7 @@ export interface KeyRow {
   now: Record<string, { running: number; waiting: number }>;
 }
 
-export interface LendTerms extends ModelLimits { models: string[]; off?: boolean; limits?: Record<string, Partial<ModelLimits>> }
+export interface LendTerms extends ModelLimits { models: readonly string[]; off?: boolean; limits?: Record<string, Partial<ModelLimits>> }
 
 /** A model's limits as the peer lending it states them, with how much of today this node has used. */
 export interface LentTerms extends ModelLimits { usedToday: number }
@@ -395,6 +398,8 @@ export interface UiData {
   configuredShare: string[];
   /** What we could lend at all. */
   catalog: string[];
+  /** The known context window of each advertised id; a model whose window is not known is absent. */
+  contexts?: Record<string, number>;
   config: ConfigStatus;
   net: Net;
   q: { jobs: Job[]; capacity: Capacity };

@@ -3,7 +3,8 @@
  * key's scope, requests a minute, tokens and dollars a day, and how many jobs a caller may hold.
  * Every refusal is a `Refusal` thrown with its status; the scheduler then decides when work starts.
  */
-import { admitModel, callerCap, Refusal } from "./admit.js";
+import { admitModel, callerCap } from "./admit.js";
+import { Refusal } from "../errors.js";
 import type { Callers } from "./callers.js";
 import type { HearthConfig } from "../config/config.js";
 import { ANY } from "../config/flows.js";

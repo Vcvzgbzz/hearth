@@ -10,7 +10,7 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 
 import { editedAt, setAt, type Doc, type Path } from "../src/console/knobs.js";
-import type { SchedulerView } from "../src/console/types.js";
+import type { SchedulerView } from "../src/observe/uidata.js";
 
 // The page's JSX compiles to `React.createElement` here, and its store reads the address and the document as it loads.
 Object.assign(globalThis, { React, location: { hash: "" }, document: { hidden: false, addEventListener() {} }, addEventListener() {} });

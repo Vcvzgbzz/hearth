@@ -12,7 +12,7 @@ import { CircuitBoard, Cloud, Cpu, Flame, Globe, KeyRound, Monitor, Plug, Plus, 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Rail } from "./Rail.js";
-import type { Backend, Node as NetNode, Resource, UiData } from "./types.js";
+import type { Backend, Node as NetNode, Resource, UiData } from "../observe/uidata.js";
 import { NEW, NewDialog, Refs, refsOf, Review } from "./config.js";
 import { BAYS, bayRoom, callersIn, draftView, EVERYONE, list, movedBay, movedHardware, obj, ordered, put, routerFor, usersOf, withCaller, callerChoices, paneChoices, restacked, STACK, unstacked } from "./draft.js";
 import { change, chooseAt, dirty, edits, follow, loadDraft, redo, revert, review, showRouter, undo, useEdit, addRouter, askAt } from "./editStore.js";

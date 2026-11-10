@@ -6,30 +6,9 @@ import type { HearthConfig } from "../config/config.js";
 import { peersMapping, type PeerConfig } from "../config/peers.js";
 import { Controls } from "./controls.js";
 import type { Logger } from "../observe/log.js";
-import { cleanStats, type ModelStats } from "../routing/stats.js";
+import { cleanStats } from "../routing/stats.js";
+import type { ModelStats } from "../config/models.js";
 import { UpstreamError, getJson } from "../wire/upstream.js";
-
-/**
- * A peer's refusal, with its status kept: callers retry a 5xx and must not retry a 4xx, so a
- * peer's 429 reported as 502 turns a rate limit into a retry storm.
- */
-export class PeerStatusError extends Error {
-  constructor(
-    readonly peer: string,
-    readonly status: number,
-    readonly detail: string,
-  ) {
-    super(`peer ${peer} returned ${status}: ${detail}`);
-    this.name = "PeerStatusError";
-  }
-
-  /** True when the peer refused the REQUEST rather than failing to serve it.
-   *  Passed through to our caller unchanged: a refusal is theirs to explain,
-   *  and re-badging it as our failure loses what the caller should do next. */
-  get isRefusal(): boolean {
-    return this.status >= 400 && this.status < 500;
-  }
-}
 
 /** What a peer reports on /peer/state: its capacity, what it has loaded and what it serves. */
 export interface PeerCapacity {

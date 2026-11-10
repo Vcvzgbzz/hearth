@@ -4,9 +4,10 @@
  * when the stream goes quiet for STALE_MS.
  */
 import type { ActivityDecl } from "../config/backends.js";
-import { KINDS, readingFromStatus, type Kind, type KindName, type ModelStatus, type Placement } from "./kinds.js";
+import { KINDS, readingFromStatus, type Kind, type ModelStatus, type Placement } from "./kinds.js";
+import type { KindName } from "../config/kinds.js";
 import type { Logger } from "../observe/log.js";
-import { known, type ModelStats } from "../routing/stats.js";
+import { known, type ModelStats } from "../config/models.js";
 import { getJson, MAX_HELD_CHARS, send, UpstreamError } from "../wire/upstream.js";
 
 /** How often an activity path is read, and its timeout; sampled while a page is open, or always for a backend with a `hold`. */
