@@ -52,6 +52,8 @@ comment is read by strangers. Write for them.
   `Routing.tsx` (layout), `flowNodes.tsx` (one view per kind of node) and
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
   file)
+- `examples/`: files people copy into their own setup, not loaded by hearth itself;
+  `examples/adapters/` holds adapter plugins for a fallback between two APIs
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

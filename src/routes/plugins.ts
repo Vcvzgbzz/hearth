@@ -8,7 +8,7 @@ import { Refusal } from "../admit.js";
 import { ConfigError, pluginAuth, resolveSecret } from "../config.js";
 import { fail, forwardable, headersOf, json } from "../http.js";
 import { checkHttp } from "../mcp.js";
-import { Plugins } from "../plugins.js";
+import { Plugins, type Adapter } from "../plugins.js";
 import { resolve } from "../route.js";
 import { send } from "../upstream.js";
 import type { Call, RouteContext } from "./context.js";
@@ -68,10 +68,26 @@ export function pluginRoutes(ctx: RouteContext) {
       return;
     }
     const path = m?.[2] ?? "/";
-    // The plugin that answers if this one cannot: it serves the same API, so it is sent the same request.
+    // What the plugin's fallback is sent if this plugin cannot answer: null when it has none, or when its adapter
+    // has no counterpart for this request on the fallback's API.
     const fb = plugins.fallbackOf(name);
+    let carry: { path: string; query: URLSearchParams; adapter: Adapter | null } | null = null;
+    if (fb !== null && fb.adapt === null) carry = { path, query: url.searchParams, adapter: null };
+    else if (fb !== null) {
+      const adapter = plugins.adapterOf(fb.adapt!);
+      if (adapter === null) {
+        log.warn("plugin.adapter_missing", { plugin: name, adapt: fb.adapt!, caller: c.caller });
+      } else {
+        try {
+          const r = adapter.request(req.method ?? "GET", path, url.searchParams);
+          if (r !== null) carry = { ...r, adapter };
+        } catch (e) {
+          log.warn("plugin.adapter_request_failed", { plugin: name, adapt: fb.adapt!, path, error: e instanceof Error ? e.message : String(e), caller: c.caller });
+        }
+      }
+    }
     const to = plugins.serve(name);
-    if ("why" in to && fb === null) {
+    if ("why" in to && carry === null) {
       json(res, to.status, { error: to.why });
       return;
     }
@@ -96,10 +112,11 @@ export function pluginRoutes(ctx: RouteContext) {
     const ctrl = new AbortController();
     res.on("close", () => { if (!res.writableEnded) ctrl.abort(); });
     const t0 = Date.now();
-    const call = (target: { url: string; auth: Record<string, string> }, at: string, search: string) => {
+    // The plugin's own key replaces ours; an answer hearth rewrites is asked for uncompressed, so it can be read.
+    const call = (target: { url: string; auth: Record<string, string> }, at: string, search: string, plain: boolean) => {
       const headers = callers.headersFor(req) as Record<string, string>;
       delete headers["x-hearth-caller"];
-      // The plugin's own key and headers replace a caller's of the same name.
+      if (plain) delete headers["accept-encoding"];
       for (const h of Object.keys(headers)) if (h.toLowerCase() in target.auth) delete headers[h];
       Object.assign(headers, target.auth);
       headers["x-hearth-caller"] = c.caller;
@@ -118,8 +135,8 @@ export function pluginRoutes(ctx: RouteContext) {
     if ("why" in to) failure = to.why;
     else {
       try {
-        const up = await call(to, path, url.search);
-        if (fb !== null && (up.status >= 500 || up.status === 429)) {
+        const up = await call(to, path, url.search, false);
+        if (carry !== null && (up.status >= 500 || up.status === 429)) {
           to.done(false);
           up.body.resume();
           failure = `it answered ${up.status}`;
@@ -137,7 +154,7 @@ export function pluginRoutes(ctx: RouteContext) {
         log.warn("plugin.serve_failed", { plugin: name, path, error: said(e) });
         // Once an answer has begun there is no taking it back, so only a plugin that never answered falls back.
         if (res.headersSent) { res.destroy(); return; }
-        if (fb === null) { json(res, 502, { error: `plugin ${name} could not be reached: ${said(e)}` }); return; }
+        if (carry === null) { json(res, 502, { error: `plugin ${name} could not be reached: ${said(e)}` }); return; }
         failure = said(e);
       }
     }
@@ -152,22 +169,40 @@ export function pluginRoutes(ctx: RouteContext) {
     }
     // A fallback is one hop: it answers with its own API, and its own fallback is not followed.
     const alt = plugins.serve(fb!.plugin);
-    log.info("plugin.fallback", { plugin: name, to: fb!.plugin, why: failure, caller: c.caller });
+    log.info("plugin.fallback", { plugin: name, to: fb!.plugin, adapt: fb!.adapt, why: failure, caller: c.caller });
     if ("why" in alt || "stdio" in alt) {
       if ("done" in alt) alt.done(false);
       json(res, 502, { error: `plugin ${name} could not answer (${failure}), and neither could its fallback ${fb!.plugin}${"why" in alt ? `: ${alt.why}` : ""}` });
       return;
     }
+    const via = carry!;
     try {
-      const up = await call(alt, path, url.search);
+      const qs = via.query.toString();
+      const up = await call(alt, via.path, qs === "" ? "" : `?${qs}`, via.adapter !== null);
       alt.done(up.status < 500);
-      res.writeHead(up.status, forwardable(up.headers));
-      await pipeline(up.body, res);
-      log.info("plugin.served", { plugin: fb!.plugin, for: name, method: req.method, path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+      if (via.adapter === null || up.status < 200 || up.status >= 300) {
+        res.writeHead(up.status, forwardable(up.headers));
+        await pipeline(up.body, res);
+      } else {
+        const raw = Buffer.from(await up.text(cfg.maxBodyBytes));
+        let out: Buffer;
+        try {
+          out = await via.adapter.response(raw);
+        } catch (e) {
+          log.warn("plugin.adapter_failed", { plugin: name, adapt: fb!.adapt!, to: fb!.plugin, path: via.path, error: said(e) });
+          json(res, 502, { error: `plugin ${name} could not answer (${failure}), and adapter ${fb!.adapt!} could not read its fallback ${fb!.plugin}'s answer: ${said(e)}` });
+          return;
+        }
+        // The answer is the adapter's now: what described the fallback's bytes no longer does.
+        const headers = forwardable(up.headers);
+        for (const h of Object.keys(headers)) if (["content-length", "content-encoding", "etag"].includes(h.toLowerCase())) delete headers[h];
+        res.writeHead(up.status, { ...headers, "content-length": out.length }).end(out);
+      }
+      log.info("plugin.served", { plugin: fb!.plugin, for: name, method: req.method, path: via.path, status: up.status, ...(via.adapter ? { adapt: fb!.adapt! } : {}), caller: c.caller, ms: Date.now() - t0 });
     } catch (e) {
       alt.done(false);
       if (ctrl.signal.aborted) return;
-      log.warn("plugin.serve_failed", { plugin: fb!.plugin, for: name, path, error: said(e) });
+      log.warn("plugin.serve_failed", { plugin: fb!.plugin, for: name, path: via.path, error: said(e) });
       if (!res.headersSent) json(res, 502, { error: `plugin ${name} could not answer (${failure}), and its fallback ${fb!.plugin} failed: ${said(e)}` });
       else res.destroy();
     }

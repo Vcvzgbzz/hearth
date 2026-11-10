@@ -401,7 +401,8 @@ plugins:
 ### A fallback
 
 `fallback` names another plugin that answers when this one cannot, as a backend route's `fallback` does for a
-model. The fallback serves the same API and is sent the same request: the same method, path, query and body.
+model. The fallback serves the same API and is sent the same request: the same method, path, query and body,
+unless an adapter carries it over to a different API ([below](#an-adapter-between-two-apis)).
 It is set on the plugin, and the caller's router is asked about it as about the plugin itself (below).
 
 ```yaml
@@ -425,6 +426,72 @@ plugins:
 - Only a plugin that serves an API other than MCP has a fallback, and only such a plugin is one.
 - The log says `plugin.fallback` with why; the Routing map draws "↳ falls back to" on the plugin's box, and
   the Plugins page sets it.
+
+### An adapter between two APIs
+
+When the fallback speaks a different API than the plugin it stands in for, `adapt` names a
+`trust: code` plugin that translates between them:
+
+```yaml
+plugins:
+  search:
+    serves: http://searxng:8080
+    trust: http
+    fallback: { plugin: degoog, adapt: searxng-to-degoog }
+  degoog:
+    serves: http://degoog:4444
+    trust: http
+  searxng-to-degoog:
+    use: file:./adapters/searxng-to-degoog.mjs
+    trust: code
+```
+
+An adapter plugin's module exports the same shape as any code plugin, but `kinds: {}` and
+`setup` returns `{ adapt: { request, response } }` rather than stage hooks. It hooks nothing;
+hearth calls it only to translate a failed request and its fallback's answer:
+
+```js
+export default {
+  apiVersion: 1,
+  kinds: {},
+  setup() {
+    return {
+      adapt: {
+        // The request on the fallback's API, or null when it has no counterpart there.
+        request(method, path, query) {
+          if (method !== "GET" || path !== "/search") return null;
+          const q = query.get("q");
+          if (q === null) return null;
+          return { path: "/api/search", query: new URLSearchParams({ q }) };
+        },
+        // The fallback's 2xx answer, rewritten into the shape the caller asked for.
+        // Throws on an answer the adapter cannot read.
+        response(body) {
+          const d = JSON.parse(body.toString());
+          return Buffer.from(JSON.stringify({ query: d.query, results: d.results }));
+        },
+      },
+    };
+  },
+};
+```
+
+- `request(method, path, query)` is called with the caller's request. It returns `{ path, query }`
+  for the fallback, or `null` when the request has no counterpart on the fallback's API. A `null`
+  result means the caller gets the plugin's own failure, as if there were no fallback.
+- `response(body)` is called with the fallback's 2xx answer, as a `Buffer`. It returns the answer
+  rewritten into the shape the caller asked for, as a `Buffer`. A non-2xx from the fallback is
+  passed through unchanged. If `response` throws, the caller gets a 502 naming the adapter.
+- `adapt` must name a plugin under `plugins:` that is `trust: code` with a `file:` or `npm:`
+  `use`. It may not name the plugin itself or the fallback. These checks run when the config
+  loads. A plugin named as an adapter must have an `adapt` object with both `request` and
+  `response` in its `setup` result; otherwise it fails to start.
+- Because it runs inside hearth, an adapter is `trust: code`. The operator chooses it explicitly,
+  by name and version or file path. An adapter that is not running (it failed to start, or
+  hearth runs with `--no-plugins`) means there is no fallback: the caller gets the plugin's own failure, and hearth logs
+  `plugin.adapter_missing`.
+
+An example adapter is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
 
 ## A plugin that speaks MCP
 

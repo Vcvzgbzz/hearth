@@ -70,6 +70,19 @@ export interface Decision {
   flag?: string;
 }
 
+/**
+ * What a plugin's `fallback` can name as `adapt`, for a fallback that speaks a different API than
+ * the plugin it stands in for. An adapter carries a request over to the fallback's API and brings
+ * the answer back in the shape the caller asked for; a request it has no counterpart for is not
+ * carried over, and the caller gets the plugin's own failure.
+ */
+export interface Adapter {
+  /** The request on the fallback's API, as a path and query, or null when it has no counterpart there. */
+  request(method: string, path: string, query: URLSearchParams): { path: string; query: URLSearchParams } | null;
+  /** The fallback's answer to that request, rewritten into the shape the caller asked for. Throws on one it cannot read. */
+  response(body: Buffer): Buffer | Promise<Buffer>;
+}
+
 /** What a code plugin's `setup` returns: one function per stage it hooks. */
 export interface Hooks {
   request?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
@@ -77,6 +90,8 @@ export interface Hooks {
   log?: (x: HookExchange) => Promise<void> | void;
   error?: (x: HookExchange) => Promise<void> | void;
   stop?: () => Promise<void> | void;
+  /** For a plugin that some other plugin's `fallback` names as `adapt`. */
+  adapt?: Adapter;
 }
 
 /** What `setup` is given. */
@@ -124,8 +139,8 @@ export interface PluginStatus {
   use: string;
   /** The service's own API, answered at `/plugins/<name>/*`, shown as its origin and path; null when it has none. */
   serves: string | null;
-  /** The plugin that answers when this one cannot; null when it has none. */
-  fallback: { plugin: string } | null;
+  /** The plugin that answers when this one cannot, and the adapter that carries the request to its API; null when it has none. */
+  fallback: { plugin: string; adapt: string | null } | null;
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
   /** Requests at /plugins/<name>/* in flight, and those that ended within SEEN_MS, by id: what the map draws as dots. */
@@ -376,6 +391,11 @@ export class Plugins {
       l.kinds = effectiveKinds(declared, decl.kinds);
       const misplaced = this.misplaced(name, l.kinds, needs);
       if (misplaced) throw new Error(misplaced);
+      // A plugin that some other plugin's fallback names as adapt must have an adapt hook.
+      const namedBy = Object.entries(this.cfg.plugins).find(([, p]) => p.fallback?.adapt === name);
+      if (namedBy !== undefined && (typeof hooks.adapt?.request !== "function" || typeof hooks.adapt.response !== "function")) {
+        throw new Error(`it is named as an adapter (plugins.${namedBy[0]}.fallback.adapt) but its setup returns no adapt with request and response`);
+      }
       l.hooks = hooks;
       l.state = "running";
       l.error = null;
@@ -497,6 +517,12 @@ export class Plugins {
   /** The plugin that answers `/plugins/<name>/*` when this one cannot; null when it has none. */
   fallbackOf(name: string): PluginDecl["fallback"] {
     return this.loaded.find((x) => x.name === name)?.decl.fallback ?? null;
+  }
+
+  /** The adapter a running plugin exposes, as named in some other plugin's `fallback.adapt`; null when it has none or is not running. */
+  adapterOf(name: string): Adapter | null {
+    const l = this.loaded.find((x) => x.name === name);
+    return l?.state === "running" ? l.hooks.adapt ?? null : null;
   }
 
   /**
