@@ -436,8 +436,8 @@ export interface UiData {
   lendDefaults?: { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
   /** A newer published hearth, or null. */
   update?: string | null;
-  /** The requests this node made most recently, newest first; neither `backend` nor `peer` when it never ran. */
-  recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }[];
+  /** The requests this node made most recently, newest first; neither `backend` nor `peer` when it never ran (`target: "cache"` when a stored answer served it). */
+  recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; target?: "cache"; ms: number; ok: boolean }[];
   /** Plugins, for the Plugins page and the Routing map. Absent on an older server's payload. */
   plugins?: PluginsView;
   /** The lanes, the order settings and the lane defaults, for the Scheduler page. */

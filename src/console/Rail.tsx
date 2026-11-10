@@ -8,7 +8,7 @@ import { cx, mono } from "./ui.js";
 const OPEN_KEY = "hearth.rail";
 const SHOWN = 10;
 
-type Item = { key: string; model: string; caller: string; backend?: string; peer?: string; live: boolean; at: number; ms?: number; ok?: boolean };
+type Item = { key: string; model: string; caller: string; backend?: string; peer?: string; live: boolean; at: number; ms?: number; ok?: boolean; cached?: boolean };
 
 const ago = (ms: number) => (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 3_600_000)}h`);
 
@@ -33,7 +33,7 @@ export function Rail() {
     ...d.q.jobs.filter((j) => j.state === "running" && !peers.has(j.caller)).map((j) => ({
       key: j.id, model: j.model, caller: j.caller || "local", ...(j.peer ? { peer: j.peer } : { backend: j.backend }), live: true, at: j.since,
     })),
-    ...(d.recent ?? []).map((r, n) => ({ key: `done:${r.t}:${n}`, model: r.model, caller: r.caller, backend: r.backend, peer: r.peer, live: false, at: r.t, ms: r.ms, ok: r.ok })),
+    ...(d.recent ?? []).map((r, n) => ({ key: `done:${r.t}:${n}`, model: r.model, caller: r.caller, backend: r.backend, peer: r.peer, live: false, at: r.t, ms: r.ms, ok: r.ok, ...(r.target === "cache" ? { cached: true } : {}) })),
   ].slice(0, SHOWN);
 
 
@@ -68,7 +68,7 @@ export function Rail() {
                   <span className="truncate">{i.model}</span>
                 </div>
                 <div className="text-dim">
-                  from {i.caller} · {where === null ? "did not run" : `${i.live ? "running on" : "ran on"} ${where}`}
+                  from {i.caller} · {i.cached ? "answered from the cache" : where === null ? "did not run" : `${i.live ? "running on" : "ran on"} ${where}`}
                 </div>
                 <div className="text-dim">
                   {i.live ? `for ${ago(Date.now() - i.at)}` : where === null && i.ok === false ? `refused · ${ago(Date.now() - i.at)} ago`
