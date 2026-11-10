@@ -72,6 +72,31 @@ const isVarName = (v: string) => /^[A-Z_][A-Z0-9_]*$/.test(v);
 /** A key as the entry holds it: `env:NAME` for a variable's name, or the key itself. */
 const keyOf = (v: string): string | null => (v.trim() === "" ? null : isVarName(v.trim()) ? `env:${v.trim()}` : v.trim());
 
+/** Header rows as the entry holds them: each value `env:NAME` for a variable's name, or the value itself. Rows with no name are left out. */
+const headersOf = (rows: { name: string; value: string }[]): Record<string, string> =>
+  Object.fromEntries(rows.filter((r) => r.name.trim() && r.value.trim()).map((r) => [r.name.trim(), keyOf(r.value)!]));
+
+/** Headers sent to the service on every call, for one that reads its key from a header other than Authorization. */
+function HeadersField({ rows, onChange }: { rows: { name: string; value: string }[]; onChange: (rows: { name: string; value: string }[]) => void }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[12px] font-medium">Headers (optional)</span>
+      <span className="text-[11px] text-dim">Sent to it on every call, for a service that takes its key in a header of its own, such as <code className={mono}>X-Api-Key</code>. Each value is the name of a variable in hearth&rsquo;s environment, or the value itself, which then goes in the file. A caller&rsquo;s header of the same name is replaced, and its hearth key is never passed on.</span>
+      {rows.map((r, i) => {
+        const literal = r.value.trim() !== "" && !isVarName(r.value.trim());
+        return (
+          <span key={i} className="flex items-center gap-1">
+            <input className={cx(input, mono)} value={r.name} placeholder="X-Api-Key" aria-label="header name" onChange={(e) => onChange(rows.map((x, j) => (j === i ? { ...x, name: e.target.value.replace(/[^A-Za-z0-9-]/g, "") } : x)))} />
+            <span className={cx(mono, "shrink-0 text-dim")}>:</span>
+            <input className={cx(input, mono, literal && "border-warn")} type={literal ? "password" : "text"} autoComplete="off" spellCheck={false} value={r.value} placeholder="MY_SERVICE_KEY" aria-label="header value" onChange={(e) => onChange(rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+          </span>
+        );
+      })}
+      <button type="button" className="self-start text-[12px] text-accent underline" onClick={() => onChange([...rows, { name: "", value: "" }])}>add a header</button>
+    </div>
+  );
+}
+
 /** A key field: the name of the environment variable hearth reads it from, or the key itself, which then goes in the file. */
 function KeyField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const v = value.trim();
@@ -92,6 +117,7 @@ function Serving({ kind, file, taken, onPlan, onClose }: { kind: "api" | "mcp"; 
   const [where, setWhere] = useState<"network" | "program">("network");
   const [url, setUrl] = useState("");
   const [keyVar, setKeyVar] = useState("");
+  const [headerRows, setHeaderRows] = useState<{ name: string; value: string }[]>([{ name: "", value: "" }]);
   const [name, setName] = useState("");
   const [checking, setChecking] = useState(false);
   const [found, setFound] = useState<string | null>(null);
@@ -109,7 +135,8 @@ function Serving({ kind, file, taken, onPlan, onClose }: { kind: "api" | "mcp"; 
     try {
       const at = splitMcp(url)!;
       const key = keyOf(keyVar);
-      const r = await request<{ ok: boolean; server?: string | null; tools?: number; problem?: string }>("POST", "/plugins/probe", { url: at.serves, mcp: at.path, ...(key ? { key } : {}) });
+      const headers = headersOf(headerRows);
+      const r = await request<{ ok: boolean; server?: string | null; tools?: number; problem?: string }>("POST", "/plugins/probe", { url: at.serves, mcp: at.path, ...(key ? { key } : {}), ...(Object.keys(headers).length ? { headers } : {}) });
       if (!r.ok) setProblem(r.problem ?? "it did not answer");
       else setFound(`${r.server ?? "An MCP server"} answers, with ${r.tools ?? 0} tool${r.tools === 1 ? "" : "s"}.`);
       if (!name) setName(nameFrom(url.trim()));
@@ -124,6 +151,7 @@ function Serving({ kind, file, taken, onPlan, onClose }: { kind: "api" | "mcp"; 
   const entry = (): Record<string, unknown> => ({
     serves: at ? at.serves : url.trim().replace(/\/$/, ""), trust: "http",
     ...(keyOf(keyVar) ? { key: keyOf(keyVar) } : {}),
+    ...(Object.keys(headersOf(headerRows)).length ? { headers: headersOf(headerRows) } : {}),
     ...(at ? { mcp: at.path === "/mcp" ? true : at.path } : {}),
   });
 
@@ -139,6 +167,7 @@ function Serving({ kind, file, taken, onPlan, onClose }: { kind: "api" | "mcp"; 
           at ? `adds ${name}, an MCP server at ${at.serves}${at.path}` : `adds ${name}, an API at ${url.trim()}`,
           `callers reach it at /plugins/${name}${at ? at.path : "/"} with their hearth key`,
           !keyVar.trim() ? "it is sent no key of its own" : isVarName(keyVar.trim()) ? `it is sent the key in ${keyVar.trim()}, read from hearth's environment` : "it is sent the key you gave, which is written into hearth.yaml",
+          ...Object.entries(headersOf(headerRows)).map(([h, v]) => v.startsWith("env:") ? `it is sent the header ${h}, read from ${v.slice(4)} in hearth's environment` : `it is sent the header ${h} with the value you gave, which is written into hearth.yaml`),
         ],
         commit: async () => {
           try {
@@ -227,6 +256,7 @@ ${envRows.map((r) => `        ${r.name.trim()}: env:${r.from.trim() || r.name.tr
             </Field>
             <KeyField value={keyVar} onChange={(v) => { setKeyVar(v); setFound(null); setProblem(null); }} />
           </div>
+          <HeadersField rows={headerRows} onChange={(rows) => { setHeaderRows(rows); setFound(null); setProblem(null); }} />
           {kind === "mcp" && (
             <div className="flex items-center gap-3">
               <Button onClick={() => void check()} disabled={checking || !urlOk}>{checking ? "checking…" : found ? "check again" : "check it"}</Button>

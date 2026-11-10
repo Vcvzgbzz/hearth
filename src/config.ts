@@ -170,6 +170,15 @@ export function backendAuth(format: BackendFormat, key: string | null, headers: 
 }
 
 /**
+ * What hearth sends a plugin service on every call: its `key` as a bearer token and its own `headers`, names
+ * lowercased so one of them replaces a caller's header of the same name. A header named `authorization` wins over `key`.
+ */
+export function pluginAuth(decl: { key: string | null; headers?: Record<string, string> }): Record<string, string> {
+  const more = Object.fromEntries(Object.entries(decl.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]));
+  return { ...(decl.key ? { authorization: `Bearer ${decl.key}` } : {}), ...more };
+}
+
+/**
  * `hold:` on a backend with an `activity:` path: work hearth does not schedule (an image app
  * driven from its own page) keeps the listed lanes of every backend sharing its hardware from
  * starting, from the moment the app answers until it has reported nothing running or queued
@@ -803,6 +812,8 @@ export interface PluginDecl {
   integrity: string | null;
   /** For a service: sent as a bearer token on every call, so the service can tell hearth from anyone else. */
   key: string | null;
+  /** For a service: headers sent on every call beside (or instead of) its key, such as an API that reads its key from `X-Api-Key`. Values may be `env:NAME`. */
+  headers: Record<string, string>;
   /** Narrows what the plugin itself declares; absent hooks all of it. */
   kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
   when: PluginWhen | null;
@@ -884,7 +895,7 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const at = `plugins.${name}`;
     if (!PLUGIN_NAME.test(name)) throw bad(at, "a plugin's name is lowercase letters, digits and dashes");
     const r = asRecord(v, at);
-    only(r, ["use", "serves", "mcp", "run", "trust", "integrity", "key", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
+    only(r, ["use", "serves", "mcp", "run", "trust", "integrity", "key", "headers", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
     const serves = r.serves === undefined ? null : str(r.serves, `${at}.serves`).replace(/\/$/, "");
     if (serves !== null && !/^https?:\/\/[^/]/.test(serves)) throw bad(`${at}.serves`, "is the http(s) URL of the service's own API");
     const run = pluginRun(r.run, `${at}.run`);
@@ -927,9 +938,12 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const integrity = r.integrity === undefined ? null : str(r.integrity, `${at}.integrity`);
     if (r.key !== undefined && !service) throw bad(`${at}.key`, "is for a service; code runs inside hearth and needs none");
     const key = r.key === undefined ? null : resolveSecret(str(r.key, `${at}.key`), `${at}.key`);
+    if (r.headers !== undefined && !service) throw bad(`${at}.headers`, "is for a service; code runs inside hearth and needs none");
+    const headers = Object.fromEntries(Object.entries(asRecord(r.headers ?? {}, `${at}.headers`))
+      .map(([k, v]) => [k, resolveSecret(str(v, `${at}.headers.${k}`), `${at}.headers.${k}`)]));
     if (integrity !== null && !/^sha256-[0-9a-f]{64}$/.test(integrity)) throw bad(`${at}.integrity`, "is sha256-<64 hex digits>");
     out[name] = {
-      use, serves, mcp, run, trust, integrity, key, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
+      use, serves, mcp, run, trust, integrity, key, headers, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
       onError: pick(r.onError, ["skip", "refuse"] as const, "skip", `${at}.onError`),
       onFail: pick(r.onFail, ["refuse", "flag"] as const, "refuse", `${at}.onFail`),
       locked: bool(r.locked, `${at}.locked`, false),

@@ -5,7 +5,7 @@
 import { pipeline } from "node:stream/promises";
 
 import { Refusal } from "../admit.js";
-import { ConfigError, resolveSecret } from "../config.js";
+import { ConfigError, pluginAuth, resolveSecret } from "../config.js";
 import { fail, forwardable, headersOf, json } from "../http.js";
 import { checkHttp } from "../mcp.js";
 import { Plugins } from "../plugins.js";
@@ -85,7 +85,9 @@ export function pluginRoutes(ctx: RouteContext) {
     }
     const headers = callers.headersFor(req) as Record<string, string>;
     delete headers["x-hearth-caller"];
-    if (to.key) headers.authorization = `Bearer ${to.key}`;
+    // The plugin's own key and headers replace a caller's of the same name.
+    for (const h of Object.keys(headers)) if (h.toLowerCase() in to.auth) delete headers[h];
+    Object.assign(headers, to.auth);
     headers["x-hearth-caller"] = c.caller;
     const ctrl = new AbortController();
     res.on("close", () => { if (!res.writableEnded) ctrl.abort(); });
@@ -113,7 +115,7 @@ export function pluginRoutes(ctx: RouteContext) {
   }
 
   /**
-   * POST `{url, key?}`: what a plugin service declares at its /manifest, before it is added. With `mcp` (a path
+   * POST `{url, key?, headers?}`: what a plugin service declares at its /manifest, before it is added. With `mcp` (a path
    * under `url`), whether an MCP server answers there instead: its name and how many tools it has.
    */
   async function routePluginProbe(c: Call): Promise<void> {
@@ -121,15 +123,20 @@ export function pluginRoutes(ctx: RouteContext) {
       const body = await readJson(c.req);
       if (typeof body.url !== "string" || !/^https?:\/\/[^/]/.test(body.url.trim())) throw new Refusal(400, "url is an http(s) URL");
       const key = typeof body.key === "string" && body.key.trim() !== "" ? resolveSecret(body.key.trim(), "key") : null;
+      if (body.headers !== undefined && (typeof body.headers !== "object" || body.headers === null || Array.isArray(body.headers) || Object.values(body.headers).some((v) => typeof v !== "string"))) {
+        throw new Refusal(400, "headers is a map of header names to values");
+      }
+      const headers = Object.fromEntries(Object.entries((body.headers ?? {}) as Record<string, string>).map(([k, v]) => [k, resolveSecret(v.trim(), `headers.${k}`)]));
+      const auth = pluginAuth({ key, headers });
       const url = body.url.trim();
       if (typeof body.mcp === "string") {
         if (!body.mcp.startsWith("/")) throw new Refusal(400, "mcp is a path, like /mcp");
-        const s = await checkHttp(url.replace(/\/$/, "") + body.mcp, key, 10_000);
+        const s = await checkHttp(url.replace(/\/$/, "") + body.mcp, auth, 10_000);
         json(c.res, 200, s.error ? { ok: false, url, problem: s.error } : { ok: true, url, server: s.server, tools: s.tools });
         return;
       }
       try {
-        json(c.res, 200, { ok: true, url, ...(await Plugins.manifest(url, key)) });
+        json(c.res, 200, { ok: true, url, ...(await Plugins.manifest(url, auth)) });
       } catch (e) {
         json(c.res, 200, { ok: false, url, problem: e instanceof Error ? e.message : String(e) });
       }

@@ -82,6 +82,8 @@ function secretPaths(d: Record<string, unknown>): Path[] {
   // What a webhook is sent to prove who is calling.
   each(d.actions, (name, a) => headers(a.headers, ["actions", name, "headers"]));
   if (isObj(d.canary) && isObj(d.canary.notify)) headers(d.canary.notify.headers, ["canary", "notify", "headers"]);
+  // What a plugin service is sent: its key and its own headers, either of which may carry the credential.
+  each(d.plugins, (name, p) => { out.push(["plugins", name, "key"]); headers(p.headers, ["plugins", name, "headers"]); });
   return out;
 }
 

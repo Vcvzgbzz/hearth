@@ -324,7 +324,8 @@ call hearth's `/v1` model routes as internal traffic, below). It returns the hoo
 
 ## Writing an `http` plugin
 
-hearth sends one POST per hook, with `Authorization: Bearer <key>` when the plugin sets `key` (`env:NAME`):
+hearth sends one POST per hook, with `Authorization: Bearer <key>` when the plugin sets `key` (`env:NAME`), and
+the plugin's `headers` when it sets them; it reads `<use>/manifest` the same way:
 
 ```json
 {
@@ -360,6 +361,11 @@ plugins:
     serves: http://crawler:8080          # its own API, answered at /plugins/crawler/*
     trust: http
     key: env:CRAWLER_TOKEN               # what the service expects; optional
+  maps:
+    serves: https://maps.example.com/v1
+    trust: http
+    headers:                             # for a service that takes its key in a header of its own
+      X-Api-Key: env:MAPS_API_KEY
   tools:
     serves: http://tools:3100            # an MCP server: /plugins/tools/mcp
     trust: http
@@ -377,6 +383,10 @@ plugins:
   See [Plugins on the router](routing.md#plugins-on-the-router).
 - **The caller's key stays here.** The service is sent the plugin's `key` as a bearer token instead, when it
   has one, and who is calling in `x-hearth-caller` (`local` or `key:<label>`), which a caller cannot set.
+- **`headers` are sent on every call** to the service: the passthrough, the MCP check, and a hook service's
+  `/manifest` and hook calls. Each replaces a caller's header of the same name, and a value may be `env:NAME`.
+  They are for a service that reads its key from somewhere other than `Authorization`, so `key` can be left
+  out; a header named `Authorization` takes the place of `key`.
 - **`use` is optional.** A plugin that only serves hooks nothing, so hearth reads no `/manifest` from it and
   any service works as it is. With `use` as well, it does both, and a plugin that failed to start serves
   nothing (503).
@@ -406,7 +416,7 @@ plugins:
 ```
 
 - **Served** (`serves` with `mcp`): requests go through as for any served API. hearth also makes the handshake
-  a client would (`initialize`, then `tools/list`, with the plugin's `key`) at startup and every minute after,
+  a client would (`initialize`, then `tools/list`, with the plugin's `key` and `headers`) at startup and every minute after,
   ends the session it opened, and shows the server's name and how many tools it has, or why it did not answer.
   A failed check is shown, never a reason to stop forwarding.
 - **Run** (`run`): hearth starts the program when it starts, initializes it once, and answers

@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { DEFAULT_ROUTER, PLUGIN_STAGES, REQUEST_KINDS, type Flow, type HearthConfig, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "./config.js";
+import { DEFAULT_ROUTER, PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type Flow, type HearthConfig, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "./config.js";
 import type { Logger } from "./log.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
@@ -404,7 +404,7 @@ export class Plugins {
       return;
     }
     if (l.decl.serves === null || l.decl.mcp === null) return;
-    const check = async () => { l.mcp = await checkHttp(l.decl.serves + l.decl.mcp!, l.decl.key, 10_000); };
+    const check = async () => { l.mcp = await checkHttp(l.decl.serves + l.decl.mcp!, pluginAuth(l.decl), 10_000); };
     l.mcp = { transport: "http", server: null, tools: null, error: "checking", checkedAt: 0 };
     void check();
     l.recheck = setInterval(() => void check(), MCP_RECHECK_MS);
@@ -496,7 +496,7 @@ export class Plugins {
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.
    */
-  serve(name: string): { url: string; key: string | null; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
+  serve(name: string): { url: string; auth: Record<string, string>; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
     const l = this.loaded.find((x) => x.name === name);
     if (!l || (l.decl.serves === null && l.stdio === null)) return { status: 404, why: `no plugin named ${name} serves an API here` };
     if (l.state !== "running") return { status: 503, why: `${name} is ${l.state === "off" ? "off" : `not running: ${l.error}`}` };
@@ -507,7 +507,7 @@ export class Plugins {
     const id = `${name}:${++this.seq}`;
     l.flying.set(id, null);
     const done = (ok: boolean) => { if (!ok) l.served.errors++; l.flying.set(id, Date.now()); };
-    return l.stdio ? { stdio: l.stdio, done } : { url: l.decl.serves!, key: l.decl.key, done };
+    return l.stdio ? { stdio: l.stdio, done } : { url: l.decl.serves!, auth: pluginAuth(l.decl), done };
   }
 
   /** Whether any plugin could run on a request at all, so the request carries what a line's plugins will need. */
@@ -709,9 +709,9 @@ export class Plugins {
   }
 
   /** What a service says it handles, read the way startup reads it; for the console, before it is added. */
-  static async manifest(url: string, key: string | null): Promise<{ kinds: Declared; needs: Needs }> {
+  static async manifest(url: string, auth: Record<string, string>): Promise<{ kinds: Declared; needs: Needs }> {
     const base = url.replace(/\/$/, "");
-    const res = await fetch(`${base}/manifest`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(5_000) }).catch((e: unknown) => {
+    const res = await fetch(`${base}/manifest`, { headers: auth, signal: AbortSignal.timeout(5_000) }).catch((e: unknown) => {
       throw new Error(unreachable(base, e));
     });
     if (!res.ok) throw new Error(`${base}/manifest answered ${res.status}${res.status === 401 || res.status === 403 ? ": it wants a key" : ""}`);
@@ -726,8 +726,8 @@ export class Plugins {
 
   private async loadService(_name: string, decl: PluginDecl, use: string, internal: PluginContext["internal"]): Promise<{ declared: Declared; needs: Needs; hooks: Hooks }> {
     const base = use.replace(/\/$/, "");
-    const auth: Record<string, string> = decl.key ? { authorization: `Bearer ${decl.key}` } : {};
-    const { kinds: declared, needs } = await Plugins.manifest(base, decl.key);
+    const auth = pluginAuth(decl);
+    const { kinds: declared, needs } = await Plugins.manifest(base, auth);
     const post = async (hook: PluginStage, payload: Record<string, unknown>, ms: number): Promise<unknown> => {
       const r = await fetch(base, {
         method: "POST",
