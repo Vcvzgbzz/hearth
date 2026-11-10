@@ -64,7 +64,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   file). The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
   boundary around each page and the whole console is `Boundary.tsx`; the Config
   page's draft, which also outlives a walk away, is `configStore.ts`; the Logs page
-  is `logs.tsx`, and what it filters and keys rows by is `logfilter.ts`; the Usage
+  is `logs.tsx`, and what it filters and keys rows by is `logfilter.ts`; the Requests page
+  and the replay strip over the routing map are `Requests.tsx`, and what a trace says is `trace.ts`; the Usage
   page is `Usage.tsx`, and its sums are `tally.ts`
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)

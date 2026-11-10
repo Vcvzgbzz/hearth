@@ -2,13 +2,14 @@
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { openTrace } from "./Requests.js";
 import { select, useStore } from "./store.js";
 import { cx, mono } from "./ui.js";
 
 const OPEN_KEY = "hearth.rail";
 const SHOWN = 10;
 
-type Item = { key: string; model: string; caller: string; backend?: string; peer?: string; live: boolean; at: number; ms?: number; ok?: boolean; cached?: boolean };
+type Item = { key: string; id?: string; model: string; caller: string; backend?: string; peer?: string; live: boolean; at: number; ms?: number; ok?: boolean; cached?: boolean };
 
 const ago = (ms: number) => (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 3_600_000)}h`);
 
@@ -33,7 +34,7 @@ export function Rail() {
     ...d.q.jobs.filter((j) => j.state === "running" && !peers.has(j.caller)).map((j) => ({
       key: j.id, model: j.model, caller: j.caller || "local", ...(j.peer ? { peer: j.peer } : { backend: j.backend }), live: true, at: j.since,
     })),
-    ...(d.recent ?? []).map((r, n) => ({ key: `done:${r.t}:${n}`, model: r.model, caller: r.caller, backend: r.backend, peer: r.peer, live: false, at: r.t, ms: r.ms, ok: r.ok, ...(r.target === "cache" ? { cached: true } : {}) })),
+    ...(d.recent ?? []).map((r, n) => ({ key: `done:${r.t}:${n}`, ...(r.id ? { id: r.id } : {}), model: r.model, caller: r.caller, backend: r.backend, peer: r.peer, live: false, at: r.t, ms: r.ms, ok: r.ok, ...(r.target === "cache" ? { cached: true } : {}) })),
   ].slice(0, SHOWN);
 
 
@@ -58,10 +59,10 @@ export function Rail() {
             const where = i.peer ? `the peer ${i.peer}` : i.backend ? i.backend : null;
             const to = target(i);
             return (
-              <button type="button" key={i.key} disabled={to === null}
+              <button type="button" key={i.key} disabled={to === null && !i.id}
                    onMouseEnter={() => light(to)} onMouseLeave={() => light(null)} onFocus={() => light(to)} onBlur={() => light(null)}
-                   onClick={() => { if (to) select({ kind: to.startsWith("peer:") ? "peer" : "backend", id: to.slice(to.indexOf(":") + 1) }); }}
-                   title={to ? "point to light it up on the map, click for its settings" : undefined}
+                   onClick={() => { if (!i.live && i.id) openTrace(i.id); else if (to) select({ kind: to.startsWith("peer:") ? "peer" : "backend", id: to.slice(to.indexOf(":") + 1) }); }}
+                   title={!i.live && i.id ? "point to light it up on the map, click for its trace" : to ? "point to light it up on the map, click for its settings" : undefined}
                    className={cx("rounded-lg border bg-panel px-2.5 py-2 text-left text-[12px] enabled:hover:bg-muted focus-visible:outline-2 focus-visible:outline-accent", i.live ? "border-accent/50" : "border-line", i.ok === false && "border-bad/40")}>
                 <div className={cx("flex items-center gap-1.5 font-medium", mono)}>
                   <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", i.live ? "animate-pulse bg-accent" : i.ok === false ? "bg-bad" : "bg-ok")} />

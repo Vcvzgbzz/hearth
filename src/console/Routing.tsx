@@ -13,6 +13,7 @@ import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type Dest, type Faste
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
+import { asTried } from "./trace.js";
 
 /** What the draft adds to the picture: what a rule may name, the request being tried, and what is known about each model. */
 type Editing = { /** The router whose rules these are; null for the default one. */ router: string | null; /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Why the file would refuse where a line of a rule sends work. */ trouble: (rule: string, line: number) => string | null; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
@@ -318,10 +319,11 @@ export function Routing() {
     const self = view.net.nodes.find((n) => n.self);
     const models = [...new Set([...(view.catalog ?? []), ...(self?.backends ?? []).flatMap((b) => b.serves ?? []), ...Object.keys((edit.draft.models ?? {}) as object)])].sort();
     const lanes = Object.keys(((edit.draft.scheduler as { lanes?: object } | undefined)?.lanes ?? {}) as object);
-    return layout(view, edit.sel, { router: edit.router, rest: restOf(edit.draft).mode, models, lanes, tried: edit.tried, asked: edit.trial?.model ?? null, pending: edit.pending, facts: factsOf(edit.draft, data), trouble: (rule, line) => lineTrouble(edit.draft!, rule, line),
+    return layout(view, edit.sel, { router: edit.router, rest: restOf(edit.draft).mode, models, lanes, // A replayed request is lit as a tried one while no trial is running.
+      tried: edit.trial ? edit.tried : edit.replay && asTried(edit.replay), asked: edit.trial?.model ?? edit.replay?.asked ?? null, pending: edit.pending, facts: factsOf(edit.draft, data), trouble: (rule, line) => lineTrouble(edit.draft!, rule, line),
       // What was counted is the default router's: on another router's map no line shows a count.
       changed: (rule) => edit.router !== null || JSON.stringify((edit.draft!.flows as Record<string, unknown> | undefined)?.[rule]) !== JSON.stringify((edit.file?.doc?.flows as Record<string, unknown> | undefined)?.[rule]) });
-  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
+  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.trial, edit.replay, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
   const dragging = useRef<string | null>(null);

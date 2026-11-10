@@ -10,7 +10,7 @@ single response and still adds **nothing** to what `npm install` pulls down —
 the browser half is bundled from devDependencies and the package keeps its one
 runtime dependency.
 
-Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
+Eleven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
 
 - **Topology**: this node, its backends, the hardware they share, and its peers,
   with requests drawn as they flow, over a strip of the last ten minutes. Click
@@ -30,7 +30,8 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   **Recent requests** down the left lists what this node asked for, running
   ones first, then the last twelve that ended, each with who asked, where it
   ran and how long it took. Point at one and the backend or peer that ran it
-  lights up on the map; click it for that box's settings. The rail folds away
+  lights up on the map; click a finished one for its trace on the Requests
+  page, or a running one for that box's settings. The rail folds away
   with its arrow, and the browser remembers. In a window narrower than 1024px
   the rail is hidden, and below 1280px a box's settings lie over the right of
   the map instead of beside it, so the map keeps its width.
@@ -105,7 +106,24 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   the next restart. It is the page the former Queue page held, so an old `#queue`
   address opens it.
 - **Logs**: hearth's recent log lines as sentences, newest first, with a level
-  filter, a model filter, a search, and the raw fields a click away.
+  filter, a model filter, a search, and the raw fields a click away. A request
+  line has a **trace** link to that request on the Requests page.
+- **Requests**: the node's recent finished requests from `/ui/requests`, newest
+  first and refreshed every few seconds, each with when it ended, the model asked
+  for (and the one it ran as), the caller, where it ran (a backend, a peer, the
+  cache, or refused), a bar of its wait and run, and whether it failed; filter by
+  a search, a model, a caller, or failures only. Click one for its **trace**: what
+  became of it in one line; a bar of its wait, its time to first byte and the
+  rest of its run, with tokens in, out and cached and tokens per second; the rule
+  lines that decided it, each in the words the Routing map uses and read from the
+  rules as they are now (a rule or line that is gone says it has changed since);
+  then its reason, actions, plugins, the headers a rule tests, what it fell back
+  from, and its error. A request that fell back is shown as one step per attempt.
+  The node keeps the last 2,000; an older link says it is no longer kept.
+  **Show on the map** opens the Routing page on that request's router with its
+  path lit, as a tried request is, and the first rule that decided it in view,
+  under a strip naming the request with **open trace** and a close button.
+  Trying a request or closing the strip ends the replay.
 - **Config**: `hearth.yaml` by section, or as text. See below. Its **Lanes &
   queues** section is a pointer: everything in `scheduler:` is edited on the
   Scheduler page, and the section offers the button that opens it rather than a
@@ -122,6 +140,8 @@ URI-encoded:
 | `#plugins/<name>` | that plugin's panel |
 | `#keys/<label>` | that key, opened |
 | `#routing/<router>`, `#routing/<router>/rule:<name>` | that router's map (`default` for the rules everyone goes by), and that rule's dialog |
+| `#routing/<router>/req:<id>` | that router's map with a finished request's path lit |
+| `#requests/<id>` | that request's trace |
 | `#config/<tab>` | that section of the Config page, or `yaml` for the text |
 | `#scheduler/lane:<name>`, `#scheduler/order:<setting>` | that lane or order setting in the Scheduler's inspector |
 

@@ -12,6 +12,7 @@ import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { sendTest, useLink, useStore, type Ran } from "./store.js";
+import { replayId } from "./Requests.js";
 import { Button, cx, Dialog, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
@@ -169,18 +170,20 @@ const anyModel = (draft: Doc | null): string =>
 
 /** The strip over the graph: add things, and review what the draft changes. */
 export function EditBar() {
-  const { draft, err, plan, past, future, unread, adding, router } = useEdit();
+  const { draft, err, plan, past, future, unread, adding, router, replay } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
   const ruleOpen = useEdit((s) => (s.opened && s.sel?.kind === "flow" ? s.sel.id : null));
-  // `<router>` (`default` for the rules everyone goes by), then `rule:<name>` while a rule is open in its dialog.
-  useLink(router === null && ruleOpen === null ? [] : [router ?? "default", ...(ruleOpen === null ? [] : [`rule:${ruleOpen}`])], draft !== null || unread !== null, ([r, rule]) => {
+  // `<router>` (`default` for the rules everyone goes by), then `rule:<name>` while a rule is open in its dialog, or `req:<id>` while a request is replayed.
+  const extra = ruleOpen !== null ? [`rule:${ruleOpen}`] : replay ? [`req:${replay.id}`] : [];
+  useLink(router === null && extra.length === 0 ? [] : [router ?? "default", ...extra], draft !== null || unread !== null, ([r, rule]) => {
     const full = whole(useEdit.getState());
     if (!full || r === undefined || (r !== "default" && !isObj(obj(full.routers)[r]))) return;
     const to = r === "default" ? null : r;
     if (to !== useEdit.getState().router) showRouter(to);
     const name = rule?.startsWith("rule:") ? rule.slice(5) : null;
     if (name !== null && isObj(obj(useEdit.getState().draft?.flows)[name])) openRule(name);
+    if (rule?.startsWith("req:")) void replayId(rule.slice(4));
   });
   // The map's keys, from anywhere on the page unless something is being typed into or a list is open:
   // "/" searches, Delete takes out what is selected, and copy, paste, duplicate and undo are where they always are.
