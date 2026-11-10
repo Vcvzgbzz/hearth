@@ -8,7 +8,7 @@
 import { create } from "zustand";
 
 import { knobOps, setAt, type Doc, type Path } from "./knobs.js";
-import type { File } from "./types.js";
+import type { File } from "../observe/uidata.js";
 
 export interface SchedDraft {
   /** The file the draft was built on, or null before it is read. */

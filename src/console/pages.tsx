@@ -2,7 +2,7 @@
 import { ChevronRight, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 
-import type { UiData, Used } from "./types.js";
+import type { UiData, Used } from "../observe/uidata.js";
 import { Refs, refsOf, Value } from "./config.js";
 import { draftView, isObj, obj, put } from "./draft.js";
 import { change, useEdit } from "./editStore.js";

@@ -3,8 +3,10 @@
  * test/kinds.test.ts holds every entry to the same contract.
  */
 import type { Logger } from "../observe/log.js";
-import { known, statsFromModels, statsFromProps, type ModelStats } from "../routing/stats.js";
+import { statsFromModels, statsFromProps } from "../routing/stats.js";
+import { known, type ModelStats } from "../config/models.js";
 import { getJson, send } from "../wire/upstream.js";
+import type { KindName } from "../config/kinds.js";
 
 /** llama-swap's states for a model that is serving, and one loading off the disk. */
 const READY = "ready";
@@ -205,9 +207,7 @@ const none: Kind = {
   },
 };
 
-export const KINDS = { "llama-swap": llamaSwap, ollama, single, none } as const satisfies Record<string, Kind>;
-
-export type KindName = keyof typeof KINDS;
+export const KINDS = { "llama-swap": llamaSwap, ollama, single, none } as const satisfies Record<KindName, Kind>;
 
 /** Context for an ollama model from /api/show, which does not load it; `num_ctx` overrides the maximum. */
 async function ollamaContext(url: string, wire: string): Promise<number | null> {

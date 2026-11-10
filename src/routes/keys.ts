@@ -4,7 +4,7 @@
  */
 import { randomBytes } from "node:crypto";
 
-import { Refusal } from "../access/admit.js";
+import { Refusal } from "../errors.js";
 import { DEFAULT_ROUTER } from "../config/flows.js";
 import type { ConfigOp } from "../config/configfile.js";
 import { json, keyId } from "../wire/http.js";

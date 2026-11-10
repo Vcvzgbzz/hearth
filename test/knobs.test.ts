@@ -21,7 +21,7 @@ import { FIELDS } from "../src/config/fields.js";
 import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import { backendRows, callersOf, callerRows, CLEARABLE, defaultJobs, draftLanes, editedAt, editedIn, hiddenModels, knobLanes, knobOps, LANE_DEFAULT_WORDS, laneCanClear, laneMenu, laneNameError, laneBadges, lanePinGroups, laneRows, laneText, lanesWithoutPriority, modelRows, pinLanes, pinRowsOf, numberText, overtakeSeconds, overtakeText, pageFor, PIN_WORDS, pinValueAt, pinsOf, priorityGaps, reasonText, removalBlock, reviewNotes, savePool, seeded, setAt, strayLane, valueAt, waitingOn, type Doc, type LanePin, type ModelRow, type Path, type PoolEdit, type PoolMode } from "../src/console/knobs.js";
-import type { Job, LaneDefaults, SchedulerView } from "../src/console/types.js";
+import type { Job, LaneDefaults, SchedulerView } from "../src/observe/uidata.js";
 
 const view = (): SchedulerView => ({
   lanes: [

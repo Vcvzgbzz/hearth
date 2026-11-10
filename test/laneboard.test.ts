@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 
 import { boardOrder, boardSlots, changeWords, knobOps, laneCeilings, lanePosition, laneStatus, laneTags, laneTracks, orderChip, pinsOf, seeded, setAt, slotSummary, type Doc } from "../src/console/knobs.js";
-import type { Job, SchedulerView } from "../src/console/types.js";
+import type { Job, SchedulerView } from "../src/observe/uidata.js";
 
 const job = (id: string, lane: string, state: Job["state"], extra: Partial<Job> = {}): Job =>
   ({ id, lane, model: "m", caller: "app", state, position: 0, since: 0, backend: "gpu0", ...extra });

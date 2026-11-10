@@ -11,7 +11,7 @@ import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, se
 import { contextMenu } from "./editor.js";
 import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
-import type { UiData } from "./types.js";
+import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
 
 /** What the draft adds to the picture: what a rule may name, the request being tried, and what is known about each model. */

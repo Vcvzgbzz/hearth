@@ -7,7 +7,7 @@
  */
 import { FIELDS, humanMs } from "../config/fields.js";
 import { opsBetween, type Op } from "./diff.js";
-import type { Job, LaneDefaults, SchedulerView, WaitReason } from "./types.js";
+import type { Job, LaneDefaults, SchedulerView, WaitReason } from "../observe/uidata.js";
 
 export type Doc = Record<string, unknown>;
 export type Path = (string | number)[];

@@ -3,17 +3,15 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
-import { KINDS } from "../queue/kinds.js";
 import { type Action, actionDecls } from "../routing/actions.js";
-import { NOTE_MAX } from "../routing/stats.js";
-import { type Emulation, EMULATIONS } from "../wire/emulate.js";
+import { declaredStats, type Emulation, EMULATIONS, modelConcurrency, modelEfforts, modelParams, modelPool, modelPrice, type ModelRoute, NOTE_MAX } from "./models.js";
 import { activityDecl, BACKEND_FORMATS, type BackendConfig, type BackendFormat, backendUrl, cacheTtl, holdDecl, layoutDecl, residentDecl, type ResourceDecl, routeList, type ServerDecl, warmSource } from "./backends.js";
 import { type CanaryConfig, canaryDecl } from "./canary.js";
 import { FIELDS, SECTION_KEYS } from "./fields.js";
+import { KIND_SPECS } from "./kinds.js";
 import { ANY, callerDecls, type Flow, flowDecls, MOVED_TO_FLOWS, type Router, routerDecls } from "./flows.js";
 import { apiKeyList, type KeyRule, typeNames } from "./keys.js";
-import { v1Marker } from "./migrate.js";
-import { declaredStats, modelConcurrency, modelEfforts, modelParams, modelPool, modelPrice, type ModelRoute } from "./models.js";
+import { CONFIG_VERSION, v1Marker } from "./migrate.js";
 import { lendTerms, type LendTerms, type ModelLimits, type PeerConfig } from "./peers.js";
 import { type PluginDecl, pluginDecls, REQUEST_KINDS, type RequestKind } from "./plugins.js";
 import { asRecord, atLeast, bad, bool, ConfigError, count, num, only, resolveSecret, str, strList, trimUrl } from "./read.js";
@@ -187,9 +185,6 @@ export interface LaneDefaults {
   routes: string;
 }
 
-/** The layout of hearth.yaml this build reads and writes. A file that names a later one is refused, never half-read. */
-export const CONFIG_VERSION = 3;
-
 /** Where a request that names no lane lands, read off a parsed config as a dry run would read it. */
 export function laneDefaults(cfg: Pick<HearthConfig, "scheduler" | "peerLane">): LaneDefaults {
   return { first: Object.keys(cfg.scheduler.lanes)[0]!, peers: cfg.peerLane, routes: lowestLane(cfg.scheduler.lanes) };
@@ -340,8 +335,8 @@ export function parseConfig(raw: unknown): HearthConfig {
   }
   // A kind that reports a resident model but cannot unload it would fail every neighbour's turn.
   for (const b of backends) {
-    const k = KINDS[b.kind];
-    if (b.resident || !k.knowsWarm || k.unload) continue;
+    const k = KIND_SPECS[b.kind];
+    if (b.resident || !k.knowsWarm || k.unloads) continue;
     const mine = b.resources.filter((r) => !resourceDecls[r]?.shared);
     const rival = backends.find((o) => o !== b && !o.resident && o.resources.some((r) => mine.includes(r)));
     if (rival) {

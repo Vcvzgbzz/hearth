@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 
-import { Refusal } from "./access/admit.js";
+import { Refusal } from "./errors.js";
 import { Answers } from "./wire/answers.js";
 import { Callers, isLoopback } from "./access/callers.js";
 import { createCanary, degradedError } from "./observe/canary.js";

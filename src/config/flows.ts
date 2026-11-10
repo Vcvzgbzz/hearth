@@ -17,7 +17,7 @@ export const MOVED_TO_FLOWS = ["policy", "peers", "spilloverAt", "fallbackLocal"
  * What a flow step tests. Every condition present must hold. `warm`, `free` and `queuedUnder`
  * read the step's own target; the rest read the request and the node.
  */
-export interface FlowWhen {
+export type FlowWhen = {
   images?: boolean;
   tools?: boolean;
   /** Estimated prompt plus reserved output, strictly over or under. */
@@ -65,7 +65,7 @@ export interface FlowWhen {
   laneNot?: string[];
   /** The node's own clock is between these, `HH:MM` each; `from` later than `to` runs through midnight. */
   time?: { from: string; to: string };
-}
+};
 
 /** Somewhere a request can run: here as `model`, or on `peer` as its id for `model` (null: the id asked for). */
 export type FlowEnd = { model: string } | { peer: string; model: string | null };
@@ -390,4 +390,26 @@ export function flowDecls(
     walk(name, []);
   }
   return flows;
+}
+
+const step = (to: FlowTo, when: FlowWhen | null = null): FlowStep => ({ when, to, lane: null, params: null, do: [] });
+
+/**
+ * A flow to start a model from, in one of the common shapes: `peer` tries each peer in turn,
+ * `spillover` runs here until the queue is `spilloverAt` deep, `fastest` picks whoever would
+ * start it soonest. `peers` are the ones that map the id, in order; with none, or with `local`,
+ * it only ever runs here and null says no flow is needed.
+ */
+export function routedFlow(id: string, o: { policy: "local" | "peer" | "spillover" | "fastest"; peers: readonly string[]; spilloverAt?: number; fallbackLocal?: boolean }): Flow | null {
+  if (o.policy === "local" || o.peers.length === 0) return null;
+  const steps: FlowStep[] = [];
+  const fallbackLocal = o.fallbackLocal ?? true;
+  const home: FlowEnd = { model: id };
+  const away = o.peers.map((peer): FlowEnd => ({ peer, model: null }));
+  const refuse: FlowTo = { refuse: "no peer could take it, and it does not run here" };
+  // Unless it may run here, nothing does once no peer could have taken it.
+  if (!fallbackLocal && o.policy !== "peer") steps.push(step(refuse, { down: [...o.peers] }));
+  if (o.policy === "fastest") return { inputs: [id], steps: [...steps, step({ fastest: [home, ...away] })] };
+  if (o.policy === "spillover") steps.push(step(home, { queuedUnder: o.spilloverAt ?? 1 }));
+  return { inputs: [id], steps: [...steps, ...away.map((a) => step(a)), step(fallbackLocal ? home : refuse)] };
 }

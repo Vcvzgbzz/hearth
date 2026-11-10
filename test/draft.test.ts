@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config/config.js";
 import { peerChoices, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
-import type { UiData } from "../src/console/types.js";
+import type { UiData } from "../src/observe/uidata.js";
 
 const doc = (): Doc => ({
   servers: { box: { host: "10.0.0.5" } },

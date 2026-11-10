@@ -22,7 +22,7 @@ import type { RequestLog } from "../observe/requestlog.js";
 import type { tailscaleWhois } from "../peers/tailscale.js";
 import type { Usage } from "../observe/usage.js";
 import type { Worlds } from "../routing/world.js";
-import type { Refusal } from "../access/admit.js";
+import type { Refusal } from "../errors.js";
 
 /** One request with its caller already resolved by the route table. */
 export interface Call {

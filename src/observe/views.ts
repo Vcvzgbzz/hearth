@@ -18,34 +18,8 @@ import type { LentTerms, PeerRegistry } from "../peers/peers.js";
 import type { RecentCall } from "./requestlog.js";
 import { troubleSays } from "../queue/backend.js";
 import type { BackendPool } from "../queue/pool.js";
-import type { ModelStats } from "../routing/stats.js";
-
-/** One watched model, as the page draws it. */
-export interface CanaryModelView {
-  backend: string;
-  health: "ok" | "degraded";
-  failures: number;
-  lastProbeAt: number;
-  /** Why it is out, when it is. */
-  reason: string | null;
-  detail: string | null;
-  /** A bounded sample of the bad output. */
-  sample: string | null;
-  since: number | null;
-  /** A recovery drop happened and a clean probe has not confirmed the reload. */
-  reloadPending: boolean;
-  recoveryCount: number;
-}
-
-/** The canary, for the page. Always present, so "off" is visible rather than blank. */
-export interface CanaryView {
-  enabled: boolean;
-  /** Watching relayed traffic as well as probing. */
-  passive: boolean;
-  /** The gentle recovery is armed. */
-  recovery: boolean;
-  models: Record<string, CanaryModelView>;
-}
+import type { ModelStats } from "../config/models.js";
+import type { Canary, Node, PluginsView, UiData } from "./uidata.js";
 
 /** One api key, as the keys page draws it: who it is, what it may run, when it last spoke to this node. */
 /** What was used, and what it cost in dollars at the prices the models carry now. */
@@ -112,7 +86,7 @@ export interface ViewDeps {
   /** How many times each step of each flow has decided since the flows last changed. */
   flowHits: () => Record<string, number[]>;
   /** The canary's state, and whether one is configured at all. */
-  canary: () => CanaryView;
+  canary: () => Canary;
   /** The keys page's rows, with last-seen — the one per-key fact only this process can know. */
   keys: () => KeyInfo[];
   /** Callers that are not keys, with what they used. */
@@ -124,9 +98,9 @@ export interface ViewDeps {
   /** A newer published hearth, or null. */
   update: () => string | null;
   /** The requests this node made most recently, newest first. */
-  recent: () => readonly RecentCall[];
+  recent: () => RecentCall[];
   /** Plugins, where they are placed and what each router does with them, for the Plugins page and the Routing map. */
-  plugins: () => unknown;
+  plugins: () => PluginsView;
 }
 
 /** Which console this node serves. A page that was loaded from another one reloads itself when it sees this change. */
@@ -136,7 +110,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
-  async function uiPayload(operator: string | null = null): Promise<Record<string, unknown>> {
+  async function uiPayload(operator: string | null = null): Promise<UiData> {
     await peers.ensureFresh();
     // Declared activity paths are read only while a page is building data, never on a timer.
     for (const b of pool.all()) void pool.sampleActivity(b);
@@ -149,7 +123,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       control: writeMode(),
       controls: controls.state(),
       // What the sharing and mapping controls need.
-      share: shared(),
+      share: [...shared()],
       configuredShare: cfg.share,
       // Where every edit lands, and what is waiting on a restart; replaces the old pending-changes block.
       config: config.status(),
@@ -261,7 +235,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       if (st) selfStats[m] = st;
     }
 
-    const nodes: Record<string, unknown>[] = [
+    const nodes: Node[] = [
       {
         name: cfg.name,
         self: true,
@@ -408,7 +382,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       // the top of the payload rather than inferred from a list of backends.
       resources: pool.resources(),
       // What the last few handoffs cost somebody.
-      evictions: pool.evictions(),
+      evictions: [...pool.evictions()],
       // Hardware kept for an app hearth does not schedule; a client can read this to plan around it.
       holds: pool.holds(),
       readyNow: [...readyNow].sort(),

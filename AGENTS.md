@@ -21,7 +21,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   request needs; `reach.ts` is who can reach what, for the console
 - `src/queue/`: when it runs: `scheduler.ts` (admission per backend), `pool.ts` (the backends
   and their queues), `resources.ts` (shared hardware), `backend.ts` (one backend's state),
-  `kinds.ts` (what each backend `kind` supports), `keytally.ts` (a key's jobs across backends)
+  `kinds.ts` (what each backend `kind` does; its names and the facts config checks are
+  `config/kinds.ts`), `keytally.ts` (a key's jobs across backends)
 - `src/peers/`: peer health and capacity (`peers.ts`), lending terms (`lending.ts`), the
   lending/borrowing switches (`controls.ts`), and which tailnet machine a caller is
   (`tailscale.ts`)
@@ -31,16 +32,19 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   answer cache (`answers.ts`)
 - `src/config/`: `config.ts` (`HearthConfig`, `parseConfig`, `loadConfig`), and beside it one
   file per section, each with its types and the code that reads them (`backends.ts`, `flows.ts`,
-  `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`; `read.ts` is the field readers
+  `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`; `read.ts` is the field readers
   and `ConfigError` they share); `fields.ts` (the settings table the parser and the console both read),
   `configfile.ts` (live edits to hearth.yaml), `migrate.ts`, `yamlq.ts`
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
   (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)
 - `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `history.ts`,
-  `usage.ts`, `canary.ts`, `views.ts` (the console's data), `report.ts` (`hearth report`, with
+  `usage.ts`, `canary.ts`, `views.ts` (builds the console's data), `uidata.ts` (the shape of
+  that data: the one contract the server and the page are both compiled against), `report.ts` (`hearth report`, with
   secrets scrubbed), `updates.ts` (the daily npm check behind "newer hearth")
 - `src/ui.ts`: serves the console's built page
+- `src/errors.ts`: every error a request can end with, and the status `refusalOf` answers it with;
+  imports nothing, so any layer can throw one
 - `src/console/`: the React status page and config editor (built to `dist/`).
   The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the recent-requests rail beside the
   Topology map is `Rail.tsx`; the Plugins page is

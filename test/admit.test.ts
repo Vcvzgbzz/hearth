@@ -6,10 +6,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { admitModel, BodyTooLargeError, callerCap, Refusal, refusalOf } from "../src/access/admit.js";
+import { admitModel, callerCap } from "../src/access/admit.js";
+import { BodyTooLargeError, PeerStatusError, QueueFullError, Refusal, refusalOf } from "../src/errors.js";
 import { silentLogger } from "../src/observe/log.js";
-import { PeerStatusError } from "../src/peers/peers.js";
-import { QueueFullError } from "../src/queue/scheduler.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

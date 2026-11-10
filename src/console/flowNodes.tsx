@@ -11,7 +11,7 @@ import { Fragment, memo, useEffect, useRef, useState } from "react";
 import { ACTIONS, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
 import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { openPlugin, useStore } from "./store.js";
-import type { PluginView, PluginsView } from "./types.js";
+import type { PluginView, PluginsView } from "../observe/uidata.js";
 import { cx } from "./ui.js";
 
 /* ---------------------------------------------------------------- plugins on a line */

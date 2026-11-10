@@ -4,7 +4,7 @@
  */
 import { pipeline } from "node:stream/promises";
 
-import { Refusal } from "../access/admit.js";
+import { Refusal } from "../errors.js";
 import { pluginAuth } from "../config/plugins.js";
 import { ConfigError, resolveSecret } from "../config/read.js";
 import { fail, forwardable, headersOf, json } from "../wire/http.js";

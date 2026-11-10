@@ -14,7 +14,7 @@ import { BackendInspector, BackendsTab, CallerInspector, CallersTab, jobOrder, J
 import { boardOrder, boardSlots, changeWords, draftLanes, editedAt, knobOps, laneCeilings, laneNameError, lanePosition, laneRows, laneStatus, laneTags, laneTracks, lanesWithoutPriority, numberText, ORDER_KEYS, orderChip, PIN_WORDS, pinsOf, priorityGaps, removalBlock, reviewNotes, seeded, slotSummary, valueAt, waitingOn, type Doc, type LaneRow, type OrderKey, type Path, type SlotsOf, type Track } from "./knobs.js";
 import { changeDraft, discardDraft, dirty, dropDraft, markUnread, takeFile, takeSaved, useSched } from "./schedStore.js";
 import { request, toast, useStore } from "./store.js";
-import type { LaneDefaults } from "./types.js";
+import type { LaneDefaults } from "../observe/uidata.js";
 import { ago, Button, Card, cx, Empty, mono } from "./ui.js";
 
 /** True once mounted: the file behind a draft is fetched in the browser, never while rendering for the server. */

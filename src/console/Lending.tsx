@@ -6,7 +6,7 @@ import { Menu } from "./editor.js";
 import { choose } from "./editStore.js";
 import { short } from "./pages.js";
 import { control, refresh, request, toast, useStore } from "./store.js";
-import type { LendTerms, ModelLimits, UiData, Used } from "./types.js";
+import type { LendTerms, ModelLimits, UiData, Used } from "../observe/uidata.js";
 import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";
 
 type Row = NonNullable<UiData["ledger"]>[number];

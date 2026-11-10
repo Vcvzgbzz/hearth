@@ -6,11 +6,11 @@
 import { backendAuth, type BackendConfig, type RouteRule } from "../config/backends.js";
 import type { HearthConfig } from "../config/config.js";
 import { ANY } from "../config/flows.js";
-import type { ModelRoute } from "../config/models.js";
+import type { ModelRoute, ModelStats } from "../config/models.js";
 import { BackendState } from "./backend.js";
 import { KINDS } from "./kinds.js";
 import type { Logger } from "../observe/log.js";
-import { mergeStats, type ModelStats, type Need } from "../routing/stats.js";
+import { mergeStats, type Need } from "../routing/stats.js";
 import { ResourceArbiter } from "./resources.js";
 import { KeyTally } from "./keytally.js";
 import { Scheduler } from "./scheduler.js";
