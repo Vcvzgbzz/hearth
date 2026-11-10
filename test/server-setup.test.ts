@@ -8,9 +8,9 @@ import type { AddressInfo } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { hashPassword } from "../src/login.js";
+import { loadConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { hashPassword } from "../src/access/login.js";
 import { createNode } from "../src/server.js";
 
 const iface = Object.values(networkInterfaces())

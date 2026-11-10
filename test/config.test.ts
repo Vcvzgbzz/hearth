@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 
-import { ConfigError, parseConfig, peersMapping, type PeerConfig } from "../src/config.js";
+import { ConfigError, parseConfig, peersMapping, type PeerConfig } from "../src/config/config.js";
 
 const minimal = { backends: { main: { url: "http://127.0.0.1:9292" } } };
 const friend = (models: Record<string, string> = {}) => ({ url: "http://10.0.0.2:4141", token: "t", models });

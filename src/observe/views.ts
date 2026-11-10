@@ -3,19 +3,19 @@
  * per call. Its only effects are freshening peers and sampling declared activity for the page.
  */
 import { createHash } from "node:crypto";
-import type { ReachType } from "./reach.js";
+import type { ReachType } from "../routing/reach.js";
 import type { Row } from "./usage.js";
-import { CONSOLE_HTML } from "./ui.js";
-import { DEFAULT_ROUTER, WARM_LANE, laneDefaults, type HearthConfig, type KeyRule, type LendTerms } from "./config.js";
-import { flowsOf } from "./route.js";
-import type { Controls } from "./controls.js";
+import { CONSOLE_HTML } from "../ui.js";
+import { DEFAULT_ROUTER, WARM_LANE, laneDefaults, type HearthConfig, type KeyRule, type LendTerms } from "../config/config.js";
+import { flowsOf } from "../routing/route.js";
+import type { Controls } from "../peers/controls.js";
 import { KEEP, type History } from "./history.js";
-import type { ConfigFile } from "./configfile.js";
-import type { LentTerms, PeerRegistry } from "./peers.js";
+import type { ConfigFile } from "../config/configfile.js";
+import type { LentTerms, PeerRegistry } from "../peers/peers.js";
 import type { RecentCall } from "./requestlog.js";
-import { troubleSays } from "./backend.js";
-import type { BackendPool } from "./pool.js";
-import type { ModelStats } from "./stats.js";
+import { troubleSays } from "../queue/backend.js";
+import type { BackendPool } from "../queue/pool.js";
+import type { ModelStats } from "../routing/stats.js";
 
 /** One watched model, as the page draws it. */
 export interface CanaryModelView {

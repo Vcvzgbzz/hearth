@@ -15,8 +15,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { ConfigError } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { ConfigError } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

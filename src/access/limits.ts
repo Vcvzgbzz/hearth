@@ -5,16 +5,16 @@
  */
 import { admitModel, callerCap, Refusal } from "./admit.js";
 import type { Callers } from "./callers.js";
-import { ANY, peersMapping, type HearthConfig } from "./config.js";
-import type { Controls } from "./controls.js";
-import type { KeyLimit } from "./keytally.js";
-import { closedWhy, limitsFor, spentWhy, termsFor } from "./lending.js";
-import type { BackendPool } from "./pool.js";
-import { entryOf } from "./route.js";
-import type { Usage } from "./usage.js";
-import type { Spent } from "./views.js";
+import { ANY, peersMapping, type HearthConfig } from "../config/config.js";
+import type { Controls } from "../peers/controls.js";
+import type { KeyLimit } from "../queue/keytally.js";
+import { closedWhy, limitsFor, spentWhy, termsFor } from "../peers/lending.js";
+import type { BackendPool } from "../queue/pool.js";
+import { entryOf } from "../routing/route.js";
+import type { Usage } from "../observe/usage.js";
+import type { Spent } from "../observe/views.js";
 import { SlidingWindow } from "./window.js";
-import type { Worlds } from "./world.js";
+import type { Worlds } from "../routing/world.js";
 
 /** Requests a peer may make of the control plane in an hour, apart from its inference budget so polling never starves real work. */
 const CONTROL_LIMIT_PER_HOUR = 2_000;

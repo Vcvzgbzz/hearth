@@ -19,10 +19,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { parseV1 } from "./v1.js";
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode, type HearthNode } from "../src/server.js";
-import { multipartField, replaceMultipartField } from "../src/multipart.js";
-import { send } from "../src/upstream.js";
+import { multipartField, replaceMultipartField } from "../src/wire/multipart.js";
+import { send } from "../src/wire/upstream.js";
 
 interface Seen { path: string; contentType: string[]; contentLength: string | undefined; body: Buffer }
 

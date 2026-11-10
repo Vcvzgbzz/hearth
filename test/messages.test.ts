@@ -11,8 +11,8 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
-import { chatOf, messageOf } from "../src/messages.js";
+import { silentLogger } from "../src/observe/log.js";
+import { chatOf, messageOf } from "../src/wire/messages.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

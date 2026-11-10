@@ -5,7 +5,7 @@
  * the page holds it rather than the parsed config, because every row needs the exact path in the
  * file that it writes.
  */
-import { FIELDS, humanMs } from "../fields.js";
+import { FIELDS, humanMs } from "../config/fields.js";
 import { opsBetween, type Op } from "./diff.js";
 import type { Job, LaneDefaults, SchedulerView, WaitReason } from "./types.js";
 

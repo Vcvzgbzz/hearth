@@ -16,7 +16,7 @@
  */
 import assert from "node:assert/strict";
 
-import { analyseAnswer, isFailure, readCompletion } from "../src/canary.js";
+import { analyseAnswer, isFailure, readCompletion } from "../src/observe/canary.js";
 
 const PARIS = /paris/i;
 

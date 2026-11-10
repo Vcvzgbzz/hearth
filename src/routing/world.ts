@@ -8,10 +8,10 @@ import type { ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 
 import { runAction, type Action, type ActionFacts } from "./actions.js";
-import { DEFAULT_ROUTER, type FlowEnd, type HearthConfig } from "./config.js";
-import type { Logger } from "./log.js";
-import type { PeerRegistry } from "./peers.js";
-import type { BackendPool, BackendSlot } from "./pool.js";
+import { DEFAULT_ROUTER, type FlowEnd, type HearthConfig } from "../config/config.js";
+import type { Logger } from "../observe/log.js";
+import type { PeerRegistry } from "../peers/peers.js";
+import type { BackendPool, BackendSlot } from "../queue/pool.js";
 import type { LocalLoad, resolve, World } from "./route.js";
 
 /** Conversations a sticky flow remembers before the oldest is forgotten. */

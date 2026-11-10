@@ -7,7 +7,7 @@
 import { Document, isMap, isScalar, isSeq, YAMLMap, type Node } from "yaml";
 
 import { ANY, CONFIG_VERSION, MOVED_TO_FLOWS, rawFlow, type Flow } from "./config.js";
-import { routedFlow } from "./route.js";
+import { routedFlow } from "../routing/route.js";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 

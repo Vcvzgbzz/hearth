@@ -22,12 +22,12 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { ConfigError, parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { PeerRegistry, type PeerCapacity } from "../src/peers.js";
-import { decide } from "../src/route.js";
+import { ConfigError, parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { PeerRegistry, type PeerCapacity } from "../src/peers/peers.js";
+import { decide } from "../src/routing/route.js";
 import { createNode, type HearthNode } from "../src/server.js";
-import { cleanStats, fitOutput, mergeStats, needsOf, statsFromModels, statsFromProps, unfit } from "../src/stats.js";
+import { cleanStats, fitOutput, mergeStats, needsOf, statsFromModels, statsFromProps, unfit } from "../src/routing/stats.js";
 import { parseV1 } from "./v1.js";
 
 /* ------------------------------------------------------------ reading props */

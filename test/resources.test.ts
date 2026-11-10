@@ -23,11 +23,11 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
-import { BackendState } from "../src/backend.js";
-import { BackendPool } from "../src/pool.js";
-import { ResourceArbiter } from "../src/resources.js";
-import { Scheduler } from "../src/scheduler.js";
+import { silentLogger } from "../src/observe/log.js";
+import { BackendState } from "../src/queue/backend.js";
+import { BackendPool } from "../src/queue/pool.js";
+import { ResourceArbiter } from "../src/queue/resources.js";
+import { Scheduler } from "../src/queue/scheduler.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

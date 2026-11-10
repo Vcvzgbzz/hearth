@@ -5,39 +5,40 @@ comment is read by strangers. Write for them.
 
 ## Where things are
 
+`src/` is grouped by what each part decides. A request comes in through `routes/`, `access/` says
+whether it may run, `routing/` says where, `queue/` says when, and `wire/` does the talking.
+
 - `src/server.ts`: the route table (every path, its auth), turning a credential into a caller,
   and the HTTP server's lifecycle (request ids, cross-origin and rebinding guards, the drain)
-- `src/routes/`: what each route does, one file per area (`chat.ts`, `passthrough.ts`,
-  `models.ts`, `peer.ts`, `join.ts`, `keys.ts`, `login.ts`, `plugins.ts`, `admin.ts`, `console.ts`); each takes
-  the `RouteContext` in `routes/context.ts` and returns its handlers
-- `src/callers.ts`: api keys, peer tokens and operator sessions, looked up by digest
-- `src/limits.ts`: what a caller is held to before it queues: lending, scope, per-key limits, caps
-- `src/world.ts`: the live state a flow reads (load, idle time, sticky placements, step hits)
-- `src/requestlog.ts`: the request log, call history, usage and the recent-calls rail
-- `src/http.ts`, `src/window.ts`: body reading, error envelopes, relaying; the sliding-window rate limit
-- `src/scheduler.ts`, `src/pool.ts`, `src/resources.ts`: admission, per-backend
-  queues, shared hardware
-- `src/route.ts`, `src/peers.ts`: local vs peer routing, peer health
-- `src/tailscale.ts`: asks the local tailscaled which tailnet machine a
-  caller is, for peers bound with `tailnet`
-- `src/actions.ts`: what a flow step can set off beside routing; one entry
-  per kind
-- `src/mcp.ts`: MCP for plugins: checking a served MCP endpoint, and running an
-  MCP server over stdin and stdout behind `/plugins/<name>/mcp`
-- `src/plugins.ts`: loading plugins and running their hooks: the kind gate,
-  timeouts, `onError` / `onFail`, the pause after repeated failures, the
-  tokens that mark a plugin's own calls as internal
-- `src/config.ts`, `src/fields.ts`, `src/configfile.ts`: parsing, the settings
-  table, live edits to hearth.yaml
-- `src/kinds.ts`: what each backend `kind` supports
-- `src/anthropic.ts`: a backend that speaks the Messages API: the request and
-  the answer rewritten each way
-- `src/messages.ts`: the `/v1/messages` door, the same rewrite the other way
-  round, for a client that speaks the Messages API
-- `src/report.ts`: `hearth report`, the one-file bug report with secrets
-  scrubbed
-- `src/updates.ts`: the daily npm check behind the console's "newer hearth"
-  notice (`updateCheck`)
+- `src/cli.ts`, `src/index.ts`: the `hearth` command, and the library surface
+- `src/routes/`: what each route does, one file per area; each takes the `RouteContext` in
+  `routes/context.ts` and returns its handlers
+- `src/access/`: who is calling (`callers.ts`: api keys, peer tokens, operator sessions), what
+  they are held to before they queue (`limits.ts`, `admit.ts`), the operator login
+  (`login.ts`), and the sliding-window rate limit (`window.ts`)
+- `src/routing/`: where a request goes: `route.ts` decides, from the live state in `world.ts`;
+  `actions.ts` is what a step can set off; `stats.ts` is what a model can take against what a
+  request needs; `reach.ts` is who can reach what, for the console
+- `src/queue/`: when it runs: `scheduler.ts` (admission per backend), `pool.ts` (the backends
+  and their queues), `resources.ts` (shared hardware), `backend.ts` (one backend's state),
+  `kinds.ts` (what each backend `kind` supports), `keytally.ts` (a key's jobs across backends)
+- `src/peers/`: peer health and capacity (`peers.ts`), lending terms (`lending.ts`), the
+  lending/borrowing switches (`controls.ts`), and which tailnet machine a caller is
+  (`tailscale.ts`)
+- `src/wire/`: talking to backends and clients: `upstream.ts` (outbound HTTP), `http.ts`
+  (bodies, error envelopes, relaying), `anthropic.ts` (a backend that speaks the Messages
+  API), `messages.ts` (the `/v1/messages` door), `emulate.ts`, `multipart.ts`, and the
+  answer cache (`answers.ts`)
+- `src/config/`: `config.ts` (`HearthConfig`, `parseConfig`, `loadConfig`) with one file per
+  section beside it; `fields.ts` (the settings table the parser and the console both read),
+  `configfile.ts` (live edits to hearth.yaml), `migrate.ts`, `yamlq.ts`
+- `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
+  timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
+  (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)
+- `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `history.ts`,
+  `usage.ts`, `canary.ts`, `views.ts` (the console's data), `report.ts` (`hearth report`, with
+  secrets scrubbed), `updates.ts` (the daily npm check behind "newer hearth")
+- `src/ui.ts`: serves the console's built page
 - `src/console/`: the React status page and config editor (built to `dist/`).
   The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the recent-requests rail beside the
   Topology map is `Rail.tsx`; the Plugins page is
@@ -72,20 +73,20 @@ comment is read by strangers. Write for them.
 - A behaviour change comes with a test in `test/*.test.ts` that fails without it.
   New files are picked up by the glob; there is no list to edit.
 - Config fixtures in v1 shape go through `parseV1` from `test/v1.ts`.
-- A new config key is declared in `src/fields.ts`, the one table the parser and
+- A new config key is declared in `src/config/fields.ts`, the one table the parser and
   the console editor both read, or the parser rejects it. If it applies without
-  a restart, add it to `LIVE_KEYS` in `src/configfile.ts`.
+  a restart, add it to `LIVE_KEYS` in `src/config/configfile.ts`.
 - Update every doc your change makes wrong, in the same PR. Search for the
   names you touched (`grep -rn <name> README.md docs/ src/`) rather than trusting
   memory. The places that describe behaviour:
   - `docs/configuration.md`: the config table, one row per setting in
-    `src/fields.ts`
+    `src/config/fields.ts`
   - `docs/endpoints.md`: the endpoint table, one row per route in
     `src/server.ts`
   - the other pages under `docs/`, and `README.md`, which is the pitch, the
     quick start and the index to them: any section or example that shows what
     you changed
-  - `src/fields.ts`: each setting's one-line `desc`, which the console shows
+  - `src/config/fields.ts`: each setting's one-line `desc`, which the console shows
   - `src/cli.ts`: the `hearth init` starter config and the command usage lines
   - `AGENTS.md`: the file map and these rules, if you move or add files
 

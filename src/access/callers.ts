@@ -6,8 +6,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 
-import type { HearthConfig, KeyRule } from "./config.js";
-import { bearer, forwardable, keyId } from "./http.js";
+import type { HearthConfig, KeyRule } from "../config/config.js";
+import { bearer, forwardable, keyId } from "../wire/http.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken } from "./login.js";
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);

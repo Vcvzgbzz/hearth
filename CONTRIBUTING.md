@@ -41,7 +41,7 @@ library and what the larger tests prove.
 - `npm run typecheck && npm test` pass. CI runs both on Node 20, 22 and 24.
 - A behaviour change comes with a test that fails without it.
 - Every doc your change makes wrong is updated in the same PR: the README,
-  the page under `docs/`, and a setting's `desc` in `src/fields.ts`.
+  the page under `docs/`, and a setting's `desc` in `src/config/fields.ts`.
 - No new dependency without an issue agreeing to it first.
 - Written with an AI agent? Say so in the description. Whoever opens the PR
   answers for it.

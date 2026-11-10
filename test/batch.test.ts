@@ -18,7 +18,7 @@
  */
 import assert from "node:assert/strict";
 
-import { Scheduler } from "../src/scheduler.js";
+import { Scheduler } from "../src/queue/scheduler.js";
 
 const lanes = { chat: { priority: 0 }, batch: { priority: 100 } };
 const batched = (m: string) => (m === "vllm" ? 4 : null);

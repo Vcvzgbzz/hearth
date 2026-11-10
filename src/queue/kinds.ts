@@ -2,9 +2,9 @@
  * What each backend `kind` can do, in one table: adding a kind is one entry here, and
  * test/kinds.test.ts holds every entry to the same contract.
  */
-import type { Logger } from "./log.js";
-import { known, statsFromModels, statsFromProps, type ModelStats } from "./stats.js";
-import { getJson, send } from "./upstream.js";
+import type { Logger } from "../observe/log.js";
+import { known, statsFromModels, statsFromProps, type ModelStats } from "../routing/stats.js";
+import { getJson, send } from "../wire/upstream.js";
 
 /** llama-swap's states for a model that is serving, and one loading off the disk. */
 const READY = "ready";

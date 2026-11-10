@@ -13,10 +13,10 @@ import { basename, dirname } from "node:path";
 
 import { isCollection, isMap, isScalar, parseDocument, type Document } from "yaml";
 
-import { Refusal } from "./admit.js";
+import { Refusal } from "../access/admit.js";
 import { ConfigError, endsOf, laneDefaults, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type LaneDefaults, type RoutePolicy } from "./config.js";
-import { routedFlow } from "./route.js";
-import type { Logger } from "./log.js";
+import { routedFlow } from "../routing/route.js";
+import type { Logger } from "../observe/log.js";
 
 /** Keys the running node reads per call, so a new value takes effect on the next request. */
 const LIVE_KEYS = [

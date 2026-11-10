@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
-import { EMULATIONS, type Emulation } from "./emulate.js";
-import { KINDS, type KindName } from "./kinds.js";
-import { actionDecls, type Action } from "./actions.js";
+import { EMULATIONS, type Emulation } from "../wire/emulate.js";
+import { KINDS, type KindName } from "../queue/kinds.js";
+import { actionDecls, type Action } from "../routing/actions.js";
 import { FIELDS, nearest, SECTION_KEYS, type Scope } from "./fields.js";
 import { v1Marker } from "./migrate.js";
-import { known, NOTE_MAX, type ModelStats } from "./stats.js";
+import { known, NOTE_MAX, type ModelStats } from "../routing/stats.js";
 
 /** The shapes of flow a newly borrowed model can start as; see `routedFlow`. */
 export type RoutePolicy = "local" | "peer" | "spillover" | "fastest";

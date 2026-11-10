@@ -13,7 +13,7 @@ import {
   hashPassword,
   verifyDecoy,
   verifyPassword,
-} from "../src/login.js";
+} from "../src/access/login.js";
 
 // --- the hash: a salt:hex pair that verifies and reveals nothing -------------
 {

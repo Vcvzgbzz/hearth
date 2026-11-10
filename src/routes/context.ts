@@ -5,23 +5,23 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import type { Answers } from "../answers.js";
-import type { Callers } from "../callers.js";
-import type { createCanary } from "../canary.js";
-import type { BackendConfig, HearthConfig } from "../config.js";
-import type { ConfigFile } from "../configfile.js";
-import type { Controls } from "../controls.js";
-import type { History } from "../history.js";
-import type { Limits } from "../limits.js";
-import type { Logger, LogRing } from "../log.js";
-import type { PeerRegistry } from "../peers.js";
-import type { Plugins } from "../plugins.js";
-import type { BackendPool } from "../pool.js";
-import type { RequestLog } from "../requestlog.js";
-import type { tailscaleWhois } from "../tailscale.js";
-import type { Usage } from "../usage.js";
-import type { Worlds } from "../world.js";
-import type { Refusal } from "../admit.js";
+import type { Answers } from "../wire/answers.js";
+import type { Callers } from "../access/callers.js";
+import type { createCanary } from "../observe/canary.js";
+import type { BackendConfig, HearthConfig } from "../config/config.js";
+import type { ConfigFile } from "../config/configfile.js";
+import type { Controls } from "../peers/controls.js";
+import type { History } from "../observe/history.js";
+import type { Limits } from "../access/limits.js";
+import type { Logger, LogRing } from "../observe/log.js";
+import type { PeerRegistry } from "../peers/peers.js";
+import type { Plugins } from "../plugins/plugins.js";
+import type { BackendPool } from "../queue/pool.js";
+import type { RequestLog } from "../observe/requestlog.js";
+import type { tailscaleWhois } from "../peers/tailscale.js";
+import type { Usage } from "../observe/usage.js";
+import type { Worlds } from "../routing/world.js";
+import type { Refusal } from "../access/admit.js";
 
 /** One request with its caller already resolved by the route table. */
 export interface Call {

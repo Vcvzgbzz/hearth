@@ -3,11 +3,11 @@
  * available (safe on a local link, never across peers), falling back to polling /running
  * when the stream goes quiet for STALE_MS.
  */
-import type { ActivityDecl } from "./config.js";
+import type { ActivityDecl } from "../config/config.js";
 import { KINDS, readingFromStatus, type Kind, type KindName, type ModelStatus, type Placement } from "./kinds.js";
-import type { Logger } from "./log.js";
-import { known, type ModelStats } from "./stats.js";
-import { getJson, MAX_HELD_CHARS, send, UpstreamError } from "./upstream.js";
+import type { Logger } from "../observe/log.js";
+import { known, type ModelStats } from "../routing/stats.js";
+import { getJson, MAX_HELD_CHARS, send, UpstreamError } from "../wire/upstream.js";
 
 /** How often an activity path is read, and its timeout; sampled while a page is open, or always for a backend with a `hold`. */
 /** Why a read of a backend's model list failed, in a few words, from the status it answered with (0: no answer). */

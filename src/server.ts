@@ -8,24 +8,24 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 
-import { Refusal } from "./admit.js";
-import { Answers } from "./answers.js";
-import { Callers, isLoopback } from "./callers.js";
-import { createCanary, degradedError } from "./canary.js";
-import type { BackendConfig, HearthConfig } from "./config.js";
-import { ConfigFile, ConfigRefusal, deepFreeze, writeFileAtomic } from "./configfile.js";
-import { Controls } from "./controls.js";
-import { DAY_MS, History } from "./history.js";
-import { apiError, bearer, fail, json, readBody, readJson, refuse, type Envelope } from "./http.js";
-import { Limits } from "./limits.js";
-import { LogRing, type Logger } from "./log.js";
-import { PeerRegistry } from "./peers.js";
-import { Plugins } from "./plugins.js";
-import { BackendPool } from "./pool.js";
-import { RequestLog } from "./requestlog.js";
-import { tailscaleWhois } from "./tailscale.js";
-import { Usage } from "./usage.js";
-import { Worlds } from "./world.js";
+import { Refusal } from "./access/admit.js";
+import { Answers } from "./wire/answers.js";
+import { Callers, isLoopback } from "./access/callers.js";
+import { createCanary, degradedError } from "./observe/canary.js";
+import type { BackendConfig, HearthConfig } from "./config/config.js";
+import { ConfigFile, ConfigRefusal, deepFreeze, writeFileAtomic } from "./config/configfile.js";
+import { Controls } from "./peers/controls.js";
+import { DAY_MS, History } from "./observe/history.js";
+import { apiError, bearer, fail, json, readBody, readJson, refuse, type Envelope } from "./wire/http.js";
+import { Limits } from "./access/limits.js";
+import { LogRing, type Logger } from "./observe/log.js";
+import { PeerRegistry } from "./peers/peers.js";
+import { Plugins } from "./plugins/plugins.js";
+import { BackendPool } from "./queue/pool.js";
+import { RequestLog } from "./observe/requestlog.js";
+import { tailscaleWhois } from "./peers/tailscale.js";
+import { Usage } from "./observe/usage.js";
+import { Worlds } from "./routing/world.js";
 import { adminRoutes } from "./routes/admin.js";
 import { chatRoutes } from "./routes/chat.js";
 import { consoleRoutes } from "./routes/console.js";
@@ -38,7 +38,7 @@ import { passthroughRoutes } from "./routes/passthrough.js";
 import { peerRoutes } from "./routes/peer.js";
 import { pluginRoutes } from "./routes/plugins.js";
 
-export type { RecentCall } from "./requestlog.js";
+export type { RecentCall } from "./observe/requestlog.js";
 
 /** The shape of the history file this build writes, and the latest it reads. */
 const HISTORY_VERSION = 1;

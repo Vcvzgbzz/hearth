@@ -14,9 +14,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ConfigError, loadConfig, parseConfig, pluginAuth } from "../src/config.js";
-import { maskedText } from "../src/configfile.js";
-import { silentLogger } from "../src/log.js";
+import { ConfigError, loadConfig, parseConfig, pluginAuth } from "../src/config/config.js";
+import { maskedText } from "../src/config/configfile.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 const SECRET = "svc-header-secret";

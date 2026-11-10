@@ -16,9 +16,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ConfigError, loadConfig, parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { rpcAnswer } from "../src/mcp.js";
+import { ConfigError, loadConfig, parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { rpcAnswer } from "../src/plugins/mcp.js";
 import { createNode } from "../src/server.js";
 
 // A served server's answer is matched to its request by id, also when it sends a number id back as a string.

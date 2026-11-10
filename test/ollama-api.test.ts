@@ -12,8 +12,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -7,7 +7,7 @@ import { ArrowRight, ChevronDown, ChevronRight, Plus, RotateCcw, Save, Trash2, X
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { keyLines, lineDiff, opsBetween, type Op } from "./diff.js";
-import { FIELDS, fieldAt, humanMs, scopeOf, seedOf, type Field, type Ref, type Scope } from "../fields.js";
+import { FIELDS, fieldAt, humanMs, scopeOf, seedOf, type Field, type Ref, type Scope } from "../config/fields.js";
 import { changed, choose, useEdit } from "./editStore.js";
 import { go, request, RequestError, toast, useStore } from "./store.js";
 import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";

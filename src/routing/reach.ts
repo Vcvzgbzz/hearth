@@ -2,7 +2,7 @@
  * What a rulebook lets a caller reach: each name it takes, and every place that name can land,
  * fallbacks included. Read off the rules alone, so it says what could run, not what would now.
  */
-import { ANY, type Flow, type HearthConfig } from "./config.js";
+import { ANY, type Flow, type HearthConfig } from "../config/config.js";
 
 export interface ReachEnd {
   /** The id a job runs as, or a plugin's name. */

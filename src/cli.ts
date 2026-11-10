@@ -15,16 +15,16 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { parseArgs } from "node:util";
 
-import { CONFIG_VERSION, ConfigError, loadConfig, parseConfig } from "./config.js";
-import { mayLeave } from "./route.js";
-import { writeFileAtomic } from "./configfile.js";
-import { LEVELS, createLogger, type Level } from "./log.js";
-import { hashPassword } from "./login.js";
-import { migrateDoc, routedMarker, unguarded, v1Marker } from "./migrate.js";
-import { bugReport } from "./report.js";
-import { watchUpdates } from "./updates.js";
+import { CONFIG_VERSION, ConfigError, loadConfig, parseConfig } from "./config/config.js";
+import { mayLeave } from "./routing/route.js";
+import { writeFileAtomic } from "./config/configfile.js";
+import { LEVELS, createLogger, type Level } from "./observe/log.js";
+import { hashPassword } from "./access/login.js";
+import { migrateDoc, routedMarker, unguarded, v1Marker } from "./config/migrate.js";
+import { bugReport } from "./observe/report.js";
+import { watchUpdates } from "./observe/updates.js";
 import { createNode } from "./server.js";
-import { getJson } from "./upstream.js";
+import { getJson } from "./wire/upstream.js";
 import { parseDocument } from "yaml";
 
 const DEFAULT_CONFIG = "hearth.yaml";

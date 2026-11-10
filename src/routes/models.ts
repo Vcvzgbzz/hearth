@@ -2,13 +2,13 @@
  * The model routes: `/v1/models` lists what can be asked for, `/v1/warm` loads one without
  * generating, `/v1/evict` drops one off its card.
  */
-import { Refusal, inScope, refusalOf } from "../admit.js";
-import { ANY, WARM_LANE } from "../config.js";
-import { apiError, fail, json } from "../http.js";
-import { decide, variantsOf } from "../route.js";
-import type { ModelStats } from "../stats.js";
-import { send } from "../upstream.js";
-import { localLoad } from "../world.js";
+import { Refusal, inScope, refusalOf } from "../access/admit.js";
+import { ANY, WARM_LANE } from "../config/config.js";
+import { apiError, fail, json } from "../wire/http.js";
+import { decide, variantsOf } from "../routing/route.js";
+import type { ModelStats } from "../routing/stats.js";
+import { send } from "../wire/upstream.js";
+import { localLoad } from "../routing/world.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function modelRoutes(ctx: RouteContext) {

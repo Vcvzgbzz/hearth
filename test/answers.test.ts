@@ -10,9 +10,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Answers } from "../src/answers.js";
-import { parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { Answers } from "../src/wire/answers.js";
+import { parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 // Its time.

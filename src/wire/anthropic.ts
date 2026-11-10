@@ -5,10 +5,10 @@
 import type { ServerResponse } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 
-import type { CacheTtl } from "./config.js";
+import type { CacheTtl } from "../config/config.js";
 import { streamErrorFrame } from "./emulate.js";
 import { MAX_HELD_CHARS, type UpstreamResponse } from "./upstream.js";
-import type { Meter } from "./usage.js";
+import type { Meter } from "../observe/usage.js";
 
 type Doc = Record<string, unknown>;
 const isObj = (v: unknown): v is Doc => typeof v === "object" && v !== null && !Array.isArray(v);

@@ -8,9 +8,9 @@
  */
 import assert from "node:assert/strict";
 
-import { KeyTally, type KeyLimit } from "../src/keytally.js";
-import { ResourceArbiter } from "../src/resources.js";
-import { QueueFullError, Scheduler, type SchedulerOptions } from "../src/scheduler.js";
+import { KeyTally, type KeyLimit } from "../src/queue/keytally.js";
+import { ResourceArbiter } from "../src/queue/resources.js";
+import { QueueFullError, Scheduler, type SchedulerOptions } from "../src/queue/scheduler.js";
 
 const lanes = { chat: { priority: 0 }, batch: { priority: 100 } };
 const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));

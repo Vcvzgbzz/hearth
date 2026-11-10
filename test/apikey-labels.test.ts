@@ -13,8 +13,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig } from "../src/config.js";
-import type { Logger } from "../src/log.js";
+import { loadConfig } from "../src/config/config.js";
+import type { Logger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "hearth-labels-"));

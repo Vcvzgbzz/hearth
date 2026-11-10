@@ -14,7 +14,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { parseV1 } from "./v1.js";
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode, type HearthNode } from "../src/server.js";
 
 /** A mock llama-swap backend whose loaded model answers /props as llama.cpp does. */

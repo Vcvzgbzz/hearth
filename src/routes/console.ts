@@ -4,15 +4,15 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { DEFAULT_ROUTER } from "../config.js";
-import { json, keyId } from "../http.js";
-import { termsFor } from "../lending.js";
-import { LIVE_KINDS, LIVE_STAGES, placements } from "../plugins.js";
-import { type ReachType, reachOf } from "../reach.js";
-import { flowsOf } from "../route.js";
+import { DEFAULT_ROUTER } from "../config/config.js";
+import { json, keyId } from "../wire/http.js";
+import { termsFor } from "../peers/lending.js";
+import { LIVE_KINDS, LIVE_STAGES, placements } from "../plugins/plugins.js";
+import { type ReachType, reachOf } from "../routing/reach.js";
+import { flowsOf } from "../routing/route.js";
 import { CONSOLE_CSP, CONSOLE_HTML } from "../ui.js";
-import { KEEP_DAYS, Usage } from "../usage.js";
-import { type CallerUse, type KeyInfo, type LedgerRow, createViews } from "../views.js";
+import { KEEP_DAYS, Usage } from "../observe/usage.js";
+import { type CallerUse, type KeyInfo, type LedgerRow, createViews } from "../observe/views.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: ReadonlySet<{ id: string; backend: string; model: string | null }> }) {
