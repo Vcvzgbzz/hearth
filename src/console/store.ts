@@ -69,16 +69,31 @@ export const useStore = create<State>(() => ({
   askKey: null,
 }));
 
+/** The address the app last wrote or applied; a `hashchange` that finds it unchanged is the app's own. */
+let known = location.hash;
 export const go = (page: Page) => {
   location.hash = page;
+  known = location.hash;
   useStore.setState({ page, sel: null, link: null });
 };
+/** Change page with something selected on it, as following a link would. */
+export const goLink = (page: Page, ...rest: string[]) => {
+  location.hash = linkOf(page, ...rest);
+  known = location.hash;
+  useStore.setState({ page, sel: null, link: rest });
+};
 /** Back, Forward or a pasted link: a new page clears the selection, and what the address names is applied by its page. */
-export const followLink = () => useStore.setState(pageOf() !== useStore.getState().page ? { page: pageOf(), sel: null, link: linkNow() } : { link: linkNow() });
+export const followLink = () => {
+  if (location.hash === known) return;
+  known = location.hash;
+  const { rest } = parseLink(location.hash);
+  useStore.setState(pageOf() !== useStore.getState().page ? { page: pageOf(), sel: null, link: linkNow() } : { link: rest });
+};
 /** Name what is selected on this page in the address, without a history entry. */
 const mark = (rest: string[]) => {
   const at = linkOf(useStore.getState().page, ...rest);
   if (location.hash !== at) history.replaceState(history.state, "", at);
+  known = location.hash;
 };
 /**
  * Keep the address naming `here`, what the page has selected, and once `ready` hand a link to this page to

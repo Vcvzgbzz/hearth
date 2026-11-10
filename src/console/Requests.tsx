@@ -10,22 +10,16 @@ import { REQUESTS_KEPT } from "../observe/requests.js";
 import { isObj, obj } from "./draft.js";
 import { loadDraft, replay, useEdit } from "./editStore.js";
 import { sentence } from "./flowNodes.js";
-import { linkOf, type Page } from "./link.js";
-import { toast, useLink, useStore } from "./store.js";
+import { goLink, toast, useLink, useStore } from "./store.js";
 import { attemptsOf, hops, routerOf, secs, verdict, where } from "./trace.js";
 import { Button, Card, cx, Empty, mono } from "./ui.js";
 
 const KEEP = 1000;
 
-/** Change page with something selected on it, as following a link would. */
-const goTo = (page: Page, ...rest: string[]) => {
-  location.hash = linkOf(page, ...rest);
-  useStore.setState({ page, sel: null, link: rest });
-};
 /** Open one request's trace on the Requests page. */
-export const openTrace = (id: string) => goTo("requests", id);
+export const openTrace = (id: string) => goLink("requests", id);
 /** The Routing page with this request's path lit. */
-export const showOnMap = (t: RequestTrace) => { useEdit.setState({ replay: t, trial: null, tried: null }); goTo("routing", t.router ?? "default", `req:${t.id}`); };
+export const showOnMap = (t: RequestTrace) => { useEdit.setState({ replay: t, trial: null, tried: null }); goLink("routing", t.router ?? "default", `req:${t.id}`); };
 
 const fetchTrace = async (id: string): Promise<RequestTrace | null> => {
   try {

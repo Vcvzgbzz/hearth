@@ -81,7 +81,7 @@ export function Inspector() {
       self: id === "", peer: d.net.nodes.some((n) => !n.self && n.name === id), backend: backends.some((b) => b.name === id),
       resource: (d.net.resources ?? []).some((r) => r.name === id), machine: id !== "" && (id in obj(draft?.servers) || backends.some((b) => b.server === id)),
     };
-    if (found[kind] === true) select({ kind: kind as NonNullable<Sel>["kind"], id: kind === "self" ? selfOf(d).name : id });
+    select(found[kind] === true ? { kind: kind as NonNullable<Sel>["kind"], id: kind === "self" ? selfOf(d).name : id } : null);
   });
   if (!sel) return null;
   // What is drawn is the draft where there is one, so something added or moved can be opened before it is published.
