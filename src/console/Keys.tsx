@@ -313,7 +313,7 @@ export function Keys() {
                   <td className={cx(cell, "text-dim", mono)}>{k.id}</td>
                   <td className={cx(cell, mono, k.router === "default" && "text-dim")}>{k.router}</td>
                   <td className={cx(cell, "text-dim")}>{limitsOf(k)}</td>
-                  <td className={cx(cell, "tabular")}><UsedCell used={k.today} />{waiting > 0 && <span className="text-warn"> · {waiting} waiting</span>}</td>
+                  <td className={cx(cell, "tabular")}><UsedCell used={k.today} />{waiting > 0 && <span className="whitespace-nowrap text-warn"> · {waiting} waiting</span>}</td>
                   <td className={cx(cell, "tabular")}><UsedCell used={k.month} /></td>
                   <td className={cx(cell, "tabular text-right", k.lastSeen === null ? "text-dim" : "text-fg")}>{k.lastSeen === null ? "never" : ago(k.lastSeen)}</td>
                   <td className={cx(cell, "whitespace-nowrap text-right")}>
