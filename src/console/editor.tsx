@@ -8,7 +8,7 @@ import { Fragment, useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Replayed } from "./editStore.js";
+import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, pickOut, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Replayed } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { sendTest, useLink, useStore, type Ran } from "./store.js";
@@ -250,7 +250,7 @@ export function EditBar() {
       else if (mod && k === "c" && s.sel && !String(getSelection() ?? "")) copy(s.sel);
       else if (mod && k === "v" && !e.shiftKey) paste();
       else if (mod && k === "z") (e.shiftKey ? redo : undo)();
-      else if (e.key === "Escape" && (s.sel || several)) { editSelect(null); selectMany([]); }
+      else if (e.key === "Escape" && (s.sel || several)) { editSelect(null); pickOut([]); }
       else return;
       e.preventDefault();
     };

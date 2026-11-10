@@ -43,6 +43,8 @@ interface EditState {
   hover: string | null;
   /** The nodes picked out together on the map, by id, each with where it stands: what a drag box or a ctrl-click selects. */
   many: Picked[];
+  /** Nodes to pick out on the map from outside it (a paste, Escape): the map applies this once and clears it. */
+  toPick: Picked[] | null;
   /** Drafts to go back to, oldest first. */
   past: Snap[];
   /** Drafts undone, to go forward to again; a new change lets them go. */
@@ -60,7 +62,7 @@ interface EditState {
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, replay: null, picking: null, choosing: null, pending: [], hover: null, many: [], past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
+  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, replay: null, picking: null, choosing: null, pending: [], hover: null, many: [], toPick: null, past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -264,6 +266,8 @@ export function selectMany(many: Picked[]): void {
   const was = useEdit.getState().many;
   if (was.length !== many.length || many.some((m, i) => m.node !== was[i]!.node || m.x !== was[i]!.x || m.y !== was[i]!.y)) set({ many });
 }
+/** Pick these nodes out on the map, and only these, in place of whatever it has selected. */
+export const pickOut = (many: Picked[]) => set({ many, toPick: many });
 /** Take out every rule and action picked out, as one change. */
 export function removeMany(): void {
   const gone = wholes(useEdit.getState().many);
@@ -290,7 +294,7 @@ function pasteMany(): void {
   const { draft } = useEdit.getState();
   if (!draft) return;
   const { doc, made } = pastedAll(draft, copiedMany);
-  set({ draft: doc, err: null, sel: null, many: made, focus: { node: made[0]!.node } });
+  set({ draft: doc, err: null, sel: null, many: made, toPick: made, focus: { node: made[0]!.node } });
   toast("ok", `${made.length} added`);
 }
 

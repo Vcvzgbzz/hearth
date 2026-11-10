@@ -340,12 +340,15 @@ export function Routing() {
     const was = new Map(now.map((n) => [n.id, n]));
     return held(fitted, now, dragging.current).map((n) => (was.get(n.id)?.selected ? { ...n, selected: true, ...(dragging.current ? { position: was.get(n.id)!.position } : {}) } : n));
   }), [fitted]);
-  // What is picked out from outside the map (a paste, Escape) is given to it once, when that changes.
-  const many = useEdit((s) => s.many);
-  useEffect(() => setNodes((now) => {
-    const picked = new Set(many.map((m) => m.node));
-    return now.some((n) => Boolean(n.selected) !== picked.has(n.id)) ? now.map((n) => (Boolean(n.selected) === picked.has(n.id) ? n : { ...n, selected: picked.has(n.id) })) : now;
-  }), [many]);
+  // What is picked out from outside the map (a paste, Escape) is given to it once and cleared. `many` is only
+  // ever the map's own report, so the map's selection is never set from it and the two cannot undo each other.
+  const toPick = useEdit((s) => s.toPick);
+  useEffect(() => {
+    if (!toPick) return;
+    const picked = new Set(toPick.map((m) => m.node));
+    setNodes((now) => (now.some((n) => Boolean(n.selected) !== picked.has(n.id)) ? now.map((n) => (Boolean(n.selected) === picked.has(n.id) ? n : { ...n, selected: picked.has(n.id) })) : now));
+    useEdit.setState({ toPick: null });
+  }, [toPick]);
   // The line under the pointer is drawn as strongly as one a tried request takes, so it can be followed through a
   // crossing. Only the lines are redrawn for it: touching the nodes would cut off a drag that is just starting.
   const edges = useMemo(() => (edit.hover === null ? laid.edges : laid.edges.map((e) => (e.id === edit.hover ? { ...e, zIndex: 1001, data: { ...e.data, lit: true } } : e))), [laid.edges, edit.hover]);
