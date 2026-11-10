@@ -19,7 +19,7 @@ const KEEP = 1000;
 /** Open one request's trace on the Requests page. */
 export const openTrace = (id: string) => goLink("requests", id);
 /** The Routing page with this request's path lit. */
-export const showOnMap = (t: RequestTrace) => { useEdit.setState({ replay: t, trial: null, tried: null }); goLink("routing", t.router ?? "default", `req:${t.id}`); };
+export const showOnMap = (t: RequestTrace) => { useEdit.setState({ replay: t, trial: null, tried: null, sel: null, opened: null }); goLink("routing", t.router ?? "default", `req:${t.id}`); };
 
 const fetchTrace = async (id: string): Promise<RequestTrace | null> => {
   try {

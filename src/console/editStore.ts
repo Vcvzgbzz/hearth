@@ -193,7 +193,8 @@ export const focusOn = (node: string) => set({ focus: { node } });
 
 /** Light a finished request's path on the map, or with null stop; the first rule that decided it is brought into view. */
 export function replay(trace: RequestTrace | null): void {
-  set({ replay: trace, ...(trace ? { trial: null, tried: null } : {}) });
+  // A card picked before the replay would still wear the selection ring when the replay is dismissed.
+  set({ replay: trace, ...(trace ? { trial: null, tried: null, sel: null, opened: null } : {}) });
   const first = trace?.path[0];
   // After the map's own fit on arrival, which would otherwise undo this one.
   if (first) setTimeout(() => focusOn(`flow:${first.flow}`), 300);
