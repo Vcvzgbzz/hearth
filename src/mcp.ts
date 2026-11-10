@@ -41,9 +41,9 @@ export function rpcAnswer(text: string, id: number | string): Message | null {
   return (all.flat() as (Message | null)[]).find((m) => m !== null && same(m.id)) ?? null;
 }
 
-/** Asks a served MCP endpoint who it is and how many tools it has, as a client would, and ends the session. */
-export async function checkHttp(url: string, key: string | null, timeoutMs: number): Promise<McpState> {
-  const base: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream", ...(key ? { authorization: `Bearer ${key}` } : {}) };
+/** Asks a served MCP endpoint who it is and how many tools it has, as a client would, and ends the session. `auth` is what the plugin is sent on every call. */
+export async function checkHttp(url: string, auth: Record<string, string>, timeoutMs: number): Promise<McpState> {
+  const base: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream", ...auth };
   const state: McpState = { transport: "http", server: null, tools: null, error: null, checkedAt: Date.now() };
   let session: string | null = null;
   const call = async (body: Message): Promise<Message | null> => {
