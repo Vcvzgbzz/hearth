@@ -127,6 +127,10 @@ changing page adds an entry. A link to something that does not exist opens the
 page with nothing selected. The details on Topology and a plugin's panel have a
 link button that copies the address.
 
+A page that fails to draw shows the error in its place, with **try again** and
+**reload**; the sidebar and header keep working, and another page opens as
+usual. The error and where it happened go to the browser's console.
+
 Behind the Models, Keys, Lending and Scheduler pages a faint ASCII smoke rises,
 and beside the Topology and Routing maps it rises behind the sidebar instead,
 thicker and quicker the more the node has queued and running. The load is a

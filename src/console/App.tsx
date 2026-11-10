@@ -2,6 +2,7 @@
 import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Boundary } from "./Boundary.js";
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
 import { Keys } from "./Keys.js";
@@ -440,6 +441,8 @@ export default function App() {
         {data && <CanaryAlert />}
         {endpoints && data && <Endpoints onClose={() => setEndpoints(false)} />}
 
+        {/* Keyed by page, so walking to another page leaves a failed one behind. */}
+        <Boundary key={page}>
         {!data ? (
           <div className="grid flex-1 place-items-center text-dim">{dead ? "hearth is not answering" : "connecting…"}</div>
         ) : page === "topology" ? (
@@ -487,6 +490,7 @@ export default function App() {
             </div>
           </div>
         )}
+        </Boundary>
       </main>
 
       {/* A key made from any other page is shown over it, once; the keys page shows it in place. */}

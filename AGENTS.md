@@ -60,7 +60,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   what the node's load does to its fire is `fire.ts`. The routing map is
   `Routing.tsx` (layout), `flowNodes.tsx` (one view per kind of node) and
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
-  file). The address scheme (`#<page>/<what is selected>`) is `link.ts`
+  file). The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
+  boundary around each page and the whole console is `Boundary.tsx`
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 
