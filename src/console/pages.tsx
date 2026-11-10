@@ -160,7 +160,7 @@ export function Inspector() {
   }
 
   return (
-    <aside className={cx("shrink-0 overflow-auto border-l border-line bg-panel p-4 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-10", isObj(entry) ? "w-[440px]" : "w-[340px]")}>
+    <aside className={cx("shrink-0 overflow-auto border-l border-line bg-panel p-4 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:max-w-full max-xl:shadow-xl", isObj(entry) ? "w-[440px]" : "w-[340px]")}>
       <div className="mb-2 flex items-center">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind === "resource" ? "hardware" : sel.kind}</div>

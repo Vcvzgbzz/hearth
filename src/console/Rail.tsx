@@ -40,14 +40,14 @@ export function Rail() {
   if (!open) {
     return (
       <button type="button" onClick={toggle} title="show recent requests" aria-label="show recent requests"
-              className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-line bg-panel pt-3 text-dim hover:text-fg max-md:hidden">
+              className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-line bg-panel pt-3 text-dim hover:text-fg max-lg:hidden">
         <ChevronsRight size={14} />
         <span className="text-[11px] [writing-mode:vertical-rl]">recent requests</span>
       </button>
     );
   }
   return (
-    <div className="flex w-64 shrink-0 flex-col border-r border-line bg-panel max-md:hidden">
+    <div className="flex w-64 shrink-0 flex-col border-r border-line bg-panel max-lg:hidden">
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
           <span className="text-[11px] font-medium uppercase tracking-wide text-dim">recent requests</span>
           <button type="button" onClick={toggle} aria-label="hide recent requests" title="hide" className="ml-auto text-dim hover:text-fg"><ChevronsLeft size={14} /></button>

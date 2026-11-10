@@ -908,9 +908,9 @@ export function Topology() {
         <Plus size={12} />provider
       </button>
       <VersionsButton />
-      {/* The hint gives way to whatever the strip has to say, so it stays one row. */}
-      {!isDirty && waiting.length === 0 && <span className="truncate text-[11px] text-dim max-xl:hidden">Click anything for its settings. Drag a backend onto hardware or to another place in it, hardware onto a machine, or a caller onto a router.</span>}
-      <div className="ml-auto flex items-center gap-2">
+      {/* The hint gives way to whatever the strip has to say, and takes only the room the buttons leave, so it never wraps them. */}
+      {!isDirty && waiting.length === 0 && <span className="min-w-0 flex-1 truncate text-[11px] text-dim max-xl:hidden">Click anything for its settings. Drag a backend onto hardware or to another place in it, hardware onto a machine, or a caller onto a router.</span>}
+      <div className="ml-auto flex flex-wrap items-center gap-2">
         {/* What is published but not running yet stays said until the restart that applies it. */}
         {waiting.length > 0 && !isDirty && (
           <span className="flex items-center gap-2 text-[12px] text-warn">published, not running yet: restart to apply {waiting.join(", ")}

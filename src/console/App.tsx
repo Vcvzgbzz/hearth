@@ -448,8 +448,8 @@ export default function App() {
         ) : page === "topology" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">
             <Activity />
-            <Card className="flex min-h-[420px] flex-1 overflow-hidden">
-              {/* A panel sits beside the picture, never over it: what was clicked stays in view. */}
+            <Card className="relative flex min-h-[420px] flex-1 overflow-hidden">
+              {/* A panel sits beside the picture from xl up; narrower, it lies over the map's right side so the map keeps its width. */}
               <div className="relative min-w-0 flex-1"><Topology /></div>
               <Inspector />
             </Card>

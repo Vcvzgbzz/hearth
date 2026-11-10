@@ -31,7 +31,9 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   ones first, then the last twelve that ended, each with who asked, where it
   ran and how long it took. Point at one and the backend or peer that ran it
   lights up on the map; click it for that box's settings. The rail folds away
-  with its arrow, and the browser remembers.
+  with its arrow, and the browser remembers. In a window narrower than 1024px
+  the rail is hidden, and below 1280px a box's settings lie over the right of
+  the map instead of beside it, so the map keeps its width.
   A right-click on the empty part of the picture offers what the strip over it
   does, where the pointer is: a new backend, hardware, machine or provider, the
   published versions, and fitting the picture in view.
