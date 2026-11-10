@@ -124,6 +124,8 @@ export interface PluginStatus {
   use: string;
   /** The service's own API, answered at `/plugins/<name>/*`, shown as its origin and path; null when it has none. */
   serves: string | null;
+  /** The plugin that answers when this one cannot; null when it has none. */
+  fallback: { plugin: string } | null;
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
   /** Requests at /plugins/<name>/* in flight, and those that ended within SEEN_MS, by id: what the map draws as dots. */
@@ -492,6 +494,11 @@ export class Plugins {
     return l.decl.mcp !== null ? "MCP" : "API";
   }
 
+  /** The plugin that answers `/plugins/<name>/*` when this one cannot; null when it has none. */
+  fallbackOf(name: string): PluginDecl["fallback"] {
+    return this.loaded.find((x) => x.name === name)?.decl.fallback ?? null;
+  }
+
   /**
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.
@@ -666,7 +673,7 @@ export class Plugins {
     return this.loaded.map((l) => ({
       name: l.name, trust: l.decl.trust, state: l.state, error: l.error, kinds: l.kinds, declared: l.declared, needs: l.needs, models: l.decl.models, everyLine: l.decl.everyLine, use: l.decl.run ? runLine(l.decl.run) : shownUse(l.decl.use ?? l.decl.serves!),
       mcp: l.mcp ? { ...l.mcp, path: l.decl.mcp ?? "/mcp" } : null, run: l.decl.run ? runLine(l.decl.run) : null,
-      serves: l.decl.serves === null ? null : shownUse(l.decl.serves), served: { ...l.served }, live: this.live(l),
+      serves: l.decl.serves === null ? null : shownUse(l.decl.serves), fallback: l.decl.fallback, served: { ...l.served }, live: this.live(l),
       when: l.decl.when, timeoutMs: l.decl.timeoutMs, onError: l.decl.onError, onFail: l.decl.onFail, locked: l.decl.locked,
       required: l.decl.required, reads: l.decl.reads, paused: l.paused, pausedUntil: l.pausedUntil, failOpens: l.failOpens,
       stages: Object.fromEntries(Object.entries(l.stats).map(([stage, st]) => [stage, {

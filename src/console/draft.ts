@@ -639,16 +639,18 @@ export function spread(boxes: Box[], carry: Map<string, string[]> = new Map(), g
 
 /**
  * Where each of `ends` sits in its column: beside the middle of the lines that reach it, in that
- * order, `step` apart at least, so lines run across and seldom cross. `from` is where each line leaves.
+ * order, `step` apart at least (or the room each one takes), so lines run across and seldom cross.
+ * `from` is where each line leaves.
  */
-export function beside(ends: string[], from: (end: string) => number[], step: number): Map<string, number> {
+export function beside(ends: string[], from: (end: string) => number[], step: number | ((end: string) => number)): Map<string, number> {
   const mid = (id: string) => { const ys = from(id); return ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : Infinity; };
+  const room = typeof step === "number" ? () => step : step;
   const out = new Map<string, number>();
   let next = 0;
   for (const [id, y] of ends.map((id) => [id, mid(id)] as const).sort((a, b) => a[1] - b[1])) {
-    const at = Math.max(next, Number.isFinite(y) ? Math.round(y - step / 2) : next);
+    const at = Math.max(next, Number.isFinite(y) ? Math.round(y - room(id) / 2) : next);
     out.set(id, at);
-    next = at + step;
+    next = at + room(id);
   }
   return out;
 }

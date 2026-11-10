@@ -814,6 +814,8 @@ export interface PluginDecl {
   key: string | null;
   /** For a service: headers sent on every call beside (or instead of) its key, such as an API that reads its key from `X-Api-Key`. Values may be `env:NAME`. */
   headers: Record<string, string>;
+  /** Another plugin that answers `/plugins/<name>/*` when this one cannot; it serves the same API and is sent the same request. */
+  fallback: { plugin: string } | null;
   /** Narrows what the plugin itself declares; absent hooks all of it. */
   kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
   when: PluginWhen | null;
@@ -895,7 +897,7 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const at = `plugins.${name}`;
     if (!PLUGIN_NAME.test(name)) throw bad(at, "a plugin's name is lowercase letters, digits and dashes");
     const r = asRecord(v, at);
-    only(r, ["use", "serves", "mcp", "run", "trust", "integrity", "key", "headers", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
+    only(r, ["use", "serves", "mcp", "run", "trust", "integrity", "key", "headers", "fallback", "kinds", "when", "timeoutMs", "onError", "onFail", "locked", "required", "peers", "reads", "everyLine", "models", "config"], at);
     const serves = r.serves === undefined ? null : str(r.serves, `${at}.serves`).replace(/\/$/, "");
     if (serves !== null && !/^https?:\/\/[^/]/.test(serves)) throw bad(`${at}.serves`, "is the http(s) URL of the service's own API");
     const run = pluginRun(r.run, `${at}.run`);
@@ -942,8 +944,15 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     const headers = Object.fromEntries(Object.entries(asRecord(r.headers ?? {}, `${at}.headers`))
       .map(([k, v]) => [k, resolveSecret(str(v, `${at}.headers.${k}`), `${at}.headers.${k}`)]));
     if (integrity !== null && !/^sha256-[0-9a-f]{64}$/.test(integrity)) throw bad(`${at}.integrity`, "is sha256-<64 hex digits>");
+    let fallback: PluginDecl["fallback"] = null;
+    if (r.fallback !== undefined) {
+      const f = typeof r.fallback === "string" ? { plugin: r.fallback } : asRecord(r.fallback, `${at}.fallback`);
+      if (typeof r.fallback !== "string") only(f, ["plugin"], `${at}.fallback`);
+      if (serves === null || mcp !== null) throw bad(`${at}.fallback`, "is for a plugin that serves an API other than MCP");
+      fallback = { plugin: str(f.plugin, `${at}.fallback.plugin`) };
+    }
     out[name] = {
-      use, serves, mcp, run, trust, integrity, key, headers, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
+      use, serves, mcp, run, trust, integrity, key, headers, fallback, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
       onError: pick(r.onError, ["skip", "refuse"] as const, "skip", `${at}.onError`),
       onFail: pick(r.onFail, ["refuse", "flag"] as const, "refuse", `${at}.onFail`),
       locked: bool(r.locked, `${at}.locked`, false),
@@ -953,6 +962,15 @@ function pluginDecls(raw: unknown): Record<string, PluginDecl> {
       models: slotModels(r.models, `${at}.models`),
       config: r.config === undefined ? {} : asRecord(r.config, `${at}.config`),
     };
+  }
+  // A fallback is one hop: the plugin it names answers with its own API and is not followed further.
+  for (const [name, p] of Object.entries(out)) {
+    if (p.fallback === null) continue;
+    const at = `plugins.${name}.fallback`;
+    const to = out[p.fallback.plugin];
+    if (p.fallback.plugin === name) throw bad(at, "names the plugin itself");
+    if (!to) throw bad(at, `names ${p.fallback.plugin}, which is not a plugin under plugins:`);
+    if (to.serves === null || to.mcp !== null) throw bad(at, `names ${p.fallback.plugin}, which serves no API other than MCP`);
   }
   return out;
 }

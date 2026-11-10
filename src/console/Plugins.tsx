@@ -112,7 +112,9 @@ const H = "text-[11px] font-medium uppercase tracking-wide text-dim";
 const showLine = (router: string) => { go("routing"); showRouter(router === "default" ? null : router); };
 
 /** One plugin: what it is, where it runs, its model slots, what it is sent, how it fails, its numbers. */
-function Panel({ p, pv, onClose, onWire }: { p: PluginView; pv: PluginsView; onClose: () => void; onWire: (slot: string, model: string | null) => void }) {
+function Panel({ p, pv, onClose, onWire, onFallback }: { p: PluginView; pv: PluginsView; onClose: () => void; onWire: (slot: string, model: string | null) => void; onFallback: (to: { plugin: string } | null) => void }) {
+  // A fallback is another plugin that serves an API other than MCP.
+  const others = pv.plugins.filter((x) => x.name !== p.name && x.serves !== null && x.mcp === null).map((x) => x.name);
   const catalog = useStore((s) => s.data?.catalog) ?? NO_MODELS;
   const [busy, setBusy] = useState(false);
   const lines = pv.placed.filter((x) => x.plugin === p.name);
@@ -161,6 +163,17 @@ function Panel({ p, pv, onClose, onWire }: { p: PluginView; pv: PluginsView; onC
               : <span><code className={mono}>{servedAt(p)}</code> goes to the program above.</span>}
             <span className="text-dim">For this machine and api keys, not peers or keys limited to models. The caller's key stays here; {p.trust === "http" ? "the plugin's own key is sent instead, with who is calling." : ""}</span>
             <span className="text-dim tabular">{p.served.calls} request{p.served.calls === 1 ? "" : "s"} since hearth started{p.served.errors ? <>, <span className="text-bad">{p.served.errors} it could not answer</span></> : ""}.</span>
+          </section>
+        )}
+        {p.serves !== null && p.mcp === null && (
+          <section className="flex flex-col gap-1.5">
+            <div className={H}>Falls back to</div>
+            <select value={p.fallback?.plugin ?? ""} onChange={(e) => onFallback(e.target.value ? { plugin: e.target.value } : null)} aria-label={`plugin that answers when ${p.name} cannot`}
+                    className="h-8 min-w-0 rounded-md border border-line bg-bg px-2">
+              <option value="">nobody: the caller is told it failed</option>
+              {others.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <span className="text-dim">Asked when {p.name} cannot be reached, answers 5xx or 429, or is paused, with the same request: it serves the same API. One hop: its own fallback is not followed.{others.length === 0 ? " No other plugin serves an API yet." : ""}</span>
           </section>
         )}
 
@@ -283,14 +296,24 @@ export function Plugins() {
   if (pv.plugins.length === 0 && pv.pending.length === 0) return <><EmptyState onAdd={() => setAdding(true)} />{adding && <AddPlugin onClose={() => setAdding(false)} />}</>;
 
   /** Write a plugin's slot wiring through the usual review. */
-  const wire = (name: string, slot: string, model: string | null) => void (async () => {
+  const wire = (name: string, slot: string, model: string | null) =>
+    propose([{ path: ["plugins", name, "models", slot], ...(model === null ? { delete: true } : { value: model }) }], "wire it",
+      model === null ? `empties ${name}'s ${slot} slot` : `wires ${model} into ${name}'s ${slot} slot, the default on every line it runs on`);
+
+  /** Write the plugin that answers for this one when it cannot, through the usual review. */
+  const fallBack = (name: string, to: { plugin: string } | null) =>
+    propose([{ path: ["plugins", name, "fallback"], ...(to === null ? { delete: true } : { value: to.plugin }) }], "save it",
+      to === null ? `${name} gets no fallback: when it cannot answer, the caller is told so` : `when ${name} cannot answer, ${to.plugin} does, sent the same request`);
+
+  /** Show a config change in the usual review, and write it if it is kept. */
+  const propose = (ops: unknown[], verb: string, line: string) => void (async () => {
     try {
       const file = await request<File>("GET", "/config");
-      const body = { baseHash: file.hash, ops: [{ path: ["plugins", name, "models", slot], ...(model === null ? { delete: true } : { value: model }) }] };
+      const body = { baseHash: file.hash, ops };
       const dry = await request<{ text: string; restartPending: string[] }>("PATCH", "/config", { ...body, dryRun: true });
       setPlan({
-        before: file.text, after: dry.text, restartPending: dry.restartPending, verb: "wire it",
-        summary: [model === null ? `empties ${name}'s ${slot} slot` : `wires ${model} into ${name}'s ${slot} slot, the default on every line it runs on`],
+        before: file.text, after: dry.text, restartPending: dry.restartPending, verb,
+        summary: [line],
         commit: async () => {
           try {
             await request("PATCH", "/config", body);
@@ -368,7 +391,7 @@ export function Plugins() {
         </Card>
         <p className="text-[12px] text-dim">A plugin runs where it is placed: on a line of the Routing map, or on every line. In-process plugins run with hearth's own access; HTTP plugins are sent only what they read.</p>
       </div>
-      {sel && <Panel p={sel} pv={pv} onClose={() => pick(null)} onWire={(slot, model) => wire(sel.name, slot, model)} />}
+      {sel && <Panel p={sel} pv={pv} onClose={() => pick(null)} onWire={(slot, model) => wire(sel.name, slot, model)} onFallback={(to) => fallBack(sel.name, to)} />}
       {adding && <AddPlugin onClose={() => setAdding(false)} />}
       {plan && <Review plan={plan} onClose={() => setPlan(null)} />}
     </div>
