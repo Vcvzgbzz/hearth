@@ -104,7 +104,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     return {
       queued: Object.values(agg.queued).reduce((a, b) => a + b, 0),
       // Several backends means several models warm at once, so this is a list.
-      residents: pool.loaded(),
+      residents: pool.models.loaded(),
       // What is being USED, as opposed to what is loaded: models with a job
       // running on a local backend at this instant. Off-box jobs are a peer's
       // activity, not ours. Finished calls are recorded as they end.
@@ -144,7 +144,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     degraded: (model) => {
       const sick = canary?.refuse(model);
       if (sick === undefined || sick === null) return null;
-      const { message, fields } = degradedError(model, pool.for(model).name, sick);
+      const { message, fields } = degradedError(model, pool.models.for(model).name, sick);
       return new Refusal(503, message, "server_error", fields);
     },
     backendDeadline: (b: BackendConfig) => {

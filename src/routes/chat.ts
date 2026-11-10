@@ -55,7 +55,7 @@ export function chatRoutes(ctx: RouteContext) {
     const { count, ...deadline } = opts;
     const url = to.url;
     const reach = { ...deadline, headers: backendAuth(to.format, to.key, to.headers) };
-    const sent = pool.outboundBody(model, payload);
+    const sent = pool.models.outboundBody(model, payload);
     if (to.format === "anthropic") {
       const up = await send(`${url}/v1/messages`, { json: toAnthropic(sent, to.promptCache, to.promptCacheTtl), ...reach });
       if (to.key && refusedKey(up.status) && !res.headersSent) { await up.text(); throw new BackendFailed(502, KEY_REFUSED); }
@@ -77,7 +77,7 @@ export function chatRoutes(ctx: RouteContext) {
     if (spare && up.status >= 500 && !res.headersSent) throw new BackendFailed(up.status, (await up.text()).slice(0, 200));
     if (emulate) return relayEmulated(up, res, relayable(up), sentAt);
     // Observed as it is relayed, never held back: see RelayWatch.
-    return pipeThrough(up, res, canary?.watchRelay(model, pool.for(model).name, up.headers["content-type"]));
+    return pipeThrough(up, res, canary?.watchRelay(model, pool.models.for(model).name, up.headers["content-type"]));
   }
 
   /** A backend answered 5xx before anything reached the client, while its flow had another place to send the request. */
@@ -130,10 +130,10 @@ export function chatRoutes(ctx: RouteContext) {
         },
       });
       // What the backend it lands on is known to take, as a real request would be checked before it is queued.
-      const small = r.target === "local" ? unfit(pool.statsFor(r.model), need) : null;
+      const small = r.target === "local" ? unfit(pool.models.statsFor(r.model), need) : null;
       json(c.res, 200, {
         target: r.target, model: r.model, lane: r.lane, reason: r.reason, path: r.path, params: r.params, actions: r.actions.map((a) => a.name), ...(r.unlisted ? { unlisted: true } : {}), ...(small ? { unfit: `${r.model} ${small}` } : {}),
-        ...(r.target === "peer" ? { peer: r.peer } : r.target === "local" ? { backend: pool.for(r.model).name } : {}),
+        ...(r.target === "peer" ? { peer: r.peer } : r.target === "local" ? { backend: pool.models.for(r.model).name } : {}),
       });
     } catch (e) {
       fail(c.res, e);
@@ -202,12 +202,12 @@ export function chatRoutes(ctx: RouteContext) {
   }
 
   /** A model that runs at a cloud provider: it would take a request off this machine. */
-  const offHere = (model: string): boolean => pool.for(model).cfg.cloud;
+  const offHere = (model: string): boolean => pool.models.for(model).cfg.cloud;
   /** Where a decision sends a request, as a plugin sees it. */
   const where = (d: { target: "local" | "peer"; model: string; peer?: string }): Pick<HookRequest, "model" | "target" | "peer" | "backend" | "leaves"> =>
     d.target === "peer"
       ? { model: d.model, target: "peer", peer: d.peer ?? null, backend: null, leaves: true }
-      : { model: d.model, target: "local", peer: null, backend: pool.for(d.model).name, leaves: offHere(d.model) };
+      : { model: d.model, target: "local", peer: null, backend: pool.models.for(d.model).name, leaves: offHere(d.model) };
 
   /**
    * One chat request from the routing decision to the answer. The fields are what routing has settled
@@ -288,7 +288,7 @@ export function chatRoutes(ctx: RouteContext) {
       const { payload, asked, res } = this.r;
       this.model = d.model;
       this.lane = d.lane;
-      this.local = pool.for(d.model);
+      this.local = pool.models.for(d.model);
       Object.assign(payload, d.params);
       // Our id for it, so the backend is asked for what the flow chose and not what the client named.
       if (d.model !== asked) payload.model = d.model;
@@ -318,7 +318,7 @@ export function chatRoutes(ctx: RouteContext) {
           action: a.name, node: cfg.name, asked, model: d.model, target: d.target, peer: d.target === "peer" ? d.peer : "",
           lane: d.lane, caller, tokens: world.need?.tokens ?? 0, images: world.need?.images ?? false, tools: world.need?.tools ?? false,
           flow: a.flow, line: a.step + 1, reason: d.reason, outcome: "decided", ms: 0, error: "",
-          backend: d.target === "local" ? pool.for(d.model).name : "", id: id ?? "", queuedMs: 0, ranMs: 0,
+          backend: d.target === "local" ? pool.models.for(d.model).name : "", id: id ?? "", queuedMs: 0, ranMs: 0,
         };
         if (action.on === "decided") worlds.act(a.name, action, facts);
         else this.ended.push((error) => {
@@ -464,8 +464,8 @@ export function chatRoutes(ctx: RouteContext) {
           }
         }
         // Refused here only on reported limits, before queueing or evicting; the backend stays the authority.
-        const fitted = fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
-        const tooMuch = unfit(pool.statsFor(model), fitted);
+        const fitted = fitOutput(pool.models.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
+        const tooMuch = unfit(pool.models.statsFor(model), fitted);
         if (tooMuch !== null) {
           requests.record(this.t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
           throw new Refusal(400, `${model} ${tooMuch}`);
@@ -475,7 +475,7 @@ export function chatRoutes(ctx: RouteContext) {
           const elsewhere = spare().target === "local";
           await local.scheduler.submit(
             // A second try goes back through admission without re-applying the caller cap.
-            { lane, model, caller, ...limits.keyLimitOf(caller, model), ...(failed.size === 0 ? { maxPerCaller: limits.capOf(caller, model), onPosition, ...(id ? { id } : {}) } : {}), signal, tokens: pool.poolTokens(model, fitted) },
+            { lane, model, caller, ...limits.keyLimitOf(caller, model), ...(failed.size === 0 ? { maxPerCaller: limits.capOf(caller, model), onPosition, ...(id ? { id } : {}) } : {}), signal, tokens: pool.models.poolTokens(model, fitted) },
             async () => {
               this.t.startedAt = Date.now();
               await this.runLocal(elsewhere);
@@ -520,7 +520,7 @@ export function chatRoutes(ctx: RouteContext) {
           async () => {
             this.t.startedAt = Date.now();
             // The peer's id, with the route's params still applied.
-            const body = pool.outboundBody(this.model, payload, decision.theirModel);
+            const body = pool.models.outboundBody(this.model, payload, decision.theirModel);
             const over = peers.sent(peer.name, decision.theirModel);
             try {
               const up = await send(`${peer.url}/v1/chat/completions`, {
@@ -553,7 +553,7 @@ export function chatRoutes(ctx: RouteContext) {
               fellBack = true;
               // A local retry goes back through admission, without re-applying the caller cap.
               this.limitModel(this.model);
-              await this.local.scheduler.submit({ lane: this.lane, model: this.model, caller, ...limits.keyLimitOf(caller, this.model), signal, tokens: pool.poolTokens(this.model, this.need) }, () => this.runLocal());
+              await this.local.scheduler.submit({ lane: this.lane, model: this.model, caller, ...limits.keyLimitOf(caller, this.model), signal, tokens: pool.models.poolTokens(this.model, this.need) }, () => this.runLocal());
             }
           },
         );
@@ -627,7 +627,7 @@ export function chatRoutes(ctx: RouteContext) {
     const caller = c.caller;
     if (fromPeer !== null) {
       // A borrower's oversized request gets the local path's 4xx before it is queued.
-      const why = unfit(pool.statsFor(model), fitOutput(pool.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload));
+      const why = unfit(pool.models.statsFor(model), fitOutput(pool.models.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload));
       if (why !== null) throw new Refusal(400, `${model} ${why}`);
     }
 
@@ -680,14 +680,14 @@ export function chatRoutes(ctx: RouteContext) {
     worlds.using(model, res);
 
     const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res) };
-    const serving = pool.for(model);
+    const serving = pool.models.for(model);
     // As on the local path: what we relayed to the borrower, so lent
     // capacity that failed is not filed as lent capacity that worked.
     let lentStatus = 0;
     try {
       await serving.scheduler.submit(
         // Peers are capped per backend, whether or not apiKeys are set.
-        { lane, model, caller, ...limits.capFor(fromPeer, model), signal: ctrl.signal, tokens: pool.poolTokens(model, needsOf(payload, cfg.models[model]?.videoTokens)) },
+        { lane, model, caller, ...limits.capFor(fromPeer, model), signal: ctrl.signal, tokens: pool.models.poolTokens(model, needsOf(payload, cfg.models[model]?.videoTokens)) },
         async () => {
           t.startedAt = Date.now();
           await serving.state.ensureFresh();

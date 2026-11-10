@@ -99,8 +99,8 @@ export function passthroughRoutes(ctx: RouteContext) {
     // Work that queues is asked for by name as chat is, and the name's flow says which model runs it. The
     // name is the `{model}` segment of the path or the model in the body; a path that carries neither is
     // asked for by the flow that takes it, else by the model its route names.
-    let routed = pool.forPath(pathname);
-    const held = pool.named(pathname);
+    let routed = pool.models.forPath(pathname);
+    const held = pool.models.named(pathname);
     // For a request a flow decided: the name it went by, how to ask its flow again without what just failed,
     // and the backend its line named when that is not the one that declares the path.
     let flowed: string | null = null;
@@ -114,10 +114,10 @@ export function passthroughRoutes(ctx: RouteContext) {
     const placeOf = (model: string): BackendSlot | undefined => {
       if (!routed) return undefined;
       // The model a route names is its backend's whether or not the backend lists it.
-      if (model === routed.rule.model || pool.owns(routed.slot, model)) return routed.slot;
+      if (model === routed.rule.model || pool.models.owns(routed.slot, model)) return routed.slot;
       const fb = routed.rule.fallback ? pool.get(routed.rule.fallback.backend) : undefined;
-      if (fb && pool.owns(fb, model)) return fb;
-      return pool.all().find((b) => pool.owns(b, model) && (b.cfg.routes.length === 0 || b.cfg.routes.some((x) => x.path === pathname)));
+      if (fb && pool.models.owns(fb, model)) return fb;
+      return pool.all().find((b) => pool.models.owns(b, model) && (b.cfg.routes.length === 0 || b.cfg.routes.some((x) => x.path === pathname)));
     };
     if (c.peer === null && (held !== undefined || routed?.rule.queue === true)) {
       const rules = worlds.rulesFor(who).flows;
@@ -137,7 +137,7 @@ export function passthroughRoutes(ctx: RouteContext) {
         if (held) {
           pathname = held.as(r.model);
           path = pathname;
-          routed = pool.forPath(pathname);
+          routed = pool.models.forPath(pathname);
           if (!routed) return refuse(503, `${name} is not being run: its flow sends it to ${r.model}, which does not answer ${held.path}`);
         } else {
           // The model the flow picked has to be one this path can run, here or on another backend.
@@ -171,7 +171,7 @@ export function passthroughRoutes(ctx: RouteContext) {
       return;
     }
     const named = routed ? undefined : asked;
-    const target = routed ? routed.slot : named ? pool.for(named) : pool.first();
+    const target = routed ? routed.slot : named ? pool.models.for(named) : pool.first();
     if (named && !pool.single) {
       log.debug("passthrough.resolved", { path, model: named, backend: target.name });
     }
@@ -181,7 +181,7 @@ export function passthroughRoutes(ctx: RouteContext) {
     let outBody = body;
     let outPath = path;
     if (asked) {
-      const wire = pool.outboundId(asked);
+      const wire = pool.models.outboundId(asked);
       if (wire !== asked) {
         if (viaPath) {
           outPath = path.replace(`/upstream/${viaPath}/`, `/upstream/${wire}/`);
@@ -242,7 +242,7 @@ export function passthroughRoutes(ctx: RouteContext) {
         limits.withinLimits(who);
         const { lane } = routed.rule;
         // Two models can share one routed path; each queues as itself.
-        const model = pool.routedModel(routed.slot, routed.rule, asked);
+        const model = pool.models.routedModel(routed.slot, routed.rule, asked);
         // Queued on the backend that runs it, and recorded in history like any local use.
         const run = async (to: BackendSlot, as: string, sendBody: Buffer | undefined, orFail: boolean): Promise<void> => {
           const t: Timing = notRun();
@@ -265,14 +265,14 @@ export function passthroughRoutes(ctx: RouteContext) {
         const fb = strict ? undefined : routed.rule.fallback;
         const spare = fb ? pool.get(fb.backend) : undefined;
         // A line that names a model on another backend runs there; a name only the fallback serves is a choice, not a failure.
-        let to = runOn ?? (spare && asked !== undefined && asked !== model && pool.owns(spare, asked) ? spare : target);
+        let to = runOn ?? (spare && asked !== undefined && asked !== model && pool.models.owns(spare, asked) ? spare : target);
         let as = to === target ? model : picked ?? asked ?? model;
         let sendBody = outBody;
         const failed: string[] = [];
         let fellBack = to === spare;
         const renamed = (m: string): Buffer | undefined => {
           // A form names its model in a field, which is rewritten as a JSON body's is.
-          const wire = pool.outboundId(m);
+          const wire = pool.models.outboundId(m);
           return isForm && body ? replaceMultipartField(body, contentType, "model", wire) ?? body : withModel(body, wire);
         };
         for (;;) {
@@ -281,7 +281,7 @@ export function passthroughRoutes(ctx: RouteContext) {
           const next = !strict && again ? again([...failed, as]) : null;
           const usable = next && next.target === "local" && next.model !== as && !failed.includes(next.model);
           // A path with the model in it runs the next line at that path for its model.
-          const line = !usable ? undefined : held ? pool.forPath(held.as(next.model))?.slot : placeOf(next.model);
+          const line = !usable ? undefined : held ? pool.models.forPath(held.as(next.model))?.slot : placeOf(next.model);
           const more = line ? { slot: line, model: next!.model, line: next }
             : spare && fb && !fellBack ? { slot: spare, model: fb.model, line: null } : null;
           // Outside the try: a refusal here is the answer, not a reason to try the next line.

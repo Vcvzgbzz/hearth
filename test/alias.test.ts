@@ -126,16 +126,16 @@ await node.pool.first().state.refresh();
 // Not cosmetic: `loaded` feeds the scheduler's warm bonus and readyNow. Left
 // untranslated an aliased model reads as permanently cold.
 {
-  assert.ok(node.pool.loaded().includes(NICE), "warm state uses the advertised id");
-  assert.ok(!node.pool.loaded().includes(REAL), "and not the raw one");
+  assert.ok(node.pool.models.loaded().includes(NICE), "warm state uses the advertised id");
+  assert.ok(!node.pool.models.loaded().includes(REAL), "and not the raw one");
   assert.equal(node.pool.capacityFor(NICE).warm, true, "capacityFor agrees");
 }
 
 // --- resolution still finds the right backend ------------------------------
 {
-  assert.equal(node.pool.outboundId(NICE), REAL, "one place owns the rewrite");
-  assert.equal(node.pool.outboundId("something-else"), "something-else", "identity otherwise");
-  assert.equal(node.pool.for(NICE).name, "ollama");
+  assert.equal(node.pool.models.outboundId(NICE), REAL, "one place owns the rewrite");
+  assert.equal(node.pool.models.outboundId("something-else"), "something-else", "identity otherwise");
+  assert.equal(node.pool.models.for(NICE).name, "ollama");
 }
 
 // --- a model without `as` is completely unaffected -------------------------
