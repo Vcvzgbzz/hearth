@@ -13,6 +13,7 @@ import type { UiData } from "../observe/uidata.js";
 import { go, login, logout, openPlugin, pageOf, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
+import { changes as configChanges, useConfig } from "./configStore.js";
 import { changes, useSched } from "./schedStore.js";
 import { Plugins } from "./Plugins.js";
 import { Routing } from "./Routing.js";
@@ -101,10 +102,11 @@ function ConfigPill() {
   const routing = useEdit(changed);
   // The Scheduler page's draft is kept too, so an edit made there is unsaved however far the reader walks.
   const scheduler = useSched(changes);
-  const unsaved = routing + scheduler;
+  const config = useConfig(configChanges);
+  const unsaved = routing + scheduler + config;
   if (!c) return null;
-  // The count leads the way back to the page that holds the edits: routing's first, since it is the map.
-  if (unsaved > 0 && !c.error) return <button onClick={() => go(routing > 0 ? "routing" : "scheduler")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
+  // The count leads the way back to the page that holds the edits: routing's first, since it is the map, then scheduler's.
+  if (unsaved > 0 && !c.error) return <button onClick={() => go(routing > 0 ? "routing" : scheduler > 0 ? "scheduler" : "config")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
   const tone = c.error ? "bad" : c.restartPending.length ? "warn" : "ok";
   const text = c.error ? "config does not load" : c.restartPending.length ? `restart to apply ${c.restartPending.length}` : c.path ? "saved" : "in memory";
   return (
