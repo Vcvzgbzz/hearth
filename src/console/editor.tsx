@@ -8,7 +8,7 @@ import { Fragment, useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice } from "./editStore.js";
+import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Replayed } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { sendTest, useLink, useStore, type Ran } from "./store.js";
@@ -163,6 +163,48 @@ export function VersionsButton() {
   );
 }
 
+/** "what would change?": the recent requests replayed against the draft, and the ones it would send somewhere else. */
+function WhatChanges() {
+  const [shown, setShown] = useState<{ got?: Replayed; error?: string } | null>(null);
+  const open = () => {
+    setShown({});
+    replayDraft().then((got) => setShown({ got }), (e: unknown) => setShown({ error: e instanceof Error ? e.message : String(e) }));
+  };
+  const got = shown?.got;
+  const moved = got ? got.changed.reduce((n, c) => n + c.count, 0) : 0;
+  return (
+    <>
+      <Button onClick={open}>what would change?</Button>
+      {shown && (
+        <Dialog title="What would change" size="md" onClose={() => setShown(null)}>
+          <div className="space-y-2 overflow-auto px-4 py-3 text-[13px]">
+            {shown.error ? <div className="text-bad">{shown.error}</div>
+              : !got ? <div className="text-dim">Replaying recent requests…</div>
+              : moved === 0 ? <div>All {got.considered} would go where they go now.</div>
+              : (
+                <>
+                  <div>Of the last {got.considered} requests, {moved} would go somewhere else.</div>
+                  {got.refusedNow > 0 && <div className="text-bad">{got.refusedNow} would now be refused.</div>}
+                  <ul className="space-y-1">
+                    {got.changed.map((c) => (
+                      <li key={`${c.asked}\0${c.from}\0${c.to}`} className="flex flex-wrap items-baseline gap-x-2">
+                        <span className={mono}>{c.asked}</span>
+                        <span className="text-dim">{c.from} → <span className={c.to === "refused" ? "text-bad" : "text-fg"}>{c.to}</span></span>
+                        <span>×{c.count}</span>
+                        {c.example !== "" && <a className="text-accent hover:underline" href={`#requests/${encodeURIComponent(c.example)}`}>show one</a>}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            {got && <div className="text-[12px] text-dim">{got.note}</div>}
+          </div>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 /** A first place for a choice between several to start from: something a backend already serves. */
 const anyModel = (draft: Doc | null): string =>
   list(Object.values(obj(draft?.backends)).flatMap((b) => list(obj(b).serves)))[0] ?? Object.keys(obj(draft?.models))[0] ?? "";
@@ -286,6 +328,7 @@ export function EditBar() {
           <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
           {future.length > 0 && <Button onClick={redo}><Redo2 size={13} />redo</Button>}
           <Button disabled={!isDirty} onClick={revert}><RotateCcw size={13} />discard draft</Button>
+          {isDirty && issues.length === 0 && <WhatChanges />}
           <Button tone="primary" disabled={!isDirty} onClick={() => void review()}><Save size={13} />review &amp; publish</Button>
         </div>
         {err && <div className="w-full text-[12px] text-bad">{err.message}</div>}

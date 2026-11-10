@@ -385,6 +385,14 @@ export async function tryRequest(trial: Trial | null): Promise<void> {
   }
 }
 
+export type Replayed = { considered: number; same: number; changed: { from: string; to: string; count: number; example: string; asked: string }[]; refusedNow: number; note: string };
+
+/** The recent requests decided again under the whole draft's rules, beside where the rules in force send them now. */
+export function replayDraft(): Promise<Replayed> {
+  const d = whole(useEdit.getState());
+  return request<Replayed>("POST", "/flows/replay", { flows: d?.flows ?? {}, actions: d?.actions ?? {}, routers: d?.routers ?? {}, callers: d?.callers ?? {} });
+}
+
 /** Dry-run the draft, show the diff, and write only on confirm. */
 export async function review(): Promise<void> {
   // The file may have moved since the draft was read: carry the draft over first, so the save is against what is there.
@@ -396,10 +404,14 @@ export async function review(): Promise<void> {
   const fail = (e: unknown) => set({ plan: null, err: { message: said(e), path: e instanceof RequestError ? e.path : null } });
   try {
     const dry = await request<{ text: string; restartPending: string[] }>("PATCH", "/config", { ...body, dryRun: true });
+    // What the draft does to recent requests is worth a line, never a reason the review cannot open.
+    const replayed = await replayDraft().catch(() => null);
+    const moved = replayed ? replayed.changed.reduce((n, c) => n + c.count, 0) : 0;
+    const moves = replayed && moved > 0 ? [`${moved} of the last ${replayed.considered} requests would go somewhere else${replayed.refusedNow > 0 ? ` (${replayed.refusedNow} would now be refused)` : ""}: see 'what would change?'`] : [];
     set({
       err: null,
       plan: {
-        before: file.text, after: dry.text, restartPending: dry.restartPending, notes: problems(draft, facts() ?? undefined), naming: true, verb: "publish", summary: summary(file.doc, draft),
+        before: file.text, after: dry.text, restartPending: dry.restartPending, notes: [...problems(draft, facts() ?? undefined), ...moves], naming: true, verb: "publish", summary: summary(file.doc, draft),
         commit: async (name) => {
           try {
             const out = await request<{ restartPending: string[] }>("PATCH", "/config", { ...body, ...(name ? { name } : {}) });

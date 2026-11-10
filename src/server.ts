@@ -329,6 +329,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/config/draft", methods: ["GET", "PUT", "DELETE"], auth: "local", handler: adminArea.routeConfigDraft },
     { path: "/config/versions", methods: ["GET", "POST"], auth: "local", handler: adminArea.routeConfigVersions },
     { path: "/flows/try", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsTry },
+    { path: "/flows/replay", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsReplay },
     { path: "/queue", auth: "local", handler: consoleArea.routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: consoleArea.routeQueueEvents },
 
