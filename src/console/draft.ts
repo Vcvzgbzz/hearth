@@ -15,6 +15,8 @@ export const isObj = (v: unknown): v is Doc => typeof v === "object" && v !== nu
 export const obj = (v: unknown): Doc => (isObj(v) ? v : {});
 export const text = (v: unknown): string => (typeof v === "string" ? v : "");
 export const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : typeof v === "string" ? [v] : []);
+/** A list condition's value with nothing in it: a line that tests it matches no request. */
+export const blankList = (v: unknown): boolean => list(v).every((x) => x.trim() === "");
 
 /** `doc` with `value` at `section.id`, or without that entry when `value` is undefined. */
 export function put(doc: Doc, section: string, id: string, value: unknown): Doc {
