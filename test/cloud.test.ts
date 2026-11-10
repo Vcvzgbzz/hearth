@@ -15,8 +15,9 @@ import { join } from "node:path";
 
 import { parse } from "yaml";
 
-import { ConfigError, loadConfig, parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { loadConfig, parseConfig } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 // A provider: nothing is answered without its key, and it lists more models than this node offers.

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 
-import { SlidingWindow } from "../src/window.js";
+import { SlidingWindow } from "../src/access/window.js";
 
 const w = new SlidingWindow(1_000);
 assert.equal(w.take("a", 2, 0), true);

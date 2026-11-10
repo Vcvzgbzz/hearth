@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 
-import { laneDefaults, loadConfig, lowestLane, parseConfig, type HearthConfig, type LaneDefaults } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { laneDefaults, loadConfig, lowestLane, parseConfig, type HearthConfig, type LaneDefaults } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import type { SchedulerView } from "../src/console/types.js";
 import { parseV1 } from "./v1.js";
-import { migrate } from "../src/migrate.js";
+import { migrate } from "../src/config/migrate.js";
 
 // --- lowestLane ------------------------------------------------------------
 {

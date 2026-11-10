@@ -1,10 +1,10 @@
 /**
  * The operator login: first-run setup, log in, log out. Sessions themselves live in `Callers`.
  */
-import { isLoopback } from "../callers.js";
-import { ConfigRefusal } from "../configfile.js";
-import { json, secretEq } from "../http.js";
-import { hashPassword, verifyDecoy, verifyPassword } from "../login.js";
+import { isLoopback } from "../access/callers.js";
+import { ConfigRefusal } from "../config/configfile.js";
+import { json, secretEq } from "../wire/http.js";
+import { hashPassword, verifyDecoy, verifyPassword } from "../access/login.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function loginRoutes(ctx: RouteContext) {

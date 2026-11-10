@@ -2,8 +2,8 @@
  * Every refusal a request can meet before it runs, and the status each one carries. The
  * scheduler answers "can this start now"; this answers "may it run at all", for every route.
  */
-import { PeerStatusError } from "./peers.js";
-import { QueueFullError, QueueTimeoutError } from "./scheduler.js";
+import { PeerStatusError } from "../peers/peers.js";
+import { QueueFullError, QueueTimeoutError } from "../queue/scheduler.js";
 
 /** A request turned away, with the status and OpenAI error type to answer it with. */
 export class Refusal extends Error {

@@ -8,7 +8,7 @@ import { Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Review, type File, type Plan } from "./config.js";
-import { FIELDS, humanMs } from "../fields.js";
+import { FIELDS, humanMs } from "../config/fields.js";
 import { History } from "./pages.js";
 import { BackendInspector, BackendsTab, CallerInspector, CallersTab, jobOrder, JobInspector, JobsTab, ModelInspector, ModelsTab, PinInspector, PinsTab, same, sectionFacts, type Pick, type Sel } from "./Sections.js";
 import { boardOrder, boardSlots, changeWords, draftLanes, editedAt, knobOps, laneCeilings, laneNameError, lanePosition, laneRows, laneStatus, laneTags, laneTracks, lanesWithoutPriority, numberText, ORDER_KEYS, orderChip, PIN_WORDS, pinsOf, priorityGaps, removalBlock, reviewNotes, seeded, slotSummary, valueAt, waitingOn, type Doc, type LaneRow, type OrderKey, type Path, type SlotsOf, type Track } from "./knobs.js";

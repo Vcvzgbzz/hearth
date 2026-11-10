@@ -14,9 +14,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { PeerRegistry } from "../src/peers.js";
+import { loadConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { PeerRegistry } from "../src/peers/peers.js";
 import { createNode } from "../src/server.js";
 
 type Status = { hash: string; restartPending: string[] };

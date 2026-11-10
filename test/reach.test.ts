@@ -7,8 +7,9 @@
  */
 import assert from "node:assert/strict";
 
-import { parseConfig, type Flow, type HearthConfig } from "../src/config.js";
-import { reachOf } from "../src/reach.js";
+import { parseConfig, type HearthConfig } from "../src/config/config.js";
+import type { Flow } from "../src/config/flows.js";
+import { reachOf } from "../src/routing/reach.js";
 
 const cfgOf = (extra: Record<string, unknown>): HearthConfig => parseConfig({
   name: "n",

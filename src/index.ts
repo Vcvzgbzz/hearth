@@ -4,10 +4,11 @@
  * anything reached by a deep import, or through `node.pool`, `node.peers` and `node.history`, is
  * the node's own machinery and changes without notice.
  */
-export { parseConfig, loadConfig, ConfigError } from "./config.js";
-export type { HearthConfig } from "./config.js";
+export { parseConfig, loadConfig } from "./config/config.js";
+export { ConfigError } from "./config/read.js";
+export type { HearthConfig } from "./config/config.js";
 export { createNode } from "./server.js";
 export type { HearthNode } from "./server.js";
-export { createLogger, silentLogger } from "./log.js";
-export type { Decision, HookExchange, HookRequest, Hooks, PluginContext, PluginModule } from "./plugins.js";
-export type { Logger, Level } from "./log.js";
+export { createLogger, silentLogger } from "./observe/log.js";
+export type { Decision, HookExchange, HookRequest, Hooks, PluginContext, PluginModule } from "./plugins/plugins.js";
+export type { Logger, Level } from "./observe/log.js";

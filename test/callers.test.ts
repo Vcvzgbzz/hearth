@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 
-import { Callers } from "../src/callers.js";
+import { Callers } from "../src/access/callers.js";
 import { parseV1 } from "./v1.js";
 
 const req = (key: string, ip = "10.0.0.5") =>

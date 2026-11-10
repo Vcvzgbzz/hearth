@@ -8,10 +8,10 @@ import assert from "node:assert/strict";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { BackendState } from "../src/backend.js";
-import { parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { hashPassword } from "../src/login.js";
+import { BackendState } from "../src/queue/backend.js";
+import { parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { hashPassword } from "../src/access/login.js";
 import { createNode } from "../src/server.js";
 
 const listen = async (s: Server, port = 0): Promise<string> => {

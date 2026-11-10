@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 
 import { parseDocument } from "yaml";
 
-import { parseConfig } from "../src/config.js";
-import { migrate, migrateDoc, v1Marker, routedMarker } from "../src/migrate.js";
+import { parseConfig } from "../src/config/config.js";
+import { migrate, migrateDoc, v1Marker, routedMarker } from "../src/config/migrate.js";
 
 const V1 = `# my box
 name: box

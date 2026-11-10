@@ -19,8 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { ConfigError, loadConfig, parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { loadConfig, parseConfig } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 // --- config -----------------------------------------------------------------

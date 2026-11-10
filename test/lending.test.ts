@@ -9,9 +9,10 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ConfigError, loadConfig, parseConfig } from "../src/config.js";
-import { closedWhy, limitsFor, spentWhy, termsFor } from "../src/lending.js";
-import { silentLogger } from "../src/log.js";
+import { loadConfig, parseConfig } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
+import { closedWhy, limitsFor, spentWhy, termsFor } from "../src/peers/lending.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 const at = (s: Server): string => `http://127.0.0.1:${(s.address() as AddressInfo).port}`;

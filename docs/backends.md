@@ -169,7 +169,7 @@ backend reports a model it cannot let go of, so config refuses one on an
 exclusive resource another backend takes turns on: that neighbour could never
 clear the card. Declare it `resident`, or mark the resource `shared`. A `none`
 backend reports nothing, so hearth loads beside it. New kinds are added in
-`src/kinds.ts`, and `test/kinds.test.ts` holds each one to the same contract.
+`src/queue/kinds.ts`, and `test/kinds.test.ts` holds each one to the same contract.
 
 `kind` is `gpu`, `cpu` or `other` and is display only — it picks the mark on the
 status page and never reaches admission. `other` is there because this mechanism

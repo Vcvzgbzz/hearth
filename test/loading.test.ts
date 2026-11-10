@@ -20,8 +20,8 @@ import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { parsePlacement } from "../src/kinds.js";
-import { silentLogger } from "../src/log.js";
+import { parsePlacement } from "../src/queue/kinds.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

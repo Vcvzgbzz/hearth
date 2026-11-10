@@ -3,8 +3,8 @@
  * step as `do:`. An action never changes where a request goes and never holds it up. Each kind
  * is one entry in KINDS: the key that names it, how its settings are read, and what it does.
  */
-import { asRecord, bad, only, resolveSecret, str } from "./config.js";
-import type { Logger } from "./log.js";
+import { asRecord, bad, only, resolveSecret, str } from "../config/read.js";
+import type { Logger } from "../observe/log.js";
 
 /** What an action is told about the request and where its flow sent it. Also the `{name}`s a template may use. */
 export interface ActionFacts {

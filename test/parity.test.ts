@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
-import { QueueTimeoutError, Scheduler } from "../src/scheduler.js";
+import { silentLogger } from "../src/observe/log.js";
+import { QueueTimeoutError, Scheduler } from "../src/queue/scheduler.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

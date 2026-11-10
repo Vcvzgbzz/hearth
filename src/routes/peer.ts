@@ -4,8 +4,8 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { type Envelope, apiError, json, refuse } from "../http.js";
-import { limitsFor, termsFor } from "../lending.js";
+import { type Envelope, apiError, json, refuse } from "../wire/http.js";
+import { limitsFor, termsFor } from "../peers/lending.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function peerRoutes(ctx: RouteContext) {

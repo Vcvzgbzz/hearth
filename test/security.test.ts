@@ -16,10 +16,10 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { loadConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
-import { yamlScalar as yq } from "../src/yamlq.js";
+import { yamlScalar as yq } from "../src/config/yamlq.js";
 
 const uiDir = new URL("../src/console/", import.meta.url).pathname;
 

@@ -6,9 +6,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage } from "node:http";
 
-import type { HearthConfig } from "./config.js";
+import type { HearthConfig } from "../config/config.js";
 import type { History } from "./history.js";
-import { headersOf } from "./http.js";
+import { headersOf } from "../wire/http.js";
 import type { Logger } from "./log.js";
 import type { Meter, Usage } from "./usage.js";
 

@@ -5,21 +5,24 @@
 import { pipeline as pipelineCb } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { type ActionFacts, actionDecls } from "../actions.js";
-import { Refusal } from "../admit.js";
-import { relayAnthropic, toAnthropic } from "../anthropic.js";
-import { type BackendConfig, ConfigError, type HearthConfig, backendAuth, flowsFor } from "../config.js";
-import { emulatedRequest, relayEmulated } from "../emulate.js";
-import { KEY_REFUSED, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../http.js";
-import { MessagesResponse, chatOf } from "../messages.js";
-import { PeerStatusError } from "../peers.js";
-import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins.js";
-import { type Timing, notRun } from "../requestlog.js";
-import { type Resolution, type World, mayLeave, resolve } from "../route.js";
-import { QueueFullError } from "../scheduler.js";
-import { fitOutput, needsOf, unfit } from "../stats.js";
-import { send } from "../upstream.js";
-import { type Meter, meter, withoutUsage } from "../usage.js";
+import { type ActionFacts, actionDecls } from "../routing/actions.js";
+import { Refusal } from "../access/admit.js";
+import { relayAnthropic, toAnthropic } from "../wire/anthropic.js";
+import { type BackendConfig, backendAuth } from "../config/backends.js";
+import type { HearthConfig } from "../config/config.js";
+import { flowsFor } from "../config/flows.js";
+import { ConfigError } from "../config/read.js";
+import { emulatedRequest, relayEmulated } from "../wire/emulate.js";
+import { KEY_REFUSED, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../wire/http.js";
+import { MessagesResponse, chatOf } from "../wire/messages.js";
+import { PeerStatusError } from "../peers/peers.js";
+import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins/plugins.js";
+import { type Timing, notRun } from "../observe/requestlog.js";
+import { type Resolution, type World, mayLeave, resolve } from "../routing/route.js";
+import { QueueFullError } from "../queue/scheduler.js";
+import { fitOutput, needsOf, unfit } from "../routing/stats.js";
+import { send } from "../wire/upstream.js";
+import { type Meter, meter, withoutUsage } from "../observe/usage.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function chatRoutes(ctx: RouteContext) {

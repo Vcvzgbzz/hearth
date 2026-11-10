@@ -10,9 +10,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
-import { Meter, Usage } from "../src/usage.js";
+import { Meter, Usage } from "../src/observe/usage.js";
 import { parseV1 } from "./v1.js";
 
 // The meter.

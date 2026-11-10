@@ -4,13 +4,14 @@
  */
 import { pipeline } from "node:stream/promises";
 
-import { Refusal } from "../admit.js";
-import { ConfigError, pluginAuth, resolveSecret } from "../config.js";
-import { fail, forwardable, headersOf, json } from "../http.js";
-import { checkHttp } from "../mcp.js";
-import { Plugins, type Adapter } from "../plugins.js";
-import { resolve } from "../route.js";
-import { send } from "../upstream.js";
+import { Refusal } from "../access/admit.js";
+import { pluginAuth } from "../config/plugins.js";
+import { ConfigError, resolveSecret } from "../config/read.js";
+import { fail, forwardable, headersOf, json } from "../wire/http.js";
+import { checkHttp } from "../plugins/mcp.js";
+import { Plugins, type Adapter } from "../plugins/plugins.js";
+import { resolve } from "../routing/route.js";
+import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
 
 /**

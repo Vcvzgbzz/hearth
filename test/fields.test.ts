@@ -7,8 +7,9 @@
  *     npx tsx test/fields.test.ts
  */
 import assert from "node:assert/strict";
-import { ConfigError, parseConfig } from "../src/config.js";
-import { FIELDS, fieldAt, humanMs, nearest, scopeOf, seedOf, type Scope } from "../src/fields.js";
+import { parseConfig } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
+import { FIELDS, fieldAt, humanMs, nearest, scopeOf, seedOf, type Scope } from "../src/config/fields.js";
 
 /** A config that loads, with one entry in every section a scope can point into. */
 const base = () => ({

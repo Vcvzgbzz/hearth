@@ -13,9 +13,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { bugReport } from "../src/report.js";
+import { loadConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { bugReport } from "../src/observe/report.js";
 import { createNode } from "../src/server.js";
 
 const free = async (): Promise<number> => {

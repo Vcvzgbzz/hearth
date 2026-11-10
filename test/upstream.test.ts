@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { getJson, send } from "../src/upstream.js";
+import { getJson, send } from "../src/wire/upstream.js";
 
 /** How many chunks /drip had emitted when the client vanished. -1 = never. */
 let dripAbortedAfter = -1;

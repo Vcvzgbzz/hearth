@@ -2,15 +2,15 @@
  * Everything the route table does not claim, proxied to a backend as it came: `/v1/embeddings`,
  * llama-swap's own paths, and paths a backend declares under `routes`, which queue like chat.
  */
-import { Refusal, inScope } from "../admit.js";
-import { backendAuth } from "../config.js";
-import { KEY_REFUSED, fail, headersOf, jobId, pipeThrough, refusedKey } from "../http.js";
-import { multipartField, replaceMultipartField } from "../multipart.js";
-import type { BackendSlot } from "../pool.js";
-import { type Timing, notRun } from "../requestlog.js";
-import { type World, resolve } from "../route.js";
-import { QueueFullError } from "../scheduler.js";
-import { send } from "../upstream.js";
+import { Refusal, inScope } from "../access/admit.js";
+import { backendAuth } from "../config/backends.js";
+import { KEY_REFUSED, fail, headersOf, jobId, pipeThrough, refusedKey } from "../wire/http.js";
+import { multipartField, replaceMultipartField } from "../wire/multipart.js";
+import type { BackendSlot } from "../queue/pool.js";
+import { type Timing, notRun } from "../observe/requestlog.js";
+import { type World, resolve } from "../routing/route.js";
+import { QueueFullError } from "../queue/scheduler.js";
+import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function passthroughRoutes(ctx: RouteContext) {
