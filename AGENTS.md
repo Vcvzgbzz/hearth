@@ -5,7 +5,16 @@ comment is read by strangers. Write for them.
 
 ## Where things are
 
-- `src/server.ts`: every HTTP route, its auth, and the passthrough
+- `src/server.ts`: the route table (every path, its auth), turning a credential into a caller,
+  and the HTTP server's lifecycle (request ids, cross-origin and rebinding guards, the drain)
+- `src/routes/`: what each route does, one file per area (`chat.ts`, `passthrough.ts`,
+  `models.ts`, `peer.ts`, `join.ts`, `keys.ts`, `login.ts`, `admin.ts`, `console.ts`); each takes
+  the `RouteContext` in `routes/context.ts` and returns its handlers
+- `src/callers.ts`: api keys, peer tokens and operator sessions, looked up by digest
+- `src/limits.ts`: what a caller is held to before it queues: lending, scope, per-key limits, caps
+- `src/world.ts`: the live state a flow reads (load, idle time, sticky placements, step hits)
+- `src/requestlog.ts`: the request log, call history, usage and the recent-calls rail
+- `src/http.ts`, `src/window.ts`: body reading, error envelopes, relaying; the sliding-window rate limit
 - `src/scheduler.ts`, `src/pool.ts`, `src/resources.ts`: admission, per-backend
   queues, shared hardware
 - `src/route.ts`, `src/peers.ts`: local vs peer routing, peer health

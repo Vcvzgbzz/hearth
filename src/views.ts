@@ -12,7 +12,7 @@ import type { Controls } from "./controls.js";
 import { KEEP, type History } from "./history.js";
 import type { ConfigFile } from "./configfile.js";
 import type { LentTerms, PeerRegistry } from "./peers.js";
-import type { RecentCall } from "./server.js";
+import type { RecentCall } from "./requestlog.js";
 import { troubleSays } from "./backend.js";
 import type { BackendPool } from "./pool.js";
 import type { ModelStats } from "./stats.js";
