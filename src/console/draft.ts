@@ -35,7 +35,7 @@ export function peerChoices(draft: Record<string, unknown>, q: string): { peer: 
 /** Somewhere a request can run: a model here, or a peer's copy of one (null: the id asked for). */
 export type End = { kind: "model"; model: string } | { kind: "peer"; peer: string; model: string | null };
 /** A step's `to`, read the same way whether it came from the file or from the running node. */
-export type To = End | { kind: "flow"; flow: string } | { kind: "fastest"; of: End[] } | { kind: "refuse"; why: string } | { kind: "asked" } | { kind: "unset" };
+export type To = End | { kind: "flow"; flow: string } | { kind: "fastest"; of: End[] } | { kind: "refuse"; why: string } | { kind: "asked" } | { kind: "plugin"; plugin: string } | { kind: "unset" };
 
 /** The input that stands for every name no other flow takes. */
 export const ANY = "*";
@@ -45,6 +45,7 @@ export function toOf(raw: unknown): To {
   const o = obj(raw);
   if (typeof o.refuse === "string") return { kind: "refuse", why: o.refuse };
   if (o.asked === true) return { kind: "asked" };
+  if (typeof o.plugin === "string") return { kind: "plugin", plugin: o.plugin };
   if (typeof o.flow === "string") return { kind: "flow", flow: o.flow };
   if (Array.isArray(o.fastest)) return { kind: "fastest", of: o.fastest.map(toOf).filter((e): e is End => e.kind === "model" || e.kind === "peer") };
   if (typeof o.peer === "string") return { kind: "peer", peer: o.peer, model: text(o.model) || null };
@@ -60,6 +61,7 @@ export function rawTo(to: To): unknown {
     case "fastest": return { fastest: to.of.map(rawTo) };
     case "refuse": return { refuse: to.why };
     case "asked": return { asked: true };
+    case "plugin": return { plugin: to.plugin };
     default: return "";
   }
 }
@@ -73,6 +75,7 @@ export function toText(to: To): string {
     case "fastest": return `fastest of ${to.of.length}`;
     case "refuse": return "refuse it";
     case "asked": return "its own model";
+    case "plugin": return `plugin ${to.plugin}`;
     default: return "nowhere yet";
   }
 }
@@ -601,6 +604,7 @@ export const NODES: Record<string, NodeKind> = {
   refuse: { opens: (id) => ({ kind: "flow", id: lineOf(id).flow }) },
   model: { lands: (id) => ({ kind: "model", model: id }) },
   peer: { lands: (id) => ({ kind: "peer", peer: id, model: null }) },
+  plugin: { lands: (id) => ({ kind: "plugin", plugin: id }) },
   action: { lands: (id) => ({ kind: "action", action: id }), opens: (id) => ({ kind: "action", id }) },
 };
 

@@ -6,14 +6,15 @@ import { pipeline } from "node:stream/promises";
 
 import { Refusal } from "../admit.js";
 import { ConfigError, resolveSecret } from "../config.js";
-import { fail, forwardable, json } from "../http.js";
+import { fail, forwardable, headersOf, json } from "../http.js";
 import { checkHttp } from "../mcp.js";
 import { Plugins } from "../plugins.js";
+import { resolve } from "../route.js";
 import { send } from "../upstream.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function pluginRoutes(ctx: RouteContext) {
-  const { cfg, log, plugins, callers, readJson, readBody } = ctx;
+  const { cfg, log, plugins, callers, worlds, readJson, readBody } = ctx;
 
   /** GET: every plugin's state and numbers. POST `{name, paused}`: pause or resume one until the next restart. */
   async function routePlugins(c: Call): Promise<void> {
@@ -41,7 +42,26 @@ export function pluginRoutes(ctx: RouteContext) {
   async function routePluginServes(c: Call): Promise<void> {
     const { req, res, url } = c;
     const m = /^\/plugins\/([^/]+)(\/.*)?$/.exec(c.path);
-    const to = plugins.serve(m?.[1] ?? "");
+    // The caller's router decides, as it does for a model: the request is asked of it as MCP:<name> or API:<name>.
+    // With no rule for MCP or API, its flow for every other name decides: one that runs a name as itself lets
+    // plugins through, and one that refuses refuses them until a rule for MCP or API is added. A name that is no
+    // plugin's may be a router's own name for one, so it is asked as either type, and the plugin a step names answers.
+    const asked = m?.[1] ?? "";
+    const kind = plugins.kindOf(asked);
+    const world = { ...worlds.worldFor(c.caller, Object.keys(cfg.scheduler.lanes)[0]!, undefined, worlds.rulesFor(c.caller), headersOf(req)), plugin: asked };
+    let name: string | null = null;
+    let refused: string | null = null;
+    for (const as of kind !== null ? [kind] : (["API", "MCP"] as const)) {
+      const r = resolve(`${as}:${asked}`, world);
+      if (r.plugin !== undefined && plugins.kindOf(r.plugin) !== null) { name = r.plugin; break; }
+      if (r.plugin === undefined) refused ??= r.reason;
+    }
+    if (name === null) {
+      if (refused !== null) log.info("plugin.refused", { plugin: asked, caller: c.caller, reason: refused });
+      json(res, refused !== null ? 403 : 404, { error: refused ?? `no plugin named ${asked} serves an API here, and no rule gives that name to one` });
+      return;
+    }
+    const to = plugins.serve(name);
     if ("why" in to) {
       json(res, to.status, { error: to.why });
       return;
@@ -60,7 +80,7 @@ export function pluginRoutes(ctx: RouteContext) {
       const a = await to.stdio.handle(req.method ?? "GET", body);
       to.done(a.status < 500);
       res.writeHead(a.status, { "content-type": a.type, ...(a.session ? { "mcp-session-id": a.session } : {}) }).end(a.body);
-      log.info("plugin.served", { plugin: m![1], method: req.method, path: m?.[2] ?? "/", status: a.status, caller: c.caller, ms: Date.now() - t0 });
+      log.info("plugin.served", { plugin: name, method: req.method, path: m?.[2] ?? "/", status: a.status, caller: c.caller, ms: Date.now() - t0 });
       return;
     }
     const headers = callers.headersFor(req) as Record<string, string>;
@@ -81,13 +101,13 @@ export function pluginRoutes(ctx: RouteContext) {
       to.done(up.status < 500);
       res.writeHead(up.status, forwardable(up.headers));
       await pipeline(up.body, res);
-      log.info("plugin.served", { plugin: m![1], method: req.method, path: m?.[2] ?? "/", status: up.status, caller: c.caller, ms: Date.now() - t0 });
+      log.info("plugin.served", { plugin: name, method: req.method, path: m?.[2] ?? "/", status: up.status, caller: c.caller, ms: Date.now() - t0 });
     } catch (e) {
       to.done(false);
       // A caller that hung up mid-stream is the end of the exchange, not a failure of the service.
       if (ctrl.signal.aborted) return;
-      log.warn("plugin.serve_failed", { plugin: m![1], path: m?.[2] ?? "/", error: e instanceof Error ? e.message : String(e) });
-      if (!res.headersSent) json(res, 502, { error: `plugin ${m![1]} could not be reached: ${e instanceof Error ? e.message : String(e)}` });
+      log.warn("plugin.serve_failed", { plugin: name, path: m?.[2] ?? "/", error: e instanceof Error ? e.message : String(e) });
+      if (!res.headersSent) json(res, 502, { error: `plugin ${name} could not be reached: ${e instanceof Error ? e.message : String(e)}` });
       else res.destroy();
     }
   }
