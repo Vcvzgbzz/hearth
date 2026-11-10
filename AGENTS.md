@@ -40,7 +40,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
   (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)
-- `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `history.ts`,
+- `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `requests.ts` (the
+  recent finished requests, one record each, behind `/ui/requests`), `history.ts`,
   `usage.ts`, `canary.ts`, `views.ts` (builds the console's data), `uidata.ts` (the shape of
   that data: the one contract the server and the page are both compiled against), `report.ts` (`hearth report`, with
   secrets scrubbed), `updates.ts` (the daily npm check behind "newer hearth")

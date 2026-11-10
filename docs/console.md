@@ -124,9 +124,9 @@ corner stokes the whole hearth. None of that touches the node. The node's name
 seeds it, so every node burns its own way. With reduced motion it holds still,
 and without WebGL2 there is none.
 
-The live view is 120 samples taken every 5s. The day view and the Logs page are
-held in memory and lost on restart unless `historyFile` names a file to keep
-them in:
+The live view is 120 samples taken every 5s. The day view, the Logs page and the
+records of recent requests (`/ui/requests`) are held in memory and lost on
+restart unless `historyFile` names a file to keep them in:
 
 ```yaml
 historyFile: /var/lib/hearth/history.json
