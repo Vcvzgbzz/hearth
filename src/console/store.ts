@@ -19,7 +19,7 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "scheduler", "logs", "config"] as const;
+export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "usage", "scheduler", "logs", "config"] as const;
 export type Page = (typeof PAGE_IDS)[number];
 /** The page the address names, an old `#queue` link included; anything else is the first one. */
 export const pageOf = (): Page => PAGE_IDS.find((p) => p === pageFor(location.hash.slice(1))) ?? "topology";

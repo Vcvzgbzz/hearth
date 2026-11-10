@@ -1,10 +1,11 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, BarChart3, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
 import { Keys } from "./Keys.js";
+import { Usage } from "./Usage.js";
 import { CanaryAlert, Inspector, KeyOnce, Models } from "./pages.js";
 import { Scheduler } from "./Scheduler.js";
 import { NodeSmoke } from "./Smoke.js";
@@ -27,6 +28,7 @@ const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "models", label: "Models", icon: Boxes },
   { id: "lending", label: "Lending", icon: Handshake },
   { id: "keys", label: "Keys", icon: KeyRound },
+  { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "scheduler", label: "Scheduler", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
   { id: "config", label: "Config", icon: FileCog },
@@ -482,6 +484,7 @@ export default function App() {
               {page === "models" && <Models />}
               {page === "lending" && <Lending />}
               {page === "keys" && <Keys />}
+              {page === "usage" && <Usage />}
               {page === "scheduler" && <Scheduler />}
               {/* What has been published, and the way back to it, wherever the file is edited. */}
               {page === "config" && <Config versions={<VersionsHere />} />}

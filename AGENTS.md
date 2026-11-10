@@ -48,7 +48,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
 - `src/errors.ts`: every error a request can end with, and the status `refusalOf` answers it with;
   imports nothing, so any layer can throw one
 - `src/console/`: the React status page and config editor (built to `dist/`).
-  The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the recent-requests rail beside the
+  The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the Usage page is `Usage.tsx` and its arithmetic `tally.ts`; the recent-requests rail beside the
   Topology map is `Rail.tsx`; the Plugins page is
   `Plugins.tsx` and its Add plugin dialog `AddPlugin.tsx` (plugin blocks on the
   routing map are in `flowNodes.tsx`; plugins that serve an API are boxes under
