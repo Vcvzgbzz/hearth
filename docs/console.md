@@ -291,6 +291,14 @@ line; **+ type** brings one onto the map.
   real request for that name and says where the node ran it, how long it took
   and what came back, with a note when that is not where the rules pointed. It
   is offered only for the rules the node runs now, with nothing pretended.
+- **what would change?** beside **review & publish**, on a draft with no
+  problems, decides the most recent requests (up to 500) again under the draft
+  and under the rules in force, and lists those that would go somewhere else:
+  the name asked for, where it goes now and where it would go, how many, and a
+  link to one of them on the Requests page. Each keeps what was recorded of it
+  (caller, lane, tested headers, prompt size, and for chat images and tools);
+  idle, queues, loaded models and the time of day are read as they are now.
+  The review before publishing carries the same count as a note.
 - **A model's box carries the hardware it runs on** as a small tag, and so does
   each model in the list of places to send a line, so two copies of one model
   (one on a card, one on the CPU) are told apart at a glance.
