@@ -8,7 +8,7 @@ comment is read by strangers. Write for them.
 - `src/server.ts`: the route table (every path, its auth), turning a credential into a caller,
   and the HTTP server's lifecycle (request ids, cross-origin and rebinding guards, the drain)
 - `src/routes/`: what each route does, one file per area (`chat.ts`, `passthrough.ts`,
-  `models.ts`, `peer.ts`, `join.ts`, `keys.ts`, `login.ts`, `admin.ts`, `console.ts`); each takes
+  `models.ts`, `peer.ts`, `join.ts`, `keys.ts`, `login.ts`, `plugins.ts`, `admin.ts`, `console.ts`); each takes
   the `RouteContext` in `routes/context.ts` and returns its handlers
 - `src/callers.ts`: api keys, peer tokens and operator sessions, looked up by digest
 - `src/limits.ts`: what a caller is held to before it queues: lending, scope, per-key limits, caps

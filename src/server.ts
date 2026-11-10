@@ -36,6 +36,7 @@ import { loginRoutes } from "./routes/login.js";
 import { modelRoutes } from "./routes/models.js";
 import { passthroughRoutes } from "./routes/passthrough.js";
 import { peerRoutes } from "./routes/peer.js";
+import { pluginRoutes } from "./routes/plugins.js";
 
 export type { RecentCall } from "./requestlog.js";
 
@@ -169,6 +170,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   const keyArea = keyRoutes(ctx);
   const joinArea = joinRoutes(ctx);
   const loginArea = loginRoutes(ctx);
+  const pluginArea = pluginRoutes(ctx);
 
   const server = createServer((req, res) => {
     inFlight++;
@@ -336,9 +338,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/peers/join", methods: ["POST"], auth: "local", handler: joinArea.routeJoin },
     { path: "/peers/machine", methods: ["GET"], auth: "local", handler: peerArea.routePeerMachine },
     { path: "/usage", methods: ["GET"], auth: "local", handler: consoleArea.routeUsage },
-    { path: "/plugins", methods: ["GET", "POST"], auth: "local", handler: adminArea.routePlugins },
-    { path: "/plugins/probe", methods: ["POST"], auth: "local", handler: adminArea.routePluginProbe },
-    { path: "/plugins/*", auth: "local", handler: adminArea.routePluginServes },
+    { path: "/plugins", methods: ["GET", "POST"], auth: "local", handler: pluginArea.routePlugins },
+    { path: "/plugins/probe", methods: ["POST"], auth: "local", handler: pluginArea.routePluginProbe },
+    { path: "/plugins/*", auth: "local", handler: pluginArea.routePluginServes },
     { path: "/report", methods: ["GET"], auth: "local", handler: adminArea.routeReport },
     { path: "/backends/probe", methods: ["POST"], auth: "local", handler: adminArea.routeProbe },
 
