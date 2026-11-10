@@ -15,7 +15,7 @@ import { MessagesResponse, chatOf } from "../messages.js";
 import { PeerStatusError } from "../peers.js";
 import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins.js";
 import { type Timing, notRun } from "../requestlog.js";
-import { type World, mayLeave, resolve } from "../route.js";
+import { type Resolution, type World, mayLeave, resolve } from "../route.js";
 import { QueueFullError } from "../scheduler.js";
 import { fitOutput, needsOf, unfit } from "../stats.js";
 import { send } from "../upstream.js";
@@ -385,9 +385,11 @@ export function chatRoutes(ctx: RouteContext) {
       answers.keep(res, key, keepMs);
     }
 
-    if (decision.target === "local") {
-      // A backend that fails before anything reaches the client is passed over like a peer that is down:
-      // the flow is asked again without it, and the request runs where that lands, here.
+    /**
+     * Run it here. A backend that fails before anything reaches the client is passed over like a peer that
+     * is down: the flow is asked again without it, and the request runs where that lands, here.
+     */
+    const runHere = async (): Promise<number> => {
       const failed = new Set<string>();
       let why = decision.reason;
       for (;;) {
@@ -451,89 +453,95 @@ export function chatRoutes(ctx: RouteContext) {
         );
         return localStatus;
       }
-    }
+    };
 
-    const peer = peers.config(decision.peer)!;
-    let fellBack = false;
-    let lastTarget = "peer" as "peer" | "local";
-    log.debug("route.peer", { model, peer: decision.peer, reason: decision.reason });
+    /** Run it on the peer the flow chose; one that fails before the first byte is retried here. */
+    const runOnPeer = async (decision: Extract<Resolution, { target: "peer" }>): Promise<number> => {
+      const peer = peers.config(decision.peer)!;
+      let fellBack = false;
+      let lastTarget = "peer" as "peer" | "local";
+      log.debug("route.peer", { model, peer: decision.peer, reason: decision.reason });
 
-    try {
-      await local.scheduler.submit(
-      {
-        lane,
-        model,
-        caller,
-        maxPerCaller: limits.capOf(caller, model),
-        // No local slot: this runs on their hardware, not ours.
-        offbox: true,
-        ...(id ? { id } : {}),
-        peer: decision.peer,
-        signal,
-      },
-      async () => {
-        t.startedAt = Date.now();
-        // The peer's id, with the route's params still applied.
-        const body = pool.outboundBody(model, payload, decision.theirModel);
-        const over = peers.sent(peer.name, decision.theirModel);
-        try {
-          const up = await send(`${peer.url}/v1/chat/completions`, {
-            json: body,
-            headers: { Authorization: `Bearer ${peer.token}` },
-            signal,
-            // A peer can accept the connection and then never answer, unlike
-            // the local backend. This turns that into a fallback instead of a
-            // hang. 0 disables it.
-            ...(cfg.peerFirstByteMs > 0 ? { headersTimeoutMs: cfg.peerFirstByteMs } : {}),
-            // A peer that goes silent mid-answer is cut as a local backend is.
-            ...(cfg.backendIdleMs > 0 ? { idleTimeoutMs: cfg.backendIdleMs } : {}),
-          });
-          if (!up.ok) {
-            const detail = await up.text();
-            if (up.status === 429) peers.rateCapped(peer.name, decision.theirModel, up.headers["retry-after"]);
-            throw new PeerStatusError(peer.name, up.status, detail.slice(0, 200));
-          }
-          peers.served(peer.name);
-          await pipeThrough(up, res);
-          over();
-        } catch (e) {
-          over();
-          if (res.headersSent) throw e;
-          // Where the flow sends it with peers out of the picture; only somewhere here will do.
-          const home = resolve(asked, { ...world, noPeers: true });
-          if (home.target !== "local") throw e;
-          land(home);
-          fire(home);
-          // Nothing reached the client yet, so they'll never see this.
-          log.warn("route.peer_failed_retrying_local", {
+      try {
+        await local.scheduler.submit(
+          {
+            lane,
             model,
-            peer: peer.name,
-            error: e instanceof Error ? e.message : String(e),
-          });
-          fellBack = true;
-          lastTarget = "local";
-          // A local retry goes back through admission, without re-applying the caller cap.
-          limitModel(model);
-          await local.scheduler.submit({ lane, model, caller, ...limits.keyLimitOf(caller, model), signal, tokens: pool.poolTokens(model, need) }, () => runLocal());
-        }
-      },
-    );
-    } catch (e) {
-      // Log the actual last target, local fallback included, with its backend so the call ring counts it.
-      requests.record(t, { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name }, false, e);
-      throw e;
-    }
-    requests.record(
-      t,
-      { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name, offbox: !fellBack,
-        ...(fellBack && localStatus >= 400 ? { status: localStatus } : {}) },
-      // Only the fallback can have relayed a bad status: a peer's own 4xx threw
-      // a PeerStatusError further up and never reached here.
-      !fellBack || localStatus < 400,
-      fellBack && localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
-    );
-    return fellBack ? localStatus : 0;
+            caller,
+            maxPerCaller: limits.capOf(caller, model),
+            // No local slot: this runs on their hardware, not ours.
+            offbox: true,
+            ...(id ? { id } : {}),
+            peer: decision.peer,
+            signal,
+          },
+          async () => {
+            t.startedAt = Date.now();
+            // The peer's id, with the route's params still applied.
+            const body = pool.outboundBody(model, payload, decision.theirModel);
+            const over = peers.sent(peer.name, decision.theirModel);
+            try {
+              const up = await send(`${peer.url}/v1/chat/completions`, {
+                json: body,
+                headers: { Authorization: `Bearer ${peer.token}` },
+                signal,
+                // A peer can accept the connection and then never answer, unlike
+                // the local backend. This turns that into a fallback instead of a
+                // hang. 0 disables it.
+                ...(cfg.peerFirstByteMs > 0 ? { headersTimeoutMs: cfg.peerFirstByteMs } : {}),
+                // A peer that goes silent mid-answer is cut as a local backend is.
+                ...(cfg.backendIdleMs > 0 ? { idleTimeoutMs: cfg.backendIdleMs } : {}),
+              });
+              if (!up.ok) {
+                const detail = await up.text();
+                if (up.status === 429) peers.rateCapped(peer.name, decision.theirModel, up.headers["retry-after"]);
+                throw new PeerStatusError(peer.name, up.status, detail.slice(0, 200));
+              }
+              peers.served(peer.name);
+              await pipeThrough(up, res);
+              over();
+            } catch (e) {
+              over();
+              if (res.headersSent) throw e;
+              // Where the flow sends it with peers out of the picture; only somewhere here will do.
+              const home = resolve(asked, { ...world, noPeers: true });
+              if (home.target !== "local") throw e;
+              land(home);
+              fire(home);
+              // Nothing reached the client yet, so they'll never see this.
+              log.warn("route.peer_failed_retrying_local", {
+                model,
+                peer: peer.name,
+                error: e instanceof Error ? e.message : String(e),
+              });
+              fellBack = true;
+              lastTarget = "local";
+              // A local retry goes back through admission, without re-applying the caller cap.
+              limitModel(model);
+              await local.scheduler.submit({ lane, model, caller, ...limits.keyLimitOf(caller, model), signal, tokens: pool.poolTokens(model, need) }, () => runLocal());
+            }
+          },
+        );
+      } catch (e) {
+        // Log the actual last target, local fallback included, with its backend so the call ring counts it.
+        requests.record(t, { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name }, false, e);
+        throw e;
+      }
+      requests.record(
+        t,
+        { model, lane, caller, backend: local.name, target: lastTarget, peer: peer.name, offbox: !fellBack,
+          ...(fellBack && localStatus >= 400 ? { status: localStatus } : {}) },
+        // Only the fallback can have relayed a bad status: a peer's own 4xx threw
+        // a PeerStatusError further up and never reached here.
+        !fellBack || localStatus < 400,
+        fellBack && localStatus >= 400 ? `backend answered ${localStatus}` : undefined,
+      );
+      return fellBack ? localStatus : 0;
+    };
+
+    return decision.target === "local" ? runHere() : runOnPeer(decision);
   }
+
   async function routeChat(c: Call): Promise<void> {
     try {
       const payload = await readJson(c.req);
