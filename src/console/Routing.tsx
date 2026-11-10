@@ -327,12 +327,18 @@ export function Routing() {
     return laid.nodes.map((n) => (ys.has(n.id) && ys.get(n.id) !== n.position.y ? { ...n, position: { x: n.position.x, y: ys.get(n.id)! } } : n));
   }, [laid, sizes]);
   // Nodes picked out together stay picked out through a redraw, and where a drag has them while it lasts.
-  const many = useEdit((s) => s.many);
+  // A redraw carries over what the map has selected and never reads `many`: the map reports its selection a
+  // commit after it changes, and a redraw that applied the old report would undo the change it is about to hear of.
   useEffect(() => setNodes((now) => {
     const was = new Map(now.map((n) => [n.id, n]));
-    const picked = new Set(useEdit.getState().many.map((m) => m.node));
-    return held(fitted, now, dragging.current).map((n) => (picked.has(n.id) ? { ...n, selected: true, ...(dragging.current && was.get(n.id) ? { position: was.get(n.id)!.position } : {}) } : n));
-  }), [fitted, many]);
+    return held(fitted, now, dragging.current).map((n) => (was.get(n.id)?.selected ? { ...n, selected: true, ...(dragging.current ? { position: was.get(n.id)!.position } : {}) } : n));
+  }), [fitted]);
+  // What is picked out from outside the map (a paste, Escape) is given to it once, when that changes.
+  const many = useEdit((s) => s.many);
+  useEffect(() => setNodes((now) => {
+    const picked = new Set(many.map((m) => m.node));
+    return now.some((n) => Boolean(n.selected) !== picked.has(n.id)) ? now.map((n) => (Boolean(n.selected) === picked.has(n.id) ? n : { ...n, selected: picked.has(n.id) })) : now;
+  }), [many]);
   // The line under the pointer is drawn as strongly as one a tried request takes, so it can be followed through a
   // crossing. Only the lines are redrawn for it: touching the nodes would cut off a drag that is just starting.
   const edges = useMemo(() => (edit.hover === null ? laid.edges : laid.edges.map((e) => (e.id === edit.hover ? { ...e, zIndex: 1001, data: { ...e.data, lit: true } } : e))), [laid.edges, edit.hover]);
