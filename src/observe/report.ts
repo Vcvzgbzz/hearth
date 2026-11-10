@@ -6,8 +6,8 @@
 import { readFileSync } from "node:fs";
 import { arch, platform, release } from "node:os";
 
-import { loadConfig, type HearthConfig } from "./config.js";
-import { maskedText } from "./configfile.js";
+import { loadConfig, type HearthConfig } from "../config/config.js";
+import { maskedText } from "../config/configfile.js";
 
 /** The most recent log lines kept: enough to hold an incident, short enough to paste. */
 export const REPORT_LOG_LINES = 300;

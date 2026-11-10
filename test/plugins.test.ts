@@ -18,9 +18,10 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ConfigError, loadConfig, parseConfig } from "../src/config.js";
-import { createLogger, silentLogger } from "../src/log.js";
-import { matches, replyText } from "../src/plugins.js";
+import { loadConfig, parseConfig } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
+import { createLogger, silentLogger } from "../src/observe/log.js";
+import { matches, replyText } from "../src/plugins/plugins.js";
 import { createNode, type HearthNode } from "../src/server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "hearth-plugins-"));

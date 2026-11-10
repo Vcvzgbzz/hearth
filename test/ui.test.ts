@@ -16,8 +16,8 @@ import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import type { AddressInfo } from "node:net";
 
-import { History } from "../src/history.js";
-import { silentLogger } from "../src/log.js";
+import { History } from "../src/observe/history.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import { CONSOLE_HTML } from "../src/ui.js";
 import { parseV1 } from "./v1.js";

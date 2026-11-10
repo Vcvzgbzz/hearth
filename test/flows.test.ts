@@ -13,9 +13,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { parseConfig, rawFlow, type HearthConfig } from "../src/config.js";
-import { silentLogger, type Logger } from "../src/log.js";
-import { flowsOf, resolve, routedFlow, typeOf, variantsOf, type World } from "../src/route.js";
+import { parseConfig, type HearthConfig } from "../src/config/config.js";
+import { rawFlow } from "../src/config/flows.js";
+import { silentLogger, type Logger } from "../src/observe/log.js";
+import { flowsOf, resolve, routedFlow, typeOf, variantsOf, type World } from "../src/routing/route.js";
 import { createNode } from "../src/server.js";
 
 const base = (flows: Record<string, unknown>, more: Record<string, unknown> = {}) => ({

@@ -9,8 +9,8 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 /** A backend that holds each chat until it is let go, and remembers what it was asked for. */

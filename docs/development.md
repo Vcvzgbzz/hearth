@@ -54,7 +54,7 @@ Two decisions did most of the work here, and I got both of them wrong first.
 **Don't use `fetch`.** Node's undici caps time-to-first-header at 300 seconds,
 and an inference server sends nothing until it starts generating. A cold load
 past five minutes dies as `TypeError: fetch failed` while your own timeout, the
-one you meant, never fires. [`src/upstream.ts`](../src/upstream.ts) uses
+one you meant, never fires. [`src/wire/upstream.ts`](../src/wire/upstream.ts) uses
 `node:http`, where the caller's signal is the only deadline.
 
 **Ask peers, and ask when it matters.** Never infer health from an open socket.

@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { ConfigError } from "../src/config.js";
-import { KINDS, type KindName } from "../src/kinds.js";
-import { silentLogger } from "../src/log.js";
+import { ConfigError } from "../src/config/read.js";
+import { KINDS, type KindName } from "../src/queue/kinds.js";
+import { silentLogger } from "../src/observe/log.js";
 import { parseV1 } from "./v1.js";
 
 /** Paths the fake backend was asked, and how it answers an unload. */

@@ -16,8 +16,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { BackendState } from "../src/backend.js";
-import { silentLogger } from "../src/log.js";
+import { BackendState } from "../src/queue/backend.js";
+import { silentLogger } from "../src/observe/log.js";
 import { parseV1 } from "./v1.js";
 
 // --- config: parsing, defaults, and the path rule it shares with routes: ----

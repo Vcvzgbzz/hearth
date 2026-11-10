@@ -5,9 +5,9 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
-import { Refusal } from "../admit.js";
-import { fail, json } from "../http.js";
-import { send } from "../upstream.js";
+import { Refusal } from "../access/admit.js";
+import { fail, json } from "../wire/http.js";
+import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
 
 export function joinRoutes(ctx: RouteContext) {

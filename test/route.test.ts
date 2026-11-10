@@ -8,10 +8,10 @@
  */
 import assert from "node:assert/strict";
 
-import { parseConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { PeerRegistry, type PeerCapacity } from "../src/peers.js";
-import { decide } from "../src/route.js";
+import { parseConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
+import { PeerRegistry, type PeerCapacity } from "../src/peers/peers.js";
+import { decide } from "../src/routing/route.js";
 import { parseV1 } from "./v1.js";
 
 const base = {

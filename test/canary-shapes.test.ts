@@ -19,7 +19,7 @@
  */
 import assert from "node:assert/strict";
 
-import { StreamWatch } from "../src/canary.js";
+import { StreamWatch } from "../src/observe/canary.js";
 
 /** A degenerate answer that has NO long run of one character: 120 `!` spaced out. */
 const SPACED = "! ".repeat(60);

@@ -2,8 +2,9 @@
  * Where a request runs. Every routing choice is a flow: an ordered list of steps, each a
  * condition and a place to send the request. Pure, so it tests without a socket.
  */
-import { ANY, endsOf, type Flow, type FlowEnd, type FlowStep, type FlowTo, type FlowWhen, type HearthConfig } from "./config.js";
-import type { PeerRegistry } from "./peers.js";
+import type { HearthConfig } from "../config/config.js";
+import { ANY, endsOf, type Flow, type FlowEnd, type FlowStep, type FlowTo, type FlowWhen } from "../config/flows.js";
+import type { PeerRegistry } from "../peers/peers.js";
 import { unfit, type Need } from "./stats.js";
 
 export interface LocalLoad {

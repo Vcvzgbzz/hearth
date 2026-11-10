@@ -10,8 +10,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
-import { PeerRegistry } from "../src/peers.js";
+import { silentLogger } from "../src/observe/log.js";
+import { PeerRegistry } from "../src/peers/peers.js";
 import { parseV1 } from "./v1.js";
 
 /** A peer whose health and auth we can steer from the test. */

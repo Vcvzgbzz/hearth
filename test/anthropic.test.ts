@@ -16,9 +16,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { fromAnthropic, toAnthropic } from "../src/anthropic.js";
-import { loadConfig } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
+import { fromAnthropic, toAnthropic } from "../src/wire/anthropic.js";
+import { loadConfig } from "../src/config/config.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 
 type Doc = Record<string, unknown>;

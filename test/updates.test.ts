@@ -10,9 +10,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
-import { newer, watchUpdates } from "../src/updates.js";
+import { newer, watchUpdates } from "../src/observe/updates.js";
 import { parseV1 } from "./v1.js";
 
 assert.equal(newer("3.1.0", "3.0.9"), true);

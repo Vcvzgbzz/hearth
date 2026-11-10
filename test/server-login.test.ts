@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 
-import { hashPassword } from "../src/login.js";
+import { hashPassword } from "../src/access/login.js";
 import { createNode } from "../src/server.js";
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { parseV1 } from "./v1.js";
 
 const iface = Object.values(networkInterfaces())

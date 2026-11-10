@@ -3,7 +3,7 @@
  * read off answers on their way to the caller, never by holding or altering one.
  */
 import type { ServerResponse } from "node:http";
-import { MAX_HELD_CHARS } from "./upstream.js";
+import { MAX_HELD_CHARS } from "../wire/upstream.js";
 import { Transform } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 

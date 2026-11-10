@@ -19,7 +19,7 @@ import { createServer } from "node:http";
 import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

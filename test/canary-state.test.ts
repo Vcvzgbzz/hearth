@@ -16,10 +16,10 @@
  */
 import assert from "node:assert/strict";
 
-import { Canary, type CanaryEvent, type ProbeTarget, type Verdict } from "../src/canary.js";
-import { type CanaryProbe } from "../src/config.js";
+import { Canary, type CanaryEvent, type ProbeTarget, type Verdict } from "../src/observe/canary.js";
+import type { CanaryProbe } from "../src/config/canary.js";
 import { parseV1 } from "./v1.js";
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 
 const OK: Verdict = { reason: "ok", ok: true, failure: false, detail: "answered as expected", sample: "Paris" };
 const BAD: Verdict = {

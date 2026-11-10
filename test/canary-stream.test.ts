@@ -17,7 +17,7 @@
  */
 import assert from "node:assert/strict";
 
-import { DegenerateScan, StreamWatch } from "../src/canary.js";
+import { DegenerateScan, StreamWatch } from "../src/observe/canary.js";
 
 /** One SSE frame, exactly as an OpenAI server writes it. */
 const delta = (content: string): string =>

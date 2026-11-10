@@ -11,9 +11,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { ConfigError } from "../src/config.js";
-import { silentLogger } from "../src/log.js";
-import { BackendPool } from "../src/pool.js";
+import { ConfigError } from "../src/config/read.js";
+import { silentLogger } from "../src/observe/log.js";
+import { BackendPool } from "../src/queue/pool.js";
 import { parseV1 } from "./v1.js";
 
 const tick = () => new Promise((r) => setImmediate(r));

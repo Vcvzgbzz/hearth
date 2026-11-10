@@ -6,8 +6,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import { BodyTooLargeError, Refusal, refusalOf } from "./admit.js";
-import type { RelayWatch } from "./canary.js";
+import { BodyTooLargeError, Refusal, refusalOf } from "../access/admit.js";
+import type { RelayWatch } from "../observe/canary.js";
 import { streamErrorFrame } from "./emulate.js";
 import type { UpstreamResponse } from "./upstream.js";
 

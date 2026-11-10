@@ -17,10 +17,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Controls } from "../src/controls.js";
-import { silentLogger } from "../src/log.js";
-import { link, setShare, unlink } from "../src/configfile.js";
-import { decide } from "../src/route.js";
+import { Controls } from "../src/peers/controls.js";
+import { silentLogger } from "../src/observe/log.js";
+import { link, setShare, unlink } from "../src/config/configfile.js";
+import { decide } from "../src/routing/route.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 

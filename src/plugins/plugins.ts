@@ -10,8 +10,10 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { DEFAULT_ROUTER, PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type Flow, type HearthConfig, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "./config.js";
-import type { Logger } from "./log.js";
+import type { HearthConfig } from "../config/config.js";
+import { DEFAULT_ROUTER, type Flow } from "../config/flows.js";
+import { PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
+import type { Logger } from "../observe/log.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */

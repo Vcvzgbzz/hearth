@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 
-import { silentLogger } from "../src/log.js";
+import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
 import { parseV1 } from "./v1.js";
 
