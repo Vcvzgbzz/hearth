@@ -119,6 +119,7 @@ const service = createServer((rq, rs) => {
   if (rq.url!.startsWith("/other/")) {
     encodings.push(rq.headers["accept-encoding"] as string | undefined);
     if (rq.url!.startsWith("/other/bad")) return rs.writeHead(200, { "Content-Type": "text/plain" }).end("not json");
+    if (rq.url!.startsWith("/other/hang")) return say(200, { hang: true });
     if (rq.url!.startsWith("/other/missing")) return say(404, { error: "the other API has no such thing" });
     return say(200, { v: 1 });
   }
@@ -134,8 +135,8 @@ const cfgPath = join(dir, "hearth.yaml");
 // An adapter that carries /<x> over to /other/<x> and wraps the answer, refusing one that is not JSON.
 const wrapPath = join(dir, "wrap.mjs");
 writeFileSync(wrapPath, `export default { apiVersion: 1, kinds: {}, setup: () => ({ adapt: {
-  request: (method, path, query) => ({ path: "/other" + path, query }),
-  response: async (body) => Buffer.from(JSON.stringify({ wrapped: JSON.parse(body.toString("utf8")) })),
+  request: (method, path, query) => { globalThis.wrapAsked = (globalThis.wrapAsked ?? 0) + 1; return { path: "/other" + path, query }; },
+  response: async (body) => body.includes("hang") ? new Promise(() => {}) : Buffer.from(JSON.stringify({ wrapped: JSON.parse(body.toString("utf8")) })),
 } }) };`);
 // A plugin named as an adapter that does not adapt.
 const hollowPath = join(dir, "hollow.mjs");
@@ -167,7 +168,7 @@ plugins:
   wrapped: {serves: "${serviceUrl}/search", trust: http, fallback: {plugin: other, adapt: wrap}}
   other: {serves: "${serviceUrl}", trust: http}
   hollowed: {serves: "${serviceUrl}/search", trust: http, fallback: {plugin: twin, adapt: hollow}}
-  wrap: {use: 'file:${wrapPath}', trust: code}
+  wrap: {use: 'file:${wrapPath}', trust: code, timeoutMs: 200}
   hollow: {use: 'file:${hollowPath}', trust: code}
   searxng-to-degoog: {use: 'file:${adapterPath}', trust: code}
 `);
@@ -208,12 +209,21 @@ try {
   assert.deepEqual(await call("/plugins/lost/a/b?c=1"), { status: 200, body: { from: "twin", at: "/twin/a/b?c=1", key: "twin-key" } }, "sent its own headers, not the plugin's");
 
   // An adapted answer is rewritten; one the adapter cannot read is a 502 naming it; a non-2xx passes as it is.
+  const asked = () => (globalThis as { wrapAsked?: number }).wrapAsked ?? 0;
+  mode = "ok";
+  assert.deepEqual(await call("/plugins/wrapped/ok?x=1"), { status: 200, body: { from: "search", results: [] } });
+  assert.equal(asked(), 0, "an adapter is not run on a request the plugin answers");
+  mode = "busy";
   assert.deepEqual(await call("/plugins/wrapped/ok?x=1"), { status: 200, body: { wrapped: { v: 1 } } });
+  assert.equal(asked(), 1, "it runs once the plugin has failed");
   assert.ok(got.includes("/other/ok?x=1"), "the adapter chose the path on the fallback's API");
   assert.equal(encodings[0], undefined, "an answer the adapter reads is asked for uncompressed");
   const bad = await call("/plugins/wrapped/bad");
   assert.equal(bad.status, 502);
   assert.match(String(bad.body.error), /adapter wrap could not read its fallback other's answer/);
+  const hung = await call("/plugins/wrapped/hang");
+  assert.equal(hung.status, 502, "an adapter that never answers is held to its timeoutMs");
+  assert.match(String(hung.body.error), /adapter wrap could not read .*gave no answer in 200 ms/);
   assert.deepEqual(await call("/plugins/wrapped/missing"), { status: 404, body: { error: "the other API has no such thing" } }, "a non-2xx is not given to the adapter");
 
   // A plugin named as an adapter that returns no adapt does not start, and the plugin it adapts for has no fallback.

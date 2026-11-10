@@ -476,6 +476,9 @@ export default {
 };
 ```
 
+- The adapter runs only once the plugin has failed (or is not running): a request the plugin answers never
+  reaches it. `request` and `response` may be async, and each is held to the adapter plugin's
+  `timeoutMs`; one that gives no answer in time is treated as one that threw.
 - `request(method, path, query)` is called with the caller's request. It returns `{ path, query }`
   for the fallback, or `null` when the request has no counterpart on the fallback's API. A `null`
   result means the caller gets the plugin's own failure, as if there were no fallback.

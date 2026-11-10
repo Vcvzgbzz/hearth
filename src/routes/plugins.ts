@@ -72,23 +72,26 @@ export function pluginRoutes(ctx: RouteContext) {
     // What the plugin's fallback is sent if this plugin cannot answer: null when it has none, or when its adapter
     // has no counterpart for this request on the fallback's API.
     const fb = plugins.fallbackOf(name);
-    let carry: { path: string; query: URLSearchParams; adapter: Adapter | null } | null = null;
-    if (fb !== null && fb.adapt === null) carry = { path, query: url.searchParams, adapter: null };
-    else if (fb !== null) {
-      const adapter = plugins.adapterOf(fb.adapt!);
+    // Worked out only once this plugin has failed, so an adapter runs on a fallback and never on an answered request.
+    const carryOver = async (): Promise<{ path: string; query: URLSearchParams; adapter: Adapter | null } | null> => {
+      if (fb === null) return null;
+      if (fb.adapt === null) return { path, query: url.searchParams, adapter: null };
+      const adapter = plugins.adapterOf(fb.adapt);
       if (adapter === null) {
-        log.warn("plugin.adapter_missing", { plugin: name, adapt: fb.adapt!, caller: c.caller });
-      } else {
-        try {
-          const r = adapter.request(req.method ?? "GET", path, url.searchParams);
-          if (r !== null) carry = { ...r, adapter };
-        } catch (e) {
-          log.warn("plugin.adapter_request_failed", { plugin: name, adapt: fb.adapt!, path, error: e instanceof Error ? e.message : String(e), caller: c.caller });
-        }
+        log.warn("plugin.adapter_missing", { plugin: name, adapt: fb.adapt, caller: c.caller });
+        return null;
       }
-    }
+      try {
+        const r = await adapter.request(req.method ?? "GET", path, url.searchParams);
+        return r === null ? null : { ...r, adapter };
+      } catch (e) {
+        log.warn("plugin.adapter_request_failed", { plugin: name, adapt: fb.adapt, path, error: e instanceof Error ? e.message : String(e), caller: c.caller });
+        return null;
+      }
+    };
+    let carry: Awaited<ReturnType<typeof carryOver>> = null;
     const to = plugins.serve(name);
-    if ("why" in to && carry === null) {
+    if ("why" in to && (carry = await carryOver()) === null) {
       json(res, to.status, { error: to.why });
       return;
     }
@@ -137,7 +140,7 @@ export function pluginRoutes(ctx: RouteContext) {
     else {
       try {
         const up = await call(to, path, url.search, false);
-        if (carry !== null && (up.status >= 500 || up.status === 429)) {
+        if ((up.status >= 500 || up.status === 429) && (carry = await carryOver()) !== null) {
           to.done(false);
           up.body.resume();
           failure = `it answered ${up.status}`;
@@ -155,7 +158,7 @@ export function pluginRoutes(ctx: RouteContext) {
         log.warn("plugin.serve_failed", { plugin: name, path, error: said(e) });
         // Once an answer has begun there is no taking it back, so only a plugin that never answered falls back.
         if (res.headersSent) { res.destroy(); return; }
-        if (carry === null) { json(res, 502, { error: `plugin ${name} could not be reached: ${said(e)}` }); return; }
+        if ((carry = await carryOver()) === null) { json(res, 502, { error: `plugin ${name} could not be reached: ${said(e)}` }); return; }
         failure = said(e);
       }
     }

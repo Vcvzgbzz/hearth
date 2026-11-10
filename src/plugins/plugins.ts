@@ -80,7 +80,7 @@ export interface Decision {
  */
 export interface Adapter {
   /** The request on the fallback's API, as a path and query, or null when it has no counterpart there. */
-  request(method: string, path: string, query: URLSearchParams): { path: string; query: URLSearchParams } | null;
+  request(method: string, path: string, query: URLSearchParams): { path: string; query: URLSearchParams } | null | Promise<{ path: string; query: URLSearchParams } | null>;
   /** The fallback's answer to that request, rewritten into the shape the caller asked for. Throws on one it cannot read. */
   response(body: Buffer): Buffer | Promise<Buffer>;
 }
@@ -524,7 +524,14 @@ export class Plugins {
   /** The adapter a running plugin exposes, as named in some other plugin's `fallback.adapt`; null when it has none or is not running. */
   adapterOf(name: string): Adapter | null {
     const l = this.loaded.find((x) => x.name === name);
-    return l?.state === "running" ? l.hooks.adapt ?? null : null;
+    const a = l?.state === "running" ? l.hooks.adapt : undefined;
+    if (!l || !a) return null;
+    // Held to the adapter plugin's timeoutMs, as every hook is: a stuck adapter does not hold the caller.
+    const ms = l.decl.timeoutMs;
+    return {
+      request: (method, path, query) => withTimeout(Promise.resolve().then(() => a.request(method, path, query)), ms, `adapter ${name}`),
+      response: (body) => withTimeout(Promise.resolve().then(() => a.response(body)), ms, `adapter ${name}`),
+    };
   }
 
   /**
