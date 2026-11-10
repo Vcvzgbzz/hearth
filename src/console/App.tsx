@@ -1,11 +1,12 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, BarChart3, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { Activity as ActivityIcon, AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, BarChart3, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Boundary } from "./Boundary.js";
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
 import { Keys } from "./Keys.js";
+import { Replay, Requests } from "./Requests.js";
 import { Usage } from "./Usage.js";
 import { CanaryAlert, Inspector, KeyOnce, Models } from "./pages.js";
 import { Scheduler } from "./Scheduler.js";
@@ -36,6 +37,7 @@ const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "scheduler", label: "Scheduler", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
+  { id: "requests", label: "Requests", icon: ActivityIcon },
   { id: "config", label: "Config", icon: FileCog },
 ];
 
@@ -473,6 +475,7 @@ export default function App() {
                   <div className="relative min-h-0 flex-1">
                     {/* Its own instance: the two pictures share nothing but the node they draw. */}
                     <Routing />
+                    <Replay />
                   </div>
                   <Picker />
                   <Menu />
@@ -485,6 +488,8 @@ export default function App() {
         ) : page === "playground" ? (<div className="flex min-h-0 flex-1 flex-col p-5"><Playground /></div>
         ) : page === "logs" ? (
           <div className="flex min-h-0 flex-1 flex-col p-5"><Logs /></div>
+        ) : page === "requests" ? (
+          <div className="flex min-h-0 flex-1 flex-col p-5"><Requests /></div>
         ) : (
           // The smoke fills the page behind the cards and stays put while they scroll; Config is a form, read without it.
           <div className="relative flex min-h-0 flex-1 flex-col">

@@ -7,6 +7,8 @@ import { create } from "zustand";
 import type { Err, File, Plan } from "./config.js";
 import { added, ANY, BAYS, copiedRouter, followed, pastedAll, RANK, routeTyped, summary, factsOf, isObj, list, nodeOf, obj, opsOf, peerLanding, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, wholes, type Copied, type Doc, type Facts, type Landing, type Picked } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
+import { routerOf } from "./trace.js";
+import type { RequestTrace } from "../observe/uidata.js";
 
 /** A whole draft and the router it was shown by, to go back to. */
 export type Snap = { full: Doc; router: string | null };
@@ -31,6 +33,8 @@ interface EditState {
   plan: Plan | null;
   trial: Trial | null;
   tried: Tried | null;
+  /** A finished request shown on the map: its path is lit while no trial is running. */
+  replay: RequestTrace | null;
   picking: Picking;
   choosing: Choosing;
   /** Names typed onto the node that go nowhere yet: they exist in the file once they are wired. */
@@ -56,7 +60,7 @@ interface EditState {
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, picking: null, choosing: null, pending: [], hover: null, many: [], past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
+  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, replay: null, picking: null, choosing: null, pending: [], hover: null, many: [], past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -186,6 +190,14 @@ export const closeMenu = () => set({ choosing: null });
 export const setAdding = (adding: string | null) => set({ adding });
 /** Bring a node into view. */
 export const focusOn = (node: string) => set({ focus: { node } });
+
+/** Light a finished request's path on the map, or with null stop; the first rule that decided it is brought into view. */
+export function replay(trace: RequestTrace | null): void {
+  set({ replay: trace, ...(trace ? { trial: null, tried: null } : {}) });
+  const first = trace?.path[0];
+  // After the map's own fit on arrival, which would otherwise undo this one.
+  if (first) setTimeout(() => focusOn(`flow:${first.flow}`), 300);
+}
 
 /** Start a rule from one of the common shapes, or ask for the name of a blank one. */
 export function startRule(template: string): void {
@@ -365,7 +377,7 @@ export function place(id: string, at: { x: number; y: number }): void {
 
 /** Ask the node where a request would go under the draft's flows, as it stands right now. */
 export async function tryRequest(trial: Trial | null): Promise<void> {
-  set({ trial });
+  set(trial ? { trial, replay: null } : { trial });
   const { draft } = useEdit.getState();
   if (!trial || !draft) { set({ tried: null }); return; }
   try {
@@ -469,7 +481,8 @@ export async function goBack(v: Version): Promise<void> {
 /** Show another router's rulebook, or with null the rules everyone else goes by. Undo starts afresh there. */
 export function showRouter(router: string | null): void {
   stepping = true;
-  set((s) => ({ ...show(whole(s), router), sel: null, pending: [], trial: null, tried: null }));
+  // A request being replayed stays only on the rulebook it went by.
+  set((s) => ({ ...show(whole(s), router), sel: null, pending: [], trial: null, tried: null, replay: s.replay && routerOf(s.replay) === router ? s.replay : null }));
   stepping = false;
 }
 

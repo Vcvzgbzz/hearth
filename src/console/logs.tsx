@@ -6,6 +6,7 @@ import { ChevronRight, Download } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { failed, keysOf, passes, type LogEntry } from "./logfilter.js";
+import { openTrace } from "./Requests.js";
 import { downloadReport } from "./store.js";
 import { Button, Card, cx, Empty, mono, Pill, type Tone } from "./ui.js";
 
@@ -139,9 +140,12 @@ export function Logs() {
         {entries === null ? <Empty>loading…</Empty> : shown.length === 0 ? <Empty>{entries.length ? "Nothing matches." : "Nothing logged yet."}</Empty> : (
           <ul>
             {shown.slice(0, 1000).map(({ e, i, text }) => (
-              <li key={i} className="border-b border-line/50 last:border-0">
+              <li key={i} className="relative border-b border-line/50 last:border-0">
+                {e.msg === "request" && typeof e.fields.id === "string" && e.fields.id !== "" && (
+                  <button type="button" onClick={() => openTrace(e.fields.id as string)} className="absolute right-4 top-1.5 text-[12px] text-accent hover:underline">trace</button>
+                )}
                 <button type="button" onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i}
-                        className="flex w-full items-start gap-3 px-4 py-1.5 text-left hover:bg-muted/40">
+                        className={cx("flex w-full items-start gap-3 px-4 py-1.5 text-left hover:bg-muted/40", e.msg === "request" && typeof e.fields.id === "string" && "pr-14")}>
                   <ChevronRight size={12} className={cx("mt-1 shrink-0 text-dim transition-transform", open === i && "rotate-90")} />
                   <span className="tabular w-32 shrink-0 text-[12px] text-dim">{when(e.t)}</span>
                   <span className={cx("min-w-0 flex-1 text-[13px]", e.level === "error" && "text-bad")}>
