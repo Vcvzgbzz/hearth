@@ -16,7 +16,7 @@ import { emulatedRequest, relayEmulated } from "../wire/emulate.js";
 import { KEY_REFUSED, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../wire/http.js";
 import { MessagesResponse, chatOf } from "../wire/messages.js";
 import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins/plugins.js";
-import { type Timing, notRun } from "../observe/requestlog.js";
+import { type Timing, type Traced, firstByte, notRun } from "../observe/requestlog.js";
 import { type Resolution, type World, mayLeave, resolve } from "../routing/route.js";
 import type { BackendSlot } from "../queue/pool.js";
 import { fitOutput, type Need, needsOf, unfit } from "../routing/stats.js";
@@ -221,6 +221,8 @@ export function chatRoutes(ctx: RouteContext) {
     /** The conversation this turn belongs to, for a sticky flow; null for a request with no user turn. */
     private readonly talk: { key: string; later: boolean } | null;
     private decision!: Resolution;
+    /** The decision it last landed on, a fallback's included, for its trace. */
+    private last: Resolution | undefined;
     private model = "";
     private lane = "";
     private local!: BackendSlot;
@@ -275,7 +277,7 @@ export function chatRoutes(ctx: RouteContext) {
         // Nor is one that takes paths of its own a chat model.
         : paths ? `"${asked}" is not offered as chat: it takes ${paths.join(", ")}` : null;
       if (notHere !== null) {
-        requests.record(notRun(), { model: asked, lane, caller, target: "refused" }, false, notHere);
+        requests.record(notRun(), { model: asked, lane, caller, target: "refused" }, false, notHere, this.traced());
         throw new Refusal(404, notHere);
       }
       this.decision = decision;
@@ -300,6 +302,7 @@ export function chatRoutes(ctx: RouteContext) {
     private fire(d: Resolution): void {
       const { asked, caller, res, id } = this.r;
       const { flowsNow, talk, world } = this;
+      this.last = d;
       if (flowsNow === cfg.flows) worlds.countHits(d.path);
       // A sticky flow remembers where it put this conversation, for its later turns.
       const sticky = flowsNow[d.path.at(-1)?.flow ?? ""]?.sticky;
@@ -333,6 +336,17 @@ export function chatRoutes(ctx: RouteContext) {
       }
     }
 
+    /** What routing decided, for the request's trace; `from` is the model a failure moved it off. */
+    private traced(from?: string): Traced {
+      const d = this.last;
+      return {
+        asked: this.r.asked, router: worlds.routerNameOf(this.r.caller),
+        ...(d ? { path: d.path, reason: d.reason, actions: d.actions.map((a) => a.name) } : {}),
+        ...(this.r.plugins ? { plugins: this.r.plugins.active.map((p) => p.name) } : {}),
+        ...(from !== undefined && from !== this.model ? { fallbackFrom: from } : {}),
+      };
+    }
+
     /** The plugins that run once a request is routed; one that changes it, or keeps it here, has it routed once more. */
     private async afterRouted(): Promise<void> {
       const p = this.r.plugins;
@@ -347,7 +361,7 @@ export function chatRoutes(ctx: RouteContext) {
         after = await plugins.run("routed", p.active, p.hook);
       } catch (e) {
         if (!(e instanceof PluginRefusal)) throw e;
-        requests.record(notRun(), { model: this.model, lane: this.lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+        requests.record(notRun(), { model: this.model, lane: this.lane, caller, target: "refused", plugin: e.plugin }, false, e.message, this.traced());
         throw new Refusal(e.status, e.message);
       }
       const changed = after.req.body !== p.hook.body;
@@ -381,17 +395,17 @@ export function chatRoutes(ctx: RouteContext) {
         worlds.using(model, res);
       }
       this.need = needsOf(payload, cfg.models[model]?.videoTokens);
-      this.t = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (this.need?.tokens ?? 0) - (this.need?.output ?? 0)) };
+      this.t = firstByte(res, { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (this.need?.tokens ?? 0) - (this.need?.output ?? 0)) });
       if (decision.target === "unavailable") {
         // Refusing is the point: the flow's own words, with why a peer was passed over when one was.
-        requests.record(this.t, { model, lane, caller, target: "unavailable" }, false, decision.reason);
+        requests.record(this.t, { model, lane, caller, target: "unavailable" }, false, decision.reason, this.traced());
         throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
       }
       // A flow that runs a name as itself still needs something here to serve it.
       const instead = decision.target === "local" ? limits.unknownHere(model) : null;
       if (instead !== null) {
         const why = `no backend here serves "${model}" (${instead})`;
-        requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, why);
+        requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, why, this.traced());
         throw new Refusal(404, why);
       }
       checkLimits?.();
@@ -421,7 +435,7 @@ export function chatRoutes(ctx: RouteContext) {
       }
       res.writeHead(200, { "Content-Type": hit.type, "X-Hearth-Cache": "hit", "X-Accel-Buffering": "no", ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}) });
       res.end(hit.body);
-      requests.record(this.t, { model: this.model, lane: this.lane, caller, target: "cache" }, true);
+      requests.record(this.t, { model: this.model, lane: this.lane, caller, target: "cache" }, true, undefined, this.traced());
       return true;
     }
 
@@ -467,7 +481,7 @@ export function chatRoutes(ctx: RouteContext) {
         const fitted = fitOutput(pool.models.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
         const tooMuch = unfit(pool.models.statsFor(model), fitted);
         if (tooMuch !== null) {
-          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
+          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch, this.traced([...failed][0]));
           throw new Refusal(400, `${model} ${tooMuch}`);
         }
         try {
@@ -482,7 +496,7 @@ export function chatRoutes(ctx: RouteContext) {
             },
           );
         } catch (e) {
-          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e);
+          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e, this.traced([...failed][0]));
           // Its own fault, not the caller's or a full queue's: counted towards resting it, and a reason to move on.
           const itsOwn = !signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal));
           if (itsOwn) local.state.struck(cfg.backendRestMs);
@@ -501,6 +515,7 @@ export function chatRoutes(ctx: RouteContext) {
           { model, lane, caller, backend: local.name, target: "local", reason: why, ...(status >= 400 ? { status } : {}) },
           status < 400,
           status >= 400 ? `backend answered ${status}` : undefined,
+          this.traced([...failed][0]),
         );
         return status;
       }
@@ -559,13 +574,13 @@ export function chatRoutes(ctx: RouteContext) {
         );
       } catch (e) {
         // Logged as where it last ran, a local fallback included, with its backend so the call ring counts it.
-        requests.record(this.t, logged(), false, e);
+        requests.record(this.t, logged(), false, e, this.traced(fellBack ? decision.model : undefined));
         throw e;
       }
       const status = this.localStatus;
       // Only the fallback can have relayed a bad status: a peer's own 4xx threw a PeerStatusError above.
       const bad = fellBack && status >= 400;
-      requests.record(this.t, { ...logged(), offbox: !fellBack, ...(bad ? { status } : {}) }, !bad, bad ? `backend answered ${status}` : undefined);
+      requests.record(this.t, { ...logged(), offbox: !fellBack, ...(bad ? { status } : {}) }, !bad, bad ? `backend answered ${status}` : undefined, this.traced(fellBack ? decision.model : undefined));
       return fellBack ? status : 0;
     }
   }
@@ -659,7 +674,7 @@ export function chatRoutes(ctx: RouteContext) {
           before = await plugins.run("request", active, hook);
         } catch (e) {
           if (!(e instanceof PluginRefusal)) throw e;
-          requests.record(notRun(), { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+          requests.record(notRun(), { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message, { router: hook.router, plugins: active.map((p) => p.name) });
           throw new Refusal(e.status, e.message);
         }
         payload = before.req.body;
@@ -679,7 +694,7 @@ export function chatRoutes(ctx: RouteContext) {
     // A peer running a model here is that model in use.
     worlds.using(model, res);
 
-    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res) };
+    const t = firstByte(res, { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res) });
     const serving = pool.models.for(model);
     // As on the local path: what we relayed to the borrower, so lent
     // capacity that failed is not filed as lent capacity that worked.

@@ -36,6 +36,8 @@ Beyond `/v1/chat/completions` and `/v1/models`:
 | `/ui/history` | loopback, or a login | the last day of finished calls and per-minute queue depth, for the Scheduler page's 24 h view |
 | `/ui/lending` | loopback, or a login | what `/lending` answers, for the Lending page |
 | `/ui/logs` | loopback, or a login | the most recent log lines (up to 5,000), for the Logs page |
+| `/ui/requests` | loopback, or a login | the most recent finished requests (up to 2,000), one record each, newest first: `{requests, oldest}`. Each says what was asked for and what ran it, the caller, lane, target, backend or peer, status, error, wait, run time and time to first byte, tokens, the flow path and rulebook that decided it, the actions and plugins that ran, and the rule-tested headers; never a body, prompt, reply or credential. Takes `after` (a finish time in ms), `limit` (default 200, at most 1000), `model` (asked for or run as), `caller` and `ok` (`true` or `false`) |
+| `/ui/requests/<id>` | loopback, or a login | one of those records by its `X-Request-Id`, the last attempt's when it fell back; `404` when it is not kept |
 | `/healthz` | anyone | whether this node can serve. `503` when it can't. The one unauthenticated endpoint |
 | `/peer/hello`, `/peer/state` | peers | identity and capacity, per model, with the limits the peer is held to on each |
 | `/peers/invite` | local | `POST { url }`: a one-time code (`hearth-invite:…`) holding `url`, where the other node reaches this one, and a secret. Good for 10 minutes and held in memory, so a restart voids it. What `hearth invite` asks for |
