@@ -239,6 +239,9 @@ export interface RequestTrace {
   headers?: Record<string, string>;
   /** The model it tried first, when it ran as another after that one failed. */
   fallbackFrom?: string;
+  /** A chat request that carried images, or offered tools: what routing read of it besides its size. */
+  images?: true;
+  tools?: true;
 }
 
 /** hearth.yaml: where every edit lands, and what is waiting on a restart. */

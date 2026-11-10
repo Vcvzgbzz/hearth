@@ -40,6 +40,8 @@ export interface Traced {
   actions?: string[];
   plugins?: string[];
   fallbackFrom?: string;
+  images?: true;
+  tools?: true;
 }
 
 /** `t`, with the time of the first write to `res` once it has started running kept on it: a stream's first chunk, or a whole answer. */
@@ -192,6 +194,8 @@ export class RequestLog {
       ...opt("plugins", route.plugins ?? (str(fields.plugin) ? [fields.plugin as string] : undefined)),
       ...opt("headers", headers),
       ...opt("fallbackFrom", route.fallbackFrom),
+      ...opt("images", route.images),
+      ...opt("tools", route.tools),
     });
   }
 
