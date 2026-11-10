@@ -35,7 +35,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   file per section, each with its types and the code that reads them (`backends.ts`, `flows.ts`,
   `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`; `read.ts` is the field readers
   and `ConfigError` they share); `fields.ts` (the settings table the parser and the console both read),
-  `configfile.ts` (live edits to hearth.yaml), `migrate.ts`, `yamlq.ts`
+  `configfile.ts` (live edits to hearth.yaml), `derived.ts` (a value derived from the live config, rebuilt when
+  a key it reads is replaced), `migrate.ts`, `yamlq.ts`
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
   (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)

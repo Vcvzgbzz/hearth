@@ -10,6 +10,7 @@ import type { HearthConfig } from "../config/config.js";
 import type { KeyRule } from "../config/keys.js";
 import { bearer, forwardable, keyId } from "../wire/http.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken } from "./login.js";
+import { derived } from "../config/derived.js";
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
@@ -33,8 +34,6 @@ export interface KeyEntry {
 const digest = (secret: string): string => createHash("sha256").update(secret).digest("hex");
 
 interface KeyIndex {
-  /** The arrays it was built from; a live edit replaces them whole. */
-  from: readonly unknown[];
   list: KeyEntry[];
   byDigest: Map<string, KeyEntry>;
   byCaller: Map<string, KeyEntry>;
@@ -44,25 +43,28 @@ interface KeyIndex {
 export class Callers {
   /** When each key last authenticated here: the one per-key fact the config file cannot hold. */
   private readonly seen = new Map<string, number>();
-  private index: KeyIndex | null = null;
-  readonly sessions = new OperatorSessions();
+  /** The key and peer indexes, rebuilt when a live edit replaces a key list. */
+  private readonly keys = derived(() => {
+    const c = this.cfg;
+    return [c.apiKeys, c.apiKeyLabels, c.apiKeyModels, c.apiKeyRules, c.peerTokens];
+  }, () => this.indexKeys());
+  /** Sessions belong to the login they were minted under: a changed login signs every one out, as a restart would. */
+  private readonly loginSessions = derived(() => [this.cfg.operator], () => new OperatorSessions());
   readonly loginThrottle = new LoginThrottle();
-  /** The login the sessions were minted under; a changed one signs every session out, as a restart would. */
-  private sessionsFor: HearthConfig["operator"];
 
-  constructor(private readonly cfg: HearthConfig) {
-    this.sessionsFor = cfg.operator;
+  constructor(private readonly cfg: HearthConfig) {}
+
+  get sessions(): OperatorSessions {
+    return this.loginSessions();
   }
 
   /**
-   * The key and peer indexes, rebuilt only when a key list has been swapped. A lookup by digest is
-   * as safe as comparing every key in constant time: the timing can only tell an attacker about a
-   * hash of their own guess. Where two entries share a key or a caller id, the first wins.
+   * Keys and peer tokens by digest. A lookup by digest is as safe as comparing every key in constant
+   * time: the timing can only tell an attacker about a hash of their own guess. Where two entries share
+   * a key or a caller id, the first wins.
    */
-  private keys(): KeyIndex {
+  private indexKeys(): KeyIndex {
     const { apiKeys, apiKeyLabels, apiKeyModels, apiKeyRules, peerTokens } = this.cfg;
-    const from = [apiKeys, apiKeyLabels, apiKeyModels, apiKeyRules, peerTokens];
-    if (this.index && this.index.from.every((a, i) => a === from[i])) return this.index;
     const list = apiKeys.map((k, i): KeyEntry => {
       const label = apiKeyLabels[i] ?? "";
       return { caller: "key:" + (label || keyId(k)), label, id: keyId(k), models: apiKeyModels[i] ?? null, rule: apiKeyRules[i] ?? null };
@@ -79,8 +81,7 @@ export class Callers {
       const d = digest(token);
       if (token !== "" && !peerByDigest.has(d)) peerByDigest.set(d, name);
     }
-    this.index = { from, list, byDigest, byCaller, peerByDigest };
-    return this.index;
+    return { list, byDigest, byCaller, peerByDigest };
   }
 
   /** Every configured key, in file order. */
@@ -137,22 +138,14 @@ export class Callers {
     this.seen.delete(caller);
   }
 
-  private syncSessions(): void {
-    if (this.cfg.operator === this.sessionsFor) return;
-    this.sessions.clear();
-    this.sessionsFor = this.cfg.operator;
-  }
-
   /** The logged-in operator behind this request's session cookie, or null. */
   operator(req: IncomingMessage): string | null {
-    this.syncSessions();
     const token = cookieToken(req.headers.cookie);
     return token ? this.sessions.check(token) : null;
   }
 
   /** Mint a session for `user` and set its cookie on `res`. */
   startSession(res: ServerResponse, user: string, now: number): void {
-    this.syncSessions();
     const maxAge = Math.floor(SESSION_TTL_MS / 1000);
     res.setHeader("Set-Cookie", `${COOKIE}=${this.sessions.mint(user, now)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`);
   }

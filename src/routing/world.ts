@@ -14,6 +14,7 @@ import type { Logger } from "../observe/log.js";
 import type { PeerRegistry } from "../peers/peers.js";
 import type { BackendPool, BackendSlot } from "../queue/pool.js";
 import type { LocalLoad, resolve, World } from "./route.js";
+import { derived } from "../config/derived.js";
 
 /** Conversations a sticky flow remembers before the oldest is forgotten. */
 const PLACED_MAX = 5000;
@@ -41,8 +42,7 @@ export class Worlds {
   /** Requests open per model id right now. */
   private readonly open = new Map<string, number>();
   /** How many times each step of each flow has decided, since the flows last changed. */
-  private readonly hits = new Map<string, number[]>();
-  private hitsFor: HearthConfig["flows"];
+  private readonly hits = derived(() => [this.cfg.flows], () => new Map<string, number[]>());
   /** Where a sticky flow sent each conversation; a Map keeps insertion order, so the first key is the least recently placed. */
   private readonly placed = new Map<string, { end: FlowEnd; until: number }>();
   /** When each action last ran, for one that sets `every`. */
@@ -55,9 +55,7 @@ export class Worlds {
     private readonly pool: BackendPool,
     private readonly peers: PeerRegistry,
     private readonly log: Logger,
-  ) {
-    this.hitsFor = cfg.flows;
-  }
+  ) {}
 
   /** The router a caller goes by: the one `callers:` gives it by its key's label or `local`, else the one it gives everyone, else `default` for `flows:`. */
   routerNameOf(caller: string): string {
@@ -101,17 +99,17 @@ export class Worlds {
 
   /** Count each step a decision passed through. Only `flows:` is counted; a change to the flows starts the counts over. */
   countHits(path: readonly { flow: string; step: number }[]): void {
-    if (this.hitsFor !== this.cfg.flows) { this.hits.clear(); this.hitsFor = this.cfg.flows; }
+    const hits = this.hits();
     for (const p of path) {
-      const row = this.hits.get(p.flow) ?? [];
+      const row = hits.get(p.flow) ?? [];
       row[p.step] = (row[p.step] ?? 0) + 1;
-      this.hits.set(p.flow, row);
+      hits.set(p.flow, row);
     }
   }
 
   /** Each flow's hits per step, for the console. */
   flowHits(): Record<string, number[]> {
-    return this.hitsFor === this.cfg.flows ? Object.fromEntries([...this.hits].map(([flow, row]) => [flow, Array.from(row, (n) => n ?? 0)])) : {};
+    return Object.fromEntries([...this.hits()].map(([flow, row]) => [flow, Array.from(row, (n) => n ?? 0)]));
   }
 
   /**

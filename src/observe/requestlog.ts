@@ -11,6 +11,7 @@ import type { History } from "./history.js";
 import { headersOf } from "../wire/http.js";
 import type { Logger } from "./log.js";
 import type { Meter, Usage } from "./usage.js";
+import { derived } from "../config/derived.js";
 
 /** One request this node asked for, where it ran, and how it ended; `backend` and `peer` are both absent when it never ran. */
 export interface RecentCall { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }
@@ -33,8 +34,21 @@ export class RequestLog {
   private readonly asking = new AsyncLocalStorage<{ id: string; req: IncomingMessage }>();
   /** The requests this node made most recently, newest first. */
   private readonly latest: RecentCall[] = [];
-  /** The header names some flow rule tests, kept for the flows they were read from. */
-  private tested: { from: unknown[]; names: string[] } | null = null;
+  /** Header names any flow's rules test, read again only when a rulebook is replaced. */
+  private readonly testedNames = derived(
+    () => this.rulebooks(),
+    () => {
+      const names = new Set<string>();
+      for (const flows of this.rulebooks()) {
+        for (const step of Object.values(flows).flatMap((f) => f.steps)) {
+          for (const name of [...Object.keys(step.when?.header ?? {}), ...Object.keys(step.when?.headerNot ?? {})]) {
+            if (name !== "authorization" && name !== "cookie") names.add(name);
+          }
+        }
+      }
+      return [...names];
+    },
+  );
 
   constructor(
     private readonly cfg: HearthConfig,
@@ -43,6 +57,11 @@ export class RequestLog {
     private readonly usage: Usage,
     private readonly borrowed: Usage,
   ) {}
+
+  /** `flows:` and every router's flows. */
+  private rulebooks(): HearthConfig["flows"][] {
+    return [this.cfg.flows, ...Object.values(this.cfg.routers).map((r) => r.flows)];
+  }
 
   /** Run `fn` as the handling of request `id`. */
   run<T>(id: string, req: IncomingMessage, fn: () => T): T {
@@ -57,22 +76,6 @@ export class RequestLog {
   /** A copy, so the page's last frame keeps what it had and the next change is seen as one. */
   recent(): RecentCall[] {
     return [...this.latest];
-  }
-
-  /** Header names any flow's rules test, read once per set of flows rather than once per request. */
-  private testedNames(): string[] {
-    const from = [this.cfg.flows, ...Object.values(this.cfg.routers).map((r) => r.flows)];
-    if (this.tested && this.tested.from.length === from.length && this.tested.from.every((f, i) => f === from[i])) return this.tested.names;
-    const names = new Set<string>();
-    for (const flows of from) {
-      for (const step of Object.values(flows).flatMap((f) => f.steps)) {
-        for (const name of [...Object.keys(step.when?.header ?? {}), ...Object.keys(step.when?.headerNot ?? {})]) {
-          if (name !== "authorization" && name !== "cookie") names.add(name);
-        }
-      }
-    }
-    this.tested = { from, names: [...names] };
-    return this.tested.names;
   }
 
   /** The headers of this request that some rule tests, as sent: what a routing decision turned on. Credentials are never among them. */
