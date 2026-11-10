@@ -4,7 +4,7 @@
 import type { HearthConfig } from "./config.js";
 import { modelParams } from "./models.js";
 import type { PeerConfig } from "./peers.js";
-import { type PluginDecl, type RouterPlugin, routerPlugins, slotModels, type StepPlugin } from "./plugins.js";
+import { pluginKinds, type PluginDecl, type RouterPlugin, routerPlugins, slotModels, type StepPlugin } from "./plugins.js";
 import { asRecord, atLeast, bad, bool, count, only, str, strList } from "./read.js";
 
 /** The shapes of flow a newly borrowed model can start as; see `routedFlow`. */
@@ -253,20 +253,34 @@ function stepPlugins(raw: unknown, at: string, plugins: Record<string, PluginDec
 }
 
 /**
- * A flow's `takes`: paths a backend declares. What arrives on one is not a chat request, so a step
- * cannot test what only chat has, nor send it to a peer, which is only ever sent chat.
+ * A flow's `takes`: the kinds of request it answers besides chat, each a path a backend declares or a
+ * type this section offers. Nothing here decides which types exist: `types` is every type the config
+ * gives the section, and a name is accepted or refused by that set as any other type would be.
+ * What arrives on one is not a chat request, so a step cannot test what only chat has, nor send it
+ * to a peer, which is only ever sent chat.
  */
-function takesOf(raw: unknown, at: string, steps: readonly FlowStep[], routed: readonly string[]): string[] {
-  const paths = strList(typeof raw === "string" ? [raw] : raw, at);
-  for (const p of paths) {
-    if (!routed.includes(p)) throw bad(at, `names "${p}", which no backend declares under routes: (${routed.join(", ") || "none"})`);
+function takesOf(raw: unknown, at: string, steps: readonly FlowStep[], routed: readonly string[], types: readonly string[]): string[] {
+  const named = strList(typeof raw === "string" ? [raw] : raw, at);
+  for (const p of named) {
+    if (types.includes(p) || routed.includes(p)) continue;
+    throw bad(at, `names "${p}", which is neither a path a backend declares under routes: (${routed.join(", ") || "none"}) nor a type this node offers: (${types.join(", ") || "none"})`);
   }
   steps.forEach((s, i) => {
     const chatOnly = (["images", "tools", "tokensOver", "tokensUnder"] as const).find((k) => s.when?.[k] !== undefined);
     if (chatOnly) throw bad(`${at.replace(/takes$/, `steps[${i}].when.${chatOnly}`)}`, "reads a chat request, and this flow takes paths that are not chat");
     if (endsOf(s.to).some((e) => "peer" in e)) throw bad(`${at.replace(/takes$/, `steps[${i}].to`)}`, "sends to a peer, and a peer is only ever sent chat: this flow takes paths that are not chat");
   });
-  return paths;
+  return named;
+}
+
+/** Every type a section's own flows are entered by, so one rule's `takes` may name another's type. */
+function offeredTypes(raw: unknown, plugins: Record<string, PluginDecl>): string[] {
+  const out = new Set<string>(pluginKinds(plugins));
+  for (const v of Object.values(asRecord(raw ?? {}, "flows"))) {
+    const inputs = (v !== null && typeof v === "object" ? (v as Record<string, unknown>).inputs : undefined);
+    for (const id of Array.isArray(inputs) ? inputs : typeof inputs === "string" ? [inputs] : []) if (typeof id === "string" && id !== ANY) out.add(id);
+  }
+  return [...out];
 }
 
 /** `flows:`, checked whole: every name resolves, every flow ends in an answer, and none leads back to itself. */
@@ -276,6 +290,7 @@ export function flowDecls(
 ): Record<string, Flow> {
   const flows: Record<string, Flow> = {};
   const entry = new Map<string, string>();
+  const types = offeredTypes(raw, plugins);
   const inLanes = (l: string, where: string) => {
     if (!(l in lanes)) throw bad(where, `names lane "${l}", which is not in scheduler.lanes (${Object.keys(lanes).join(", ")})`);
   };
@@ -285,8 +300,10 @@ export function flowDecls(
     only(decl, "flow", at);
     const inputs = strList(decl.inputs, `${at}.inputs`);
     for (const id of inputs) {
-      const other = entry.get(id);
-      if (other !== undefined) throw bad(`${at}.inputs`, `names "${id}", which already enters flows.${other}`);
+      // Several flows may take the same type: they are tried in file order, and one whose
+      // steps match nothing falls through to the next. The flow for every other name is one
+      // and only one, so it still refuses a second.
+      if (id === ANY && entry.has(ANY)) throw bad(`${at}.inputs`, `lists "${ANY}", which is the flow for every other name and may appear only once`);
       if (id === ANY && inputs.length > 1) throw bad(`${at}.inputs`, `lists "${ANY}" beside other names: the flow for every other name takes only "${ANY}"`);
       entry.set(id, name);
     }
@@ -342,7 +359,11 @@ export function flowDecls(
       const max = step.max === undefined ? undefined : count(step.max, `${here}.max`, 1);
       if (last && max !== undefined) throw bad(`${here}.max`, "cannot be set on the last step, which must always apply");
       if (last && (when !== null || skippable(to))) {
-        throw bad(`${at}.steps`, "must end with a step that always applies: no `when`, and somewhere that can always answer (a model, a flow or refuse)");
+        // A flow for every other name is the last place a request can go, so it must decide everything.
+        // Other flows may pass on what they do not take.
+        if (inputs.includes(ANY)) {
+          throw bad(`${at}.steps`, "must end with a step that always applies: no `when`, and somewhere that can always answer (a model, a flow or refuse)");
+        }
       }
       // A model here can fail before it answers, and the next line is where the request goes then.
       const mayFail = "model" in to && !("peer" in to);
@@ -371,7 +392,7 @@ export function flowDecls(
       ...(bool(decl.off, `${at}.off`, false) ? { off: true as const } : {}),
       ...(str(decl.note, `${at}.note`, "") !== "" ? { note: str(decl.note, `${at}.note`) } : {}),
       ...(decl.sticky !== undefined ? { sticky: atLeast(decl.sticky, `${at}.sticky`, 0, 1000) } : {}),
-      ...(decl.takes !== undefined ? { takes: takesOf(decl.takes, `${at}.takes`, steps, routed) } : {}),
+      ...(decl.takes !== undefined ? { takes: takesOf(decl.takes, `${at}.takes`, steps, routed, types) } : {}),
     };
   }
   for (const [name, flow] of Object.entries(flows)) {
