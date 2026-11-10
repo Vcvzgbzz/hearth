@@ -14,7 +14,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ConfigError, loadConfig, parseConfig, pluginAuth } from "../src/config/config.js";
+import { loadConfig, parseConfig } from "../src/config/config.js";
+import { pluginAuth } from "../src/config/plugins.js";
+import { ConfigError } from "../src/config/read.js";
 import { maskedText } from "../src/config/configfile.js";
 import { silentLogger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";

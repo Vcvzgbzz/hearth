@@ -3,7 +3,10 @@
  * concurrency, warm state), so an embedder never waits behind a GPU generation. Nothing
  * schedules across backends; shared hardware only makes one wait for another.
  */
-import { ANY, backendAuth, type BackendConfig, type HearthConfig, type ModelRoute, type RouteRule } from "../config/config.js";
+import { backendAuth, type BackendConfig, type RouteRule } from "../config/backends.js";
+import type { HearthConfig } from "../config/config.js";
+import { ANY } from "../config/flows.js";
+import type { ModelRoute } from "../config/models.js";
 import { BackendState } from "./backend.js";
 import { KINDS } from "./kinds.js";
 import type { Logger } from "../observe/log.js";

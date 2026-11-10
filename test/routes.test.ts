@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { ConfigError } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
 import { silentLogger } from "../src/observe/log.js";
 import { BackendPool } from "../src/queue/pool.js";
 import { createNode } from "../src/server.js";

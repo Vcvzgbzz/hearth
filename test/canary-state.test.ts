@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 
 import { Canary, type CanaryEvent, type ProbeTarget, type Verdict } from "../src/observe/canary.js";
-import { type CanaryProbe } from "../src/config/config.js";
+import type { CanaryProbe } from "../src/config/canary.js";
 import { parseV1 } from "./v1.js";
 import { silentLogger } from "../src/observe/log.js";
 

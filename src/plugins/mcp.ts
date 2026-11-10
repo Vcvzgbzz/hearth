@@ -7,7 +7,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
-import type { PluginRun } from "../config/config.js";
+import type { PluginRun } from "../config/plugins.js";
 import type { Logger } from "../observe/log.js";
 
 const PROTOCOL = "2025-03-26";

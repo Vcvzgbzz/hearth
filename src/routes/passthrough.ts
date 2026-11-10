@@ -3,7 +3,7 @@
  * llama-swap's own paths, and paths a backend declares under `routes`, which queue like chat.
  */
 import { Refusal, inScope } from "../access/admit.js";
-import { backendAuth } from "../config/config.js";
+import { backendAuth } from "../config/backends.js";
 import { KEY_REFUSED, fail, headersOf, jobId, pipeThrough, refusedKey } from "../wire/http.js";
 import { multipartField, replaceMultipartField } from "../wire/multipart.js";
 import type { BackendSlot } from "../queue/pool.js";

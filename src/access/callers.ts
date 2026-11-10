@@ -6,7 +6,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 
-import type { HearthConfig, KeyRule } from "../config/config.js";
+import type { HearthConfig } from "../config/config.js";
+import type { KeyRule } from "../config/keys.js";
 import { bearer, forwardable, keyId } from "../wire/http.js";
 import { COOKIE, LoginThrottle, OperatorSessions, SESSION_TTL_MS, cookieToken } from "./login.js";
 

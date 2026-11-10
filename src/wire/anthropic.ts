@@ -5,7 +5,7 @@
 import type { ServerResponse } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 
-import type { CacheTtl } from "../config/config.js";
+import type { CacheTtl } from "../config/backends.js";
 import { streamErrorFrame } from "./emulate.js";
 import { MAX_HELD_CHARS, type UpstreamResponse } from "./upstream.js";
 import type { Meter } from "../observe/usage.js";

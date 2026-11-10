@@ -2,7 +2,8 @@
  * What one peer may take from this node: the node's lending limits with that peer's own laid over
  * them, each held per model, and whether they let it in right now.
  */
-import type { HearthConfig, LendTerms, ModelLimits } from "../config/config.js";
+import type { HearthConfig } from "../config/config.js";
+import type { LendTerms, ModelLimits } from "../config/peers.js";
 import type { Row } from "../observe/usage.js";
 
 type Lending = Pick<HearthConfig, "share" | "lendTokensPerDay" | "peerMaxConcurrent" | "peerRateLimit" | "peerTerms">;

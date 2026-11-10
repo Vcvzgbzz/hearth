@@ -6,7 +6,9 @@ import { readFileSync } from "node:fs";
 
 import { BodyTooLargeError, Refusal } from "../access/admit.js";
 import { troubleSays } from "../queue/backend.js";
-import { ConfigError, type RoutePolicy, backendAuth, backendBase, resolveSecret } from "../config/config.js";
+import { backendAuth, backendBase } from "../config/backends.js";
+import type { RoutePolicy } from "../config/flows.js";
+import { ConfigError, resolveSecret } from "../config/read.js";
 import { link, setNote, setShare, unlink } from "../config/configfile.js";
 import { apiError, fail, json } from "../wire/http.js";
 import { bugReport } from "../observe/report.js";

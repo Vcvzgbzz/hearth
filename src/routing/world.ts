@@ -8,7 +8,8 @@ import type { ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 
 import { runAction, type Action, type ActionFacts } from "./actions.js";
-import { DEFAULT_ROUTER, type FlowEnd, type HearthConfig } from "../config/config.js";
+import type { HearthConfig } from "../config/config.js";
+import { DEFAULT_ROUTER, type FlowEnd } from "../config/flows.js";
 import type { Logger } from "../observe/log.js";
 import type { PeerRegistry } from "../peers/peers.js";
 import type { BackendPool, BackendSlot } from "../queue/pool.js";

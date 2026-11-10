@@ -3,7 +3,8 @@
  * generating, `/v1/evict` drops one off its card.
  */
 import { Refusal, inScope, refusalOf } from "../access/admit.js";
-import { ANY, WARM_LANE } from "../config/config.js";
+import { WARM_LANE } from "../config/config.js";
+import { ANY } from "../config/flows.js";
 import { apiError, fail, json } from "../wire/http.js";
 import { decide, variantsOf } from "../routing/route.js";
 import type { ModelStats } from "../routing/stats.js";

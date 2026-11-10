@@ -15,7 +15,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { parseArgs } from "node:util";
 
-import { CONFIG_VERSION, ConfigError, loadConfig, parseConfig } from "./config/config.js";
+import { CONFIG_VERSION, loadConfig, parseConfig } from "./config/config.js";
+import { ConfigError } from "./config/read.js";
 import { mayLeave } from "./routing/route.js";
 import { writeFileAtomic } from "./config/configfile.js";
 import { LEVELS, createLogger, type Level } from "./observe/log.js";

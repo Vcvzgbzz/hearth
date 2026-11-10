@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { ConfigError } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
 import { cleanStats, NOTE_MAX } from "../src/routing/stats.js";
 import { parseV1 } from "./v1.js";
 

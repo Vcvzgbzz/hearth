@@ -4,7 +4,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { DEFAULT_ROUTER } from "../config/config.js";
+import { DEFAULT_ROUTER } from "../config/flows.js";
 import { json, keyId } from "../wire/http.js";
 import { termsFor } from "../peers/lending.js";
 import { LIVE_KINDS, LIVE_STAGES, placements } from "../plugins/plugins.js";

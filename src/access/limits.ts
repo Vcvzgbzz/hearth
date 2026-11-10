@@ -5,7 +5,9 @@
  */
 import { admitModel, callerCap, Refusal } from "./admit.js";
 import type { Callers } from "./callers.js";
-import { ANY, peersMapping, type HearthConfig } from "../config/config.js";
+import type { HearthConfig } from "../config/config.js";
+import { ANY } from "../config/flows.js";
+import { peersMapping } from "../config/peers.js";
 import type { Controls } from "../peers/controls.js";
 import type { KeyLimit } from "../queue/keytally.js";
 import { closedWhy, limitsFor, spentWhy, termsFor } from "../peers/lending.js";

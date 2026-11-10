@@ -2,7 +2,8 @@
  * Peer health and capacity. Health is polled, never inferred from an open socket; unknown,
  * stale and unreachable all mean unavailable; a peer is down after two failed polls.
  */
-import { peersMapping, type HearthConfig, type PeerConfig } from "../config/config.js";
+import type { HearthConfig } from "../config/config.js";
+import { peersMapping, type PeerConfig } from "../config/peers.js";
 import { Controls } from "./controls.js";
 import type { Logger } from "../observe/log.js";
 import { cleanStats, type ModelStats } from "../routing/stats.js";

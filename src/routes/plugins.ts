@@ -5,7 +5,8 @@
 import { pipeline } from "node:stream/promises";
 
 import { Refusal } from "../access/admit.js";
-import { ConfigError, pluginAuth, resolveSecret } from "../config/config.js";
+import { pluginAuth } from "../config/plugins.js";
+import { ConfigError, resolveSecret } from "../config/read.js";
 import { fail, forwardable, headersOf, json } from "../wire/http.js";
 import { checkHttp } from "../plugins/mcp.js";
 import { Plugins } from "../plugins/plugins.js";

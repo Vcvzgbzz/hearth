@@ -14,7 +14,10 @@ import { basename, dirname } from "node:path";
 import { isCollection, isMap, isScalar, parseDocument, type Document } from "yaml";
 
 import { Refusal } from "../access/admit.js";
-import { ConfigError, endsOf, laneDefaults, parseConfig, peersMapping, rawFlow, type Flow, type FlowEnd, type HearthConfig, type LaneDefaults, type RoutePolicy } from "./config.js";
+import { laneDefaults, parseConfig, type HearthConfig, type LaneDefaults } from "./config.js";
+import { endsOf, rawFlow, type Flow, type FlowEnd, type RoutePolicy } from "./flows.js";
+import { peersMapping } from "./peers.js";
+import { ConfigError } from "./read.js";
 import { routedFlow } from "../routing/route.js";
 import type { Logger } from "../observe/log.js";
 

@@ -3,7 +3,7 @@
  * available (safe on a local link, never across peers), falling back to polling /running
  * when the stream goes quiet for STALE_MS.
  */
-import type { ActivityDecl } from "../config/config.js";
+import type { ActivityDecl } from "../config/backends.js";
 import { KINDS, readingFromStatus, type Kind, type KindName, type ModelStatus, type Placement } from "./kinds.js";
 import type { Logger } from "../observe/log.js";
 import { known, type ModelStats } from "../routing/stats.js";

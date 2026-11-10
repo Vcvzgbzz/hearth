@@ -22,7 +22,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { ConfigError, parseConfig } from "../src/config/config.js";
+import { parseConfig } from "../src/config/config.js";
+import { ConfigError } from "../src/config/read.js";
 import { silentLogger } from "../src/observe/log.js";
 import { PeerRegistry, type PeerCapacity } from "../src/peers/peers.js";
 import { decide } from "../src/routing/route.js";

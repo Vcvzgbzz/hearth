@@ -23,7 +23,8 @@
  */
 import { Transform } from "node:stream";
 
-import { WARM_LANE, type CanaryConfig, type CanaryNotify, type CanaryProbe, type HearthConfig } from "../config/config.js";
+import type { CanaryConfig, CanaryNotify, CanaryProbe } from "../config/canary.js";
+import { WARM_LANE, type HearthConfig } from "../config/config.js";
 import { KINDS } from "../queue/kinds.js";
 import type { Logger } from "./log.js";
 import type { BackendPool, BackendSlot } from "../queue/pool.js";

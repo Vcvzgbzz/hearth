@@ -29,8 +29,10 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   (bodies, error envelopes, relaying), `anthropic.ts` (a backend that speaks the Messages
   API), `messages.ts` (the `/v1/messages` door), `emulate.ts`, `multipart.ts`, and the
   answer cache (`answers.ts`)
-- `src/config/`: `config.ts` (`HearthConfig`, `parseConfig`, `loadConfig`) with one file per
-  section beside it; `fields.ts` (the settings table the parser and the console both read),
+- `src/config/`: `config.ts` (`HearthConfig`, `parseConfig`, `loadConfig`), and beside it one
+  file per section, each with its types and the code that reads them (`backends.ts`, `flows.ts`,
+  `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`; `read.ts` is the field readers
+  and `ConfigError` they share); `fields.ts` (the settings table the parser and the console both read),
   `configfile.ts` (live edits to hearth.yaml), `migrate.ts`, `yamlq.ts`
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
