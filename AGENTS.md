@@ -48,7 +48,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
 - `src/errors.ts`: every error a request can end with, and the status `refusalOf` answers it with;
   imports nothing, so any layer can throw one
 - `src/console/`: the React status page and config editor (built to `dist/`).
-  The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the recent-requests rail beside the
+  The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the Usage page is `Usage.tsx` and its arithmetic `tally.ts`; the recent-requests rail beside the
   Topology map is `Rail.tsx`; the Plugins page is
   `Plugins.tsx` and its Add plugin dialog `AddPlugin.tsx` (plugin blocks on the
   routing map are in `flowNodes.tsx`; plugins that serve an API are boxes under
@@ -61,10 +61,10 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   `Routing.tsx` (layout), `flowNodes.tsx` (one view per kind of node) and
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
   file). The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
-  boundary around each page and the whole console is `Boundary.tsx`
-  file); the Config page's draft, which also outlives a walk away, is `configStore.ts`
-  file)
-  The Logs page is `logs.tsx`; what it filters and keys rows by is `logfilter.ts`
+  boundary around each page and the whole console is `Boundary.tsx`; the Config
+  page's draft, which also outlives a walk away, is `configStore.ts`; the Logs page
+  is `logs.tsx`, and what it filters and keys rows by is `logfilter.ts`; the Usage
+  page is `Usage.tsx`, and its sums are `tally.ts`
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

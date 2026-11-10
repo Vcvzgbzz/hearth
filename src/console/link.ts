@@ -4,7 +4,7 @@
  */
 import { pageFor } from "./knobs.js";
 
-export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "scheduler", "logs", "config"] as const;
+export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "usage", "scheduler", "logs", "config"] as const;
 export type Page = (typeof PAGE_IDS)[number];
 
 const decode = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };

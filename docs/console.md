@@ -55,6 +55,7 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
   evicted from its row.
+- **Usage**: what the node has counted over 7 or 31 days (UTC), from `GET /usage`: tokens per day as a stacked bar chart, and a table of requests, failures, tokens, cached tokens, cost and share, by caller or by model; a row opens to its breakdown by the other.
 - **Keys**: every api key by label, the router it goes by, its limits and expiry,
   what it used today and over 31 days, and when it last spoke to this node. Mint one (shown once), revoke one by its label, or rotate one: a new key for the same label, shown once, with the old one refused from then on.
   A key opens to set its router, its lane and its limits, and to list what its
