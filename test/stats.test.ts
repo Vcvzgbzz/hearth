@@ -298,9 +298,9 @@ const peerCap = (ctx: number | null): PeerCapacity => ({
 
 function registry(cfg: ReturnType<typeof parseConfig>, up: Record<string, PeerCapacity | null>) {
   const r = new PeerRegistry(cfg, silentLogger);
-  const inner = r as unknown as { status: Map<string, Record<string, unknown>> };
+  const inner = r as unknown as { peers: Map<string, { status: Record<string, unknown> }> };
   for (const [name, cap] of Object.entries(up)) {
-    const s = inner.status.get(name)!;
+    const s = inner.peers.get(name)!.status;
     s.up = cap !== null;
     s.capacity = cap;
     s.lastOkAt = cap !== null ? Date.now() : null;

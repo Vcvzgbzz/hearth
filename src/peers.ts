@@ -106,23 +106,29 @@ const REQUEST_CAP_BACKOFF_MS = 60_000;
 const RETRY_AFTER_MIN_MS = 5_000;
 const RETRY_AFTER_MAX_MS = 10 * 60_000;
 
+/** Everything known about one peer at one address. Replaced whole when its url or token changes. */
+interface PeerEntry {
+  cfg: PeerConfig;
+  status: PeerStatus;
+  /** When the reading in `status.capacity` was asked for. */
+  readAt: number;
+  /** When it last answered one of our requests. */
+  servedAt: number;
+  /** Their model id -> until when requests for it stay home: it rate-limited one. */
+  capped: Map<string, number>;
+  /** Our requests to it still open, with when they were sent. */
+  open: Set<{ theirModel: string; at: number }>;
+  /** Advertised capabilities, from /peer/hello; empty until one lands. */
+  caps: Set<string>;
+  /** The probe in flight, which late callers join. */
+  inFlight: Promise<void> | null;
+}
+
 export class PeerRegistry {
-  private readonly status = new Map<string, PeerStatus>();
-  private readonly byName = new Map<string, PeerConfig>();
-  private readonly inFlight = new Map<string, Promise<void>>();
+  /** One entry per peer, so forgetting a peer or its old address is a single delete. */
+  private readonly peers = new Map<string, PeerEntry>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private started = false;
-  /** When the reading each peer's capacity came from was asked for. */
-  private readonly readAt = new Map<string, number>();
-  /** When each peer last answered one of our requests. */
-  private readonly servedAt = new Map<string, number>();
-  /** peer + their model id -> until when requests for it stay home: it rate-limited one. */
-  private readonly capped = new Map<string, number>();
-  /** Our requests to each peer still open, with when they were sent. */
-  private readonly open = new Map<string, Set<{ theirModel: string; at: number }>>();
-
-  /** Advertised capabilities per peer, from /peer/hello. */
-  private readonly caps = new Map<string, Set<string>>();
 
   constructor(
     private readonly cfg: HearthConfig,
@@ -137,19 +143,26 @@ export class PeerRegistry {
 
   /** Start a peer from nothing: down, unread, until a probe says otherwise. */
   private track(p: PeerConfig): void {
-    this.byName.set(p.name, p);
-    this.status.set(p.name, {
-      name: p.name,
-      url: p.url,
-      up: false,
-      capacity: null,
-      lastOkAt: null,
-      lastError: null,
-      consecutiveFailures: 0,
-      backoffUntil: null,
-      lastFailAt: null,
+    this.peers.set(p.name, {
+      cfg: p,
+      status: {
+        name: p.name,
+        url: p.url,
+        up: false,
+        capacity: null,
+        lastOkAt: null,
+        lastError: null,
+        consecutiveFailures: 0,
+        backoffUntil: null,
+        lastFailAt: null,
+      },
+      readAt: 0,
+      servedAt: 0,
+      capped: new Map(),
+      open: new Set(),
+      caps: new Set(),
+      inFlight: null,
     });
-    for (const m of [this.readAt, this.servedAt, this.caps, this.open]) m.delete(p.name);
   }
 
   /**
@@ -160,19 +173,15 @@ export class PeerRegistry {
    */
   sync(): void {
     const next = new Map(this.cfg.peers.map((p) => [p.name, p]));
-    for (const name of [...this.byName.keys()]) {
-      if (next.has(name)) continue;
-      for (const m of [this.byName, this.status, this.readAt, this.servedAt, this.caps, this.open, this.inFlight]) m.delete(name);
-    }
+    for (const name of [...this.peers.keys()]) if (!next.has(name)) this.peers.delete(name);
     for (const [name, p] of next) {
-      const was = this.byName.get(name);
-      if (was && was.url === p.url && was.token === p.token) {
-        this.byName.set(name, p);
+      const was = this.peers.get(name);
+      if (was && was.cfg.url === p.url && was.cfg.token === p.token) {
+        was.cfg = p;
         continue;
       }
+      // A fresh entry: a probe still out to the old address lands on the old one and is ignored.
       this.track(p);
-      // A probe still out to the old address must not stand in for one to the new.
-      this.inFlight.delete(name);
       if (this.started) void this.probe(name);
     }
     // Only a node that had no peers to poll has no timer yet; one already polling picks the edit up as it goes.
@@ -180,32 +189,32 @@ export class PeerRegistry {
   }
 
   config(name: string): PeerConfig | undefined {
-    return this.byName.get(name);
+    return this.peers.get(name)?.cfg;
   }
 
   all(): PeerStatus[] {
-    return [...this.status.values()].map((s) => ({ ...s, up: this.isUp(s.name) }));
+    return [...this.peers.values()].map((e) => ({ ...e.status, up: this.isUp(e.status.name) }));
   }
 
   get(name: string): PeerStatus | undefined {
-    const s = this.status.get(name);
+    const s = this.peers.get(name)?.status;
     return s ? { ...s, up: this.isUp(name) } : undefined;
   }
 
   /** Usable right now? Staleness is checked here too, so a wedged poller cannot leave a peer up.
    *  An answer to one of our requests is as recent a sign of life as a reading. */
   isUp(name: string): boolean {
-    const s = this.status.get(name);
-    if (!s || !s.up || s.lastOkAt === null) return false;
-    const last = Math.max(s.lastOkAt, this.servedAt.get(name) ?? 0);
+    const e = this.peers.get(name);
+    if (!e || !e.status.up || e.status.lastOkAt === null) return false;
+    const last = Math.max(e.status.lastOkAt, e.servedAt);
     return Date.now() - last <= this.cfg.peerStaleMs;
   }
 
   /** A request is on its way to a peer; call what this returns once it is over. Until the
    *  next reading, loadFor counts it, so a burst between readings does not all land on one peer. */
   sent(name: string, theirModel: string): () => void {
-    const open = this.open.get(name) ?? new Set();
-    this.open.set(name, open);
+    const open = this.peers.get(name)?.open;
+    if (!open) return () => {};
     const entry = { theirModel, at: Date.now() };
     open.add(entry);
     return () => void open.delete(entry);
@@ -213,17 +222,18 @@ export class PeerRegistry {
 
   /** A peer answered one of our requests: it is up, whatever its last poll said. */
   served(name: string): void {
-    const s = this.status.get(name);
-    if (!s) return;
-    this.servedAt.set(name, Date.now());
-    s.consecutiveFailures = 0;
+    const e = this.peers.get(name);
+    if (!e) return;
+    e.servedAt = Date.now();
+    e.status.consecutiveFailures = 0;
   }
 
   /** What one model would cost on a peer: its per-model reading, else the node-level one,
    *  with our requests sent since that reading added on. */
   loadFor(peer: string, theirModel: string): PeerModelLoad | null {
-    const cap = this.status.get(peer)?.capacity;
-    if (!cap) return null;
+    const e = this.peers.get(peer);
+    const cap = e?.status.capacity;
+    if (!e || !cap) return null;
     const per = cap.models?.[theirModel];
     const load = per ?? {
       slots: cap.slots,
@@ -231,9 +241,8 @@ export class PeerRegistry {
       queued: Object.values(cap.queued).reduce((a, b) => a + b, 0),
       warm: (cap.loaded ?? []).includes(theirModel),
     };
-    const since = this.readAt.get(peer) ?? 0;
     let unseen = 0;
-    for (const r of this.open.get(peer) ?? []) if (r.at >= since && (!per || r.theirModel === theirModel)) unseen++;
+    for (const r of e.open) if (r.at >= e.readAt && (!per || r.theirModel === theirModel)) unseen++;
     if (unseen === 0) return load;
     const took = Math.min(unseen, load.free);
     return { ...load, free: load.free - took, queued: load.queued + unseen - took };
@@ -241,19 +250,19 @@ export class PeerRegistry {
 
   /** What a peer says one of its models can take, or null; only per-model readings answer this. */
   statsFor(peer: string, theirModel: string): ModelStats | null {
-    return this.status.get(peer)?.capacity?.models?.[theirModel]?.stats ?? null;
+    return this.peers.get(peer)?.status.capacity?.models?.[theirModel]?.stats ?? null;
   }
 
   /** Their id for one of our models, if they've agreed to serve it. */
   theirModelId(peer: string, model: string): string | undefined {
-    return this.byName.get(peer)?.models[model];
+    return this.peers.get(peer)?.cfg.models[model];
   }
 
   /** Peers that are up, map this model and are not rate-limiting it, in preference order. */
   candidates(model: string, preferred: string[]): string[] {
     // Borrowing paused: no candidates, and every policy path already handles that.
     if (!this.controls.borrowingOn) return [];
-    return peersMapping(model, preferred, [...this.byName.values()]).filter((n) => this.isUp(n) && this.cappedFor(n, this.theirModelId(n, model) ?? "") === 0);
+    return peersMapping(model, preferred, [...this.peers.values()].map((e) => e.cfg)).filter((n) => this.isUp(n) && this.cappedFor(n, this.theirModelId(n, model) ?? "") === 0);
   }
 
   /** A peer refused one of our requests with 429: stop sending it that model for a while, so every
@@ -261,23 +270,26 @@ export class PeerRegistry {
   rateCapped(name: string, theirModel: string, retryAfter?: string | string[]): void {
     const secs = Number(Array.isArray(retryAfter) ? retryAfter[0] : retryAfter);
     const ms = Number.isFinite(secs) && secs > 0 ? Math.min(RETRY_AFTER_MAX_MS, Math.max(RETRY_AFTER_MIN_MS, secs * 1000)) : REQUEST_CAP_BACKOFF_MS;
-    const key = `${name}\0${theirModel}`, already = this.cappedFor(name, theirModel) > 0;
-    this.capped.set(key, Date.now() + ms);
+    const capped = this.peers.get(name)?.capped;
+    if (!capped) return;
+    const already = this.cappedFor(name, theirModel) > 0;
+    capped.set(theirModel, Date.now() + ms);
     if (!already) this.log.warn("peer.request_rate_capped", { peer: name, model: theirModel, backoffSec: Math.round(ms / 1000) });
   }
 
   /** How long until this peer takes this model again, in ms; 0 when it is not rate-limiting it. */
   cappedFor(name: string, theirModel: string): number {
-    const key = `${name}\0${theirModel}`, until = this.capped.get(key);
+    const capped = this.peers.get(name)?.capped;
+    const until = capped?.get(theirModel);
     if (until === undefined) return 0;
-    if (Date.now() >= until) { this.capped.delete(key); return 0; }
+    if (Date.now() >= until) { capped!.delete(theirModel); return 0; }
     return until - Date.now();
   }
 
   async pollOnce(name: string, timeoutMs = POLL_HEADERS_TIMEOUT_MS): Promise<void> {
-    const peer = this.byName.get(name);
-    const s = this.status.get(name);
-    if (!peer || !s) return;
+    const entry = this.peers.get(name);
+    if (!entry) return;
+    const { cfg: peer, status: s } = entry;
     // Respected even for on-demand probes. Asking again inside a back-off is
     // exactly what caused the lockout to begin with.
     if (s.backoffUntil !== null && Date.now() < s.backoffUntil) return;
@@ -289,7 +301,7 @@ export class PeerRegistry {
         headersTimeoutMs: timeoutMs,
       });
       // The peer was removed or changed while this was asked: the answer is about something gone.
-      if (this.status.get(name) !== s) return;
+      if (this.peers.get(name) !== entry) return;
       // An answer we do not recognise is unknown, which means unavailable.
       if (
         typeof cap?.free !== "number" ||
@@ -320,7 +332,7 @@ export class PeerRegistry {
 
       const was = s.up;
       s.capacity = cap;
-      this.readAt.set(name, askedAt);
+      entry.readAt = askedAt;
       if (!was) void this.helloOnce(name);
       s.lastOkAt = Date.now();
       s.lastError = null;
@@ -330,7 +342,7 @@ export class PeerRegistry {
       s.up = true;
       if (!was) this.log.info("peer.up", { peer: name });
     } catch (e) {
-      if (this.status.get(name) !== s) return;
+      if (this.peers.get(name) !== entry) return;
       s.consecutiveFailures++;
       s.lastFailAt = Date.now();
       s.lastError = e instanceof Error ? e.message : String(e);
@@ -359,7 +371,7 @@ export class PeerRegistry {
   /** The background floor. Goes through `probe` so it can't stack a second
    *  request on one already in flight. */
   async pollAll(): Promise<void> {
-    await Promise.all([...this.byName.keys()].map((n) => this.probe(n)));
+    await Promise.all([...this.peers.keys()].map((n) => this.probe(n)));
   }
 
   /**
@@ -370,9 +382,7 @@ export class PeerRegistry {
   async ensureFresh(): Promise<void> {
     const now = Date.now();
     await Promise.all(
-      [...this.byName.keys()].map((name) => {
-        const s = this.status.get(name);
-        if (!s) return undefined;
+      [...this.peers].map(([name, { status: s }]) => {
         if (s.backoffUntil !== null && now < s.backoffUntil) return undefined;
         if (s.lastOkAt !== null && now - s.lastOkAt <= this.cfg.peerFreshMs) return undefined;
         if (s.lastFailAt !== null && now - s.lastFailAt <= this.cfg.peerDownMs) return undefined;
@@ -383,30 +393,31 @@ export class PeerRegistry {
 
   /** One probe per peer at a time. Late callers join the one in flight. */
   private probe(name: string): Promise<void> {
-    const existing = this.inFlight.get(name);
-    if (existing) return existing;
+    const e = this.peers.get(name);
+    if (!e) return Promise.resolve();
+    if (e.inFlight) return e.inFlight;
     const p = this.pollOnce(name, PROBE_HEADERS_TIMEOUT_MS).finally(() => {
-      // Only its own entry: a live edit may have started a newer probe under the same name.
-      if (this.inFlight.get(name) === p) this.inFlight.delete(name);
+      e.inFlight = null;
     });
-    this.inFlight.set(name, p);
+    e.inFlight = p;
     return p;
   }
 
   /** Probe every peer now, in parallel, with a short deadline. */
   async probeAll(): Promise<void> {
-    await Promise.all([...this.byName.keys()].map((n) => this.probe(n)));
+    await Promise.all([...this.peers.keys()].map((n) => this.probe(n)));
   }
 
   /** Does this peer advertise a capability? False until a hello has landed. */
   supports(name: string, cap: string): boolean {
-    return this.caps.get(name)?.has(cap) === true;
+    return this.peers.get(name)?.caps.has(cap) === true;
   }
 
   /** Handshake at startup; mainly checks that the models we map are ones they offer. */
   async helloOnce(name: string): Promise<void> {
-    const peer = this.byName.get(name);
-    if (!peer) return;
+    const e = this.peers.get(name);
+    if (!e) return;
+    const peer = e.cfg;
     try {
       const hi = await getJson<{
         name?: string; protocol?: number; models?: string[]; capabilities?: string[];
@@ -435,8 +446,7 @@ export class PeerRegistry {
         this.log.warn("peer.protocol", { peer: name, theirs: hi.protocol, ours: 2 });
       }
       // Capabilities are asked for, never inferred from how a missing route fails.
-      const now = this.byName.get(name);
-      if (now?.url === peer.url && now.token === peer.token) this.caps.set(name, new Set(hi.capabilities ?? []));
+      e.caps = new Set(hi.capabilities ?? []);
     } catch {
       // Not fatal. A peer that's down at startup gets checked again when it next
       // comes up, and routing won't touch it before then anyway.
@@ -446,7 +456,7 @@ export class PeerRegistry {
   start(): void {
     // Remembered, so a peer added later by a live edit starts the poll a node with none skipped.
     this.started = true;
-    if (this.timer || this.byName.size === 0) return;
+    if (this.timer || this.peers.size === 0) return;
     void this.pollAll();
     this.timer = setInterval(() => void this.pollAll(), this.cfg.peerPollMs);
     // Don't hold the process open just for a poll loop.

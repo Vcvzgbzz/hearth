@@ -262,7 +262,7 @@ export class Scheduler {
     return this.lanes[lane]?.priority ?? 1000;
   }
 
-  private score(job: Job, now: number, _resident: string | null): number {
+  private score(job: Job, now: number): number {
     let s = this.lanePriority(job.lane);
     if (this.isWarm(job.model)) s -= this.warmBonusValue;
     s -= ((now - job.enqueuedAt) / 1000) * this.agePerSecond;
@@ -276,15 +276,27 @@ export class Scheduler {
     return held;
   }
 
-  /** How many go before this one: everything running, plus every queued job that can actually take a turn ahead of it. */
-  private positionOf(job: Job, now: number, resident: string | null, keyHeld: Set<Job>): number {
-    const mine = this.score(job, now, resident);
+  /**
+   * How many go before each queued job: everything running, plus every queued job that scores
+   * strictly better and is not held by its key, since a held job is passed over. One sort per pass.
+   */
+  private positions(keyHeld: Set<Job>): Map<Job, number> {
+    const now = Date.now();
+    const scored = this.queued.map((job) => ({ job, s: this.score(job, now) })).sort((a, b) => a.s - b.s);
+    const out = new Map<Job, number>();
     let ahead = this.running.size;
-    // A job its key holds is passed over, so it holds no place in line.
-    for (const j of this.queued) {
-      if (j !== job && this.score(j, now, resident) < mine && !keyHeld.has(j)) ahead++;
+    let tied = 0;
+    for (let i = 0; i < scored.length; i++) {
+      const { job, s } = scored[i]!;
+      // Equal scores do not go before each other, so a run of ties joins `ahead` only once it ends.
+      if (i > 0 && s !== scored[i - 1]!.s) {
+        ahead += tied;
+        tied = 0;
+      }
+      out.set(job, ahead);
+      if (!keyHeld.has(job)) tied++;
     }
-    return ahead;
+    return out;
   }
 
   /** Queued-or-running for one caller in one lane, counting off-box; with a model, only its jobs. */
@@ -299,8 +311,6 @@ export class Scheduler {
 
   /** Everything in flight. Feeds /queue and /peer/state. */
   view(): JobView[] {
-    const now = Date.now();
-    const resident = this.resident();
     const out: JobView[] = [];
     const running = (j: Job): JobView => ({
       id: j.id,
@@ -323,6 +333,7 @@ export class Scheduler {
       reasons.set(j, reason);
       if (reason === "key") keyHeld.add(j);
     }
+    const positions = this.positions(keyHeld);
     for (const j of this.queued) {
       const reason = reasons.get(j) ?? null;
       out.push({
@@ -331,7 +342,7 @@ export class Scheduler {
         model: j.model,
         caller: j.caller,
         state: "queued",
-        position: this.positionOf(j, now, resident, keyHeld),
+        position: positions.get(j)!,
         since: j.enqueuedAt,
         offbox: false,
         ...(reason === "key" ? { held: "key" as const } : {}),
@@ -552,11 +563,9 @@ export class Scheduler {
 
   /** Tell waiters whose place in line moved, then broadcast. */
   private sync(): void {
-    const now = Date.now();
-    const resident = this.resident();
-    const keyHeld = this.keyHeld();
+    const positions = this.positions(this.keyHeld());
     for (const j of this.queued) {
-      const pos = this.positionOf(j, now, resident, keyHeld);
+      const pos = positions.get(j)!;
       if (pos !== j.lastPosition) {
         j.lastPosition = pos;
         j.onPosition?.(pos);
@@ -599,14 +608,13 @@ export class Scheduler {
    */
   private next(): Job | null {
     const now = Date.now();
-    const resident = this.resident();
     const passed = new Set<Job>();
     for (;;) {
       let best: Job | null = null;
       let bestScore = Infinity;
       for (const j of this.queued) {
         if (passed.has(j)) continue;
-        const s = this.score(j, now, resident);
+        const s = this.score(j, now);
         if (s < bestScore) {
           bestScore = s;
           best = j;

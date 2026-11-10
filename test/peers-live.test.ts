@@ -137,4 +137,23 @@ for (const s of [a.server, b.server, backend]) s.close();
   fresh.server.close();
 }
 
+// --- a rate-limit is about one address: removing the peer, or moving it, forgets it -------------
+{
+  const cfg = loadConfig(cfgPath);
+  cfg.peers = [{ name: "friend", url: "http://127.0.0.1:1", token: "t", models: {} }];
+  const reg = new PeerRegistry(cfg, silentLogger);
+  reg.rateCapped("friend", "theirs");
+  assert.ok(reg.cappedFor("friend", "theirs") > 0, "capped after a 429");
+  cfg.peers = [];
+  reg.sync();
+  cfg.peers = [{ name: "friend", url: "http://127.0.0.1:1", token: "t", models: {} }];
+  reg.sync();
+  assert.equal(reg.cappedFor("friend", "theirs"), 0, "a removed and re-added peer starts uncapped");
+  reg.rateCapped("friend", "theirs");
+  cfg.peers = [{ name: "friend", url: "http://127.0.0.1:2", token: "t", models: {} }];
+  reg.sync();
+  assert.equal(reg.cappedFor("friend", "theirs"), 0, "so does one at a new address");
+  reg.stop();
+}
+
 console.log("peers-live.test.ts ok");

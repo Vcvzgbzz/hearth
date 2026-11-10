@@ -87,12 +87,13 @@ export class ResourceArbiter {
   }
 
   /**
-   * Take all of them or none, in sorted order so overlapping sets cannot deadlock. Starts the
-   * turn and drops the claim.
+   * Take all of them or none. The check and the take run in one synchronous step, so no other
+   * owner can take part of a set in between and no partial hold can deadlock. Starts the turn
+   * and drops the claim.
    */
   acquire(resources: readonly string[], owner: ResourceOwner): boolean {
     if (!this.available(resources, owner)) return false;
-    for (const r of [...resources].sort()) this.holders.set(r, owner);
+    for (const r of resources) this.holders.set(r, owner);
     if (!this.heldSince.has(owner)) this.heldSince.set(owner, this.now());
     this.claims.delete(owner);
     return true;
