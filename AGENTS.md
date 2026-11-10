@@ -61,6 +61,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   `Routing.tsx` (layout), `flowNodes.tsx` (one view per kind of node) and
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
   file)
+  The Logs page is `logs.tsx`; what it filters and keys rows by is `logfilter.ts`
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 
