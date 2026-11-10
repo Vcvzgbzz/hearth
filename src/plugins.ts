@@ -485,6 +485,13 @@ export class Plugins {
     });
   }
 
+  /** How a router asks for a plugin that serves: `MCP` for one that speaks MCP, `API` otherwise; null for one that serves nothing. */
+  kindOf(name: string): "MCP" | "API" | null {
+    const l = this.loaded.find((x) => x.name === name);
+    if (!l || (l.decl.serves === null && l.decl.run === null)) return null;
+    return l.decl.mcp !== null ? "MCP" : "API";
+  }
+
   /**
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.

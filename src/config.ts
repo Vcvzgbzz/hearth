@@ -261,7 +261,7 @@ export type FlowEnd = { model: string } | { peer: string; model: string | null }
  * Where a step sends a request: to run, into another flow, to whichever of several would start
  * it soonest, nowhere, or here as the very id that was asked for.
  */
-export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true };
+export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true } | { plugin: string };
 
 /** The input that stands for every name no other flow takes: the flow that has it decides what happens to those. */
 export const ANY = "*";
@@ -713,23 +713,24 @@ const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 function flowTo(raw: unknown, at: string): FlowTo {
   if (typeof raw === "string" && raw.trim() !== "") return { model: raw.trim() };
   const o = asRecord(raw, at);
-  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked"], at);
-  const said = ["peer", "flow", "fastest", "refuse", "asked"].filter((k) => o[k] !== undefined);
+  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked", "plugin"], at);
+  const said = ["peer", "flow", "fastest", "refuse", "asked", "plugin"].filter((k) => o[k] !== undefined);
   if (said.length > 1 || (said.length === 1 && said[0] !== "peer" && o.model !== undefined)) {
-    throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse or asked");
+    throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse, asked or a plugin");
   }
   if (o.asked !== undefined) {
     if (o.asked !== true) throw bad(`${at}.asked`, "must be true: run it here as the id that was asked for");
     return { asked: true };
   }
   if (o.refuse !== undefined) return { refuse: str(o.refuse, `${at}.refuse`) };
+  if (o.plugin !== undefined) return { plugin: str(o.plugin, `${at}.plugin`) };
   if (o.flow !== undefined) return { flow: str(o.flow, `${at}.flow`) };
   if (o.fastest !== undefined) {
     if (!Array.isArray(o.fastest) || o.fastest.length < 2) throw bad(`${at}.fastest`, "must list at least two places to choose between");
     return {
       fastest: o.fastest.map((e, i) => {
         const end = flowTo(e, `${at}.fastest[${i}]`);
-        if ("flow" in end || "fastest" in end || "refuse" in end || "asked" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
+        if ("flow" in end || "fastest" in end || "refuse" in end || "asked" in end || "plugin" in end) throw bad(`${at}.fastest[${i}]`, "must be a model or a peer");
         return end;
       }),
     };
@@ -749,7 +750,7 @@ export function rawFlow(flow: Flow): Record<string, unknown> {
     inputs: [...flow.inputs],
     steps: flow.steps.map((s) => ({
       ...(s.when !== null ? { when: s.when } : {}),
-      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to || "asked" in s.to ? s.to : end(s.to),
+      to: "fastest" in s.to ? { fastest: s.to.fastest.map(end) } : "flow" in s.to || "refuse" in s.to || "asked" in s.to || "plugin" in s.to ? s.to : end(s.to),
       ...(s.max !== undefined ? { max: s.max } : {}),
       ...(s.lane !== null ? { lane: s.lane } : {}),
       ...(s.params !== null ? { params: s.params } : {}),
@@ -763,11 +764,11 @@ export function rawFlow(flow: Flow): Record<string, unknown> {
 export function endsOf(to: FlowTo, asked?: string): FlowEnd[] {
   if ("fastest" in to) return to.fastest;
   if ("asked" in to) return asked === undefined ? [] : [{ model: asked }];
-  return "flow" in to || "refuse" in to ? [] : [to];
+  return "flow" in to || "refuse" in to || "plugin" in to ? [] : [to];
 }
 
-/** Can this target be passed over when it cannot take the request? Only a peer can be down. */
-const skippable = (to: FlowTo): boolean => "peer" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
+/** Can this target be passed over when it cannot take the request? A peer can be down, and a plugin takes no model request. */
+const skippable = (to: FlowTo): boolean => "peer" in to || "plugin" in to || ("fastest" in to && to.fastest.every((e) => "peer" in e));
 
 /** What a request is, which decides the plugins that may see it. hearth sets it; a client or plugin cannot. */
 export const REQUEST_KINDS = ["chat", "embeddings", "rerank", "image", "video", "speech", "transcription", "other"] as const;

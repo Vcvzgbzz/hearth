@@ -55,6 +55,8 @@ export interface World {
   keepHere?: (model: string) => boolean;
   /** Where a sticky flow sent the earlier turns of this conversation, if it remembers. */
   pinned?: (flow: string) => FlowEnd | undefined;
+  /** The plugin a request to /plugins/<name>/* is for: it runs as asked only there, and a step that names a model is passed over. */
+  plugin?: string;
 }
 
 /** Where a request ended up, and what the steps it passed through put on it. */
@@ -73,6 +75,8 @@ export type Resolution = {
   actions: { name: string; flow: string; step: number }[];
   /** No flow takes the id, and none takes every other name: it is not something this node offers. */
   unlisted?: true;
+  /** For a request to /plugins/<name>/*: the plugin it goes to, which a step may name in place of the one asked for. */
+  plugin?: string;
 } & ({ target: "local" } | { target: "peer"; peer: string; theirModel: string } | { target: "unavailable" });
 
 /**
@@ -163,7 +167,7 @@ export function mayLeave(cfg: HearthConfig, asked: string): boolean {
 }
 
 /** A place a step can send work, resolved against what is reachable right now. */
-type Reached = { model: string; peer?: string; theirModel?: string };
+type Reached = { model: string; peer?: string; theirModel?: string; plugin?: string };
 
 /**
  * Walk the flow a request for `asked` enters. Steps are tried in order: one is passed over
@@ -189,6 +193,7 @@ export function resolve(named: string, w: World): Resolution {
   const done = (r: Reached | null, reason: string): Resolution => {
     const why = passed.length > 0 ? `${reason} (${passed[0]})` : reason;
     if (r === null) return { target: "unavailable", model: asked, lane, params, via, path, actions, reason: passed.length > 0 ? `${passed[0]}; ${reason}` : reason };
+    if (r.plugin !== undefined) return { target: "local", plugin: r.plugin, model: r.model, lane, params, via, path, actions, reason: why };
     if (r.peer !== undefined) return { target: "peer", peer: r.peer, theirModel: r.theirModel!, model: r.model, lane, params, via, path, actions, reason: why };
     return { target: "local", model: r.model, lane: w.cfg.models[r.model]?.lane ?? lane, params, via, path, actions, reason: why };
   };
@@ -283,8 +288,9 @@ export function resolve(named: string, w: World): Resolution {
     const types = Object.values(flows).filter((f) => !f.off).flatMap((f) => f.inputs);
     return { ...done(null, `"${asked}" is not offered here${types.length ? ` (${types.join(", ")})` : ""}`), unlisted: true };
   }
-  // A variant nothing tests would be answered as the plain type, which is not what was asked for.
-  if (variant !== null && !variantsOf(flows, asked).includes(variant)) {
+  // A variant nothing tests would be answered as the plain type, which is not what was asked for. A plugin
+  // request's variant is the plugin it names, which the steps decide on whether or not one tests it.
+  if (variant !== null && w.plugin === undefined && !variantsOf(flows, asked).includes(variant)) {
     const known = variantsOf(flows, asked);
     return { ...done(null, `"${named}" is not offered here: ${asked} ${known.length ? `comes as ${known.map((v) => `${asked}:${v}`).join(", ")}` : "has no variants"}`), unlisted: true };
   }
@@ -313,6 +319,14 @@ export function resolve(named: string, w: World): Resolution {
       const here = `${name} step ${i + 1}`;
       if (s.max !== undefined && (w.inFlight?.(name, i) ?? 0) >= s.max) { passed.push(`${here} is at its limit of ${s.max}`); continue; }
       if ("refuse" in s.to) { took(name, i, s); return done(null, s.to.refuse); }
+      // A plugin request goes to a plugin, and a model request to a model: a step for the other kind is passed over.
+      if ("plugin" in s.to || (w.plugin !== undefined && "asked" in s.to)) {
+        if (w.plugin === undefined) { passed.push(`${here} sends to the plugin ${(s.to as { plugin: string }).plugin}, which takes no model requests`); continue; }
+        const to = "plugin" in s.to ? s.to.plugin : w.plugin;
+        took(name, i, s);
+        return done({ model: to, plugin: to }, here);
+      }
+      if (w.plugin !== undefined && !("flow" in s.to)) { passed.push(`${here} sends to a model, and this request is for the plugin ${w.plugin}`); continue; }
       let r: Reached | string | null = null;
       if (!("flow" in s.to)) {
         r = "fastest" in s.to ? fastest(s.to.fastest) : reach("asked" in s.to ? { model: asked } : s.to);
