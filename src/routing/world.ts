@@ -76,7 +76,7 @@ export class Worlds {
 
   /** Count a request that asked for this model as use of it until `res` closes. */
   using(model: string, res: ServerResponse): void {
-    const wire = this.pool.outboundId(model);
+    const wire = this.pool.models.outboundId(model);
     this.open.set(wire, (this.open.get(wire) ?? 0) + 1);
     res.once("close", () => {
       this.open.set(wire, (this.open.get(wire) ?? 1) - 1);
@@ -86,7 +86,7 @@ export class Worlds {
 
   /** How long since this model had work here, in ms; 0 while it has some. Unused since startup is idle since then. */
   idleMs(model: string): number {
-    const wire = this.pool.outboundId(model);
+    const wire = this.pool.models.outboundId(model);
     return (this.open.get(wire) ?? 0) > 0 ? 0 : Date.now() - (this.lastUse.get(wire) ?? this.bootAt);
   }
 
@@ -161,11 +161,11 @@ export class Worlds {
    * backend, and not on any backend that shares exclusive hardware with it.
    */
   ready(model: string): boolean {
-    const slot = this.pool.for(model);
+    const slot = this.pool.models.for(model);
     const loaded = slot.state.loaded();
-    if (loaded.includes(model) || loaded.includes(this.pool.outboundId(model))) return true;
+    if (loaded.includes(model) || loaded.includes(this.pool.models.outboundId(model))) return true;
     if (loaded.length > 0) return false;
-    const exclusive = new Set(this.pool.resources().filter((r) => !r.shared).map((r) => r.name));
+    const exclusive = new Set(this.pool.hardware.resources().filter((r) => !r.shared).map((r) => r.name));
     const mine = slot.cfg.resources.filter((r) => exclusive.has(r));
     return !this.pool.all().some((o) => o !== slot && o.cfg.resources.some((r) => mine.includes(r)) && o.state.loaded().length > 0);
   }
@@ -179,7 +179,7 @@ export class Worlds {
       if (action?.on !== "decided") continue;
       this.act(a.name, action, {
         action: a.name, node: this.cfg.name, asked, model: r.model, target: r.target, peer: "", lane: r.lane, caller, tokens: 0, images: false, tools: false,
-        flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "", backend: r.target === "local" ? this.pool.for(r.model).name : "", id: "", queuedMs: 0, ranMs: 0,
+        flow: a.flow, line: a.step + 1, reason: r.reason, outcome: "decided", ms: 0, error: "", backend: r.target === "local" ? this.pool.models.for(r.model).name : "", id: "", queuedMs: 0, ranMs: 0,
       });
     }
   }
@@ -188,8 +188,8 @@ export class Worlds {
   worldFor(caller: string, lane: string, need: World["need"], from: HearthConfig = this.rulesFor(caller), headers: World["headers"] = {}): World {
     return {
       cfg: from, peers: this.peers, caller, lane, need, headers,
-      local: (m) => localLoad(this.pool.for(m), m),
-      held: (m, l) => this.pool.heldOff(this.pool.for(m).cfg, l),
+      local: (m) => localLoad(this.pool.models.for(m), m),
+      held: (m, l) => this.pool.hardware.heldOff(this.pool.models.for(m).cfg, l),
       ready: (m) => this.ready(m),
       inFlight: (flow, step) => this.stepsBusy.get(`${flow}\0${step}`) ?? 0,
       idleMs: (m) => this.idleMs(m),

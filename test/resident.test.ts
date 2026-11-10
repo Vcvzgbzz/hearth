@@ -53,11 +53,11 @@ const config = (url: string) => parseV1({
   const held = gate();
   void p.get("memory")!.scheduler.submit({ lane: "chat", model: "memory", caller: "t" }, () => held.wait());
   await tick();
-  assert.equal(p.resources().find((r) => r.name === "gpu1")!.holder, null, "a rerank does not hold the card");
+  assert.equal(p.hardware.resources().find((r) => r.name === "gpu1")!.holder, null, "a rerank does not hold the card");
   let rendered = false;
   await p.get("render")!.scheduler.submit({ lane: "chat", model: "image", caller: "t" }, async () => { rendered = true; });
   assert.equal(rendered, true, "a render starts while the resident is busy: it never waits on it");
-  assert.ok(p.resources().find((r) => r.name === "gpu1")!.backends.includes("memory"), "but it is drawn on the card");
+  assert.ok(p.hardware.resources().find((r) => r.name === "gpu1")!.backends.includes("memory"), "but it is drawn on the card");
   held.open();
   await sleep(120);
 }

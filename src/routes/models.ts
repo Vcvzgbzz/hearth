@@ -28,7 +28,7 @@ export function modelRoutes(ctx: RouteContext) {
       // so a model added since startup shows up.
       await Promise.all(pool.all().map((b) => b.state.ensureFresh()));
       // Carry warm state, as llama-swap does on this route.
-      const warm = new Set(pool.loaded());
+      const warm = new Set(pool.models.loaded());
       type Entry = {
         id: string; status?: { value: string }; context_length?: number; description?: string;
         input_modalities?: string[];
@@ -37,10 +37,10 @@ export function modelRoutes(ctx: RouteContext) {
       const input = (stats: ModelStats | null | undefined): string[] | undefined =>
         typeof stats?.vision === "boolean" ? (stats.vision ? ["text", "image"] : ["text"]) : undefined;
       const upstream: { data?: Entry[] } = {
-        data: pool.catalog().map((id) => {
+        data: pool.models.catalog().map((id) => {
           // Unknown warmth or window is omitted, never reported as cold or null.
           const entry: Entry = { id };
-          const stats = pool.statsFor(id);
+          const stats = pool.models.statsFor(id);
           if (stats?.note) entry.description = stats.note;
           // A degraded model is loaded and answering, just not with an answer,
           // so its status wins over warmth: "loaded" would read as healthy.
@@ -50,9 +50,9 @@ export function modelRoutes(ctx: RouteContext) {
             entry.description = `${sick.detail} (since ${new Date(sick.since).toISOString()})`;
             return entry;
           }
-          if (!pool.for(id).state.knowsWarm()) return entry;
+          if (!pool.models.for(id).state.knowsWarm()) return entry;
           entry.status = { value: warm.has(id) ? "loaded" : "unloaded" };
-          const ctx = pool.contextLength(id);
+          const ctx = pool.models.contextLength(id);
           if (ctx !== null) entry.context_length = ctx;
           const takes = input(stats);
           if (takes) entry.input_modalities = takes;
@@ -137,7 +137,7 @@ export function modelRoutes(ctx: RouteContext) {
     // Same routing question chat asks. Phase 1 implements only the local
     // answer, but asking it here is what makes peer warming a branch of this
     // route later rather than a second endpoint with its own opinions.
-    const slotFor = pool.for(model);
+    const slotFor = pool.models.for(model);
     const load = localLoad(slotFor, model);
     const decision = fromPeer !== null
       // A peer's warm is served here or nowhere. Forwarding it onward would
@@ -202,7 +202,7 @@ export function modelRoutes(ctx: RouteContext) {
     }
 
     const slot = slotFor;
-    const wire = pool.outboundId(model);
+    const wire = pool.models.outboundId(model);
     // Only a backend that swaps models has anything to warm; saying "warmed" elsewhere claims work that did not happen.
     if (!slot.state.canUnload()) {
       json(res, 200, {
@@ -264,12 +264,12 @@ export function modelRoutes(ctx: RouteContext) {
       const body = await readJson(c.req);
       const model = typeof body.model === "string" ? body.model.trim() : "";
       if (model === "") throw new Refusal(400, "model is required");
-      const slot = pool.for(model);
-      const wire = pool.outboundId(model);
+      const slot = pool.models.for(model);
+      const wire = pool.models.outboundId(model);
       if (!slot.state.isWarm(wire)) throw new Refusal(409, `${model} is not resident on ${slot.name} — nothing to evict`);
       // A request that is running would lose its model mid-answer.
       const running = slot.scheduler.view().filter((j) => j.state === "running" && !j.offbox);
-      const mine = running.filter((j) => pool.outboundId(j.model) === wire).length;
+      const mine = running.filter((j) => pool.models.outboundId(j.model) === wire).length;
       if (mine > 0) throw new Refusal(409, `${model} is answering ${mine} request${mine > 1 ? "s" : ""} — evict it once ${mine > 1 ? "they finish" : "it finishes"}`);
       let via: "model" | "card";
       if (await slot.state.dropOne(wire)) {

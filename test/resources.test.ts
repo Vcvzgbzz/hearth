@@ -497,7 +497,7 @@ console.log("resources.test.ts ok");
   assert.equal(cfg.resources.gpu0!.shared, false, "shared is opt-in");
 
   const p = new BackendPool(cfg, silentLogger);
-  const byName = (n: string) => p.resources().find((r) => r.name === n)!;
+  const byName = (n: string) => p.hardware.resources().find((r) => r.name === n)!;
 
   // Still DISPLAYED — the whole point. The console must be able to draw what a
   // sidecar runs on.
@@ -538,8 +538,8 @@ console.log("resources.test.ts ok");
     name: "bare",
     backends: [{ name: "a", url: "http://127.0.0.1:1", serves: ["m"], resources: ["gpuX"] }],
   }), silentLogger);
-  assert.equal(bare.resources()[0]!.kind, "gpu", "undeclared is a gpu");
-  assert.equal(bare.resources()[0]!.shared, false, "and exclusive");
+  assert.equal(bare.hardware.resources()[0]!.kind, "gpu", "undeclared is a gpu");
+  assert.equal(bare.hardware.resources()[0]!.shared, false, "and exclusive");
 }
 
 // kind is validated at startup, not discovered as a wrong icon weeks later.

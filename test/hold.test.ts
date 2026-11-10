@@ -136,38 +136,38 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   const [card, holder] = [pool.get("card")!, pool.get("app")!];
   const read = () => holder.state.sampleActivity(holder.cfg.activity!);
 
-  assert.equal(pool.heldOff(card.cfg, "memory"), false, "an app nobody has heard from holds nothing");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), false, "an app nobody has heard from holds nothing");
 
   // Up and idle is what a restart of hearth or of the app looks like: no one is using it.
   const idle = new BackendPool(cfg, silentLogger);
   const quiet = idle.get("app")!;
   await quiet.state.sampleActivity(quiet.cfg.activity!);
-  assert.equal(idle.heldOff(idle.get("card")!.cfg, "memory"), false, "an idle app answering for the first time holds nothing");
-  const sinceUp = idle.holds()[0]!.quietMs;
+  assert.equal(idle.hardware.heldOff(idle.get("card")!.cfg, "memory"), false, "an idle app answering for the first time holds nothing");
+  const sinceUp = idle.hardware.holds()[0]!.quietMs;
   assert.ok(sinceUp !== null && sinceUp < 1_000, "and is quiet since it began answering");
   idle.stop();
 
   app.state.running = 1;
   await read();
   app.state.running = 0;
-  assert.equal(pool.heldOff(card.cfg, "memory"), true, "a reading that shows work starts the hold");
-  assert.equal(pool.heldOff(card.cfg, "chat"), false, "only the lanes it names");
-  assert.equal(pool.heldOff(pool.get("spare")!.cfg, "memory"), false, "only backends on its hardware");
-  assert.equal(pool.heldOff(holder.cfg, "memory"), false, "never the holder itself");
-  const [view] = pool.holds();
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), true, "a reading that shows work starts the hold");
+  assert.equal(pool.hardware.heldOff(card.cfg, "chat"), false, "only the lanes it names");
+  assert.equal(pool.hardware.heldOff(pool.get("spare")!.cfg, "memory"), false, "only backends on its hardware");
+  assert.equal(pool.hardware.heldOff(holder.cfg, "memory"), false, "never the holder itself");
+  const [view] = pool.hardware.holds();
   assert.deepEqual({ backend: view!.backend, resources: view!.resources, lanes: view!.lanes, active: view!.active },
     { backend: "app", resources: ["gpu"], lanes: ["memory"], active: true });
   assert.ok(view!.quietMs !== null && view!.quietMs < 150);
 
   await settle(200);
-  assert.equal(pool.heldOff(card.cfg, "memory"), false, "idle for idleMs: the lanes may start again");
-  assert.equal(pool.holds()[0]!.active, false);
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), false, "idle for idleMs: the lanes may start again");
+  assert.equal(pool.hardware.holds()[0]!.active, false);
 
   // A job showing up renews it. The path is read at most every two seconds.
   app.state.running = 1;
   await settle(2_100);
   await read();
-  assert.equal(pool.heldOff(card.cfg, "memory"), true, "work on the app takes the card back for its lanes");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), true, "work on the app takes the card back for its lanes");
 
   app.close();
   pool.stop();
@@ -216,7 +216,7 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   // start() begins reading the app, whose work starts the hold.
   app.state.running = 1;
   node.start();
-  for (let i = 0; i < 100 && !node.pool.heldOff(node.pool.get("card")!.cfg, "memory"); i++) await settle(20);
+  for (let i = 0; i < 100 && !node.pool.hardware.heldOff(node.pool.get("card")!.cfg, "memory"); i++) await settle(20);
   const during = await ask("background");
   assert.equal(during.body.choices?.[0]?.message.content, "spare", "held: the same id is answered by its stand-in");
   assert.equal(during.body.model, "small", "under the id the stand-in goes out as");
@@ -258,21 +258,21 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   const [card, loader] = [pool.get("card")!, pool.get("loader")!];
 
   await loader.state.refresh();
-  assert.equal(pool.heldOff(card.cfg, "memory"), false, "nothing loading, nothing answering: no hold");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), false, "nothing loading, nothing answering: no hold");
 
   running = [{ model: "image-seat", state: "starting" }];
   await loader.state.refresh();
-  assert.equal(pool.heldOff(card.cfg, "memory"), true, "the seat is loading: the lanes are held before the app can answer");
-  assert.equal(pool.heldOff(card.cfg, "chat"), false, "still only the lanes it names");
-  assert.equal(pool.holds()[0]!.active, true, "and /network says so");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), true, "the seat is loading: the lanes are held before the app can answer");
+  assert.equal(pool.hardware.heldOff(card.cfg, "chat"), false, "still only the lanes it names");
+  assert.equal(pool.hardware.holds()[0]!.active, true, "and /network says so");
 
   running = [{ model: "image-seat", state: "ready" }];
   await loader.state.refresh();
-  assert.equal(pool.heldOff(card.cfg, "memory"), true, "just loaded: the hold bridges the moment before the app's first answer");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), true, "just loaded: the hold bridges the moment before the app's first answer");
 
   const since = loader.state.sinceLoading("image-seat");
   await settle(40);
-  pool.holds();
+  pool.hardware.holds();
   assert.ok(loader.state.sinceLoading("image-seat") >= since + 30, "the bridge is timed from the load, and reading the status does not restart it");
 
   // Another model loading on that swapper is not this app's business.
@@ -280,7 +280,7 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   running = [{ model: "main", state: "starting" }];
   await other.get("loader")!.state.refresh();
   await other.get("card")!.state.refresh();
-  assert.equal(other.heldOff(other.get("card")!.cfg, "memory"), false, "a different model loading holds nothing");
+  assert.equal(other.hardware.heldOff(other.get("card")!.cfg, "memory"), false, "a different model loading holds nothing");
 
   assert.throws(() => parseV1({
     name: "t", resources: { gpu: { kind: "gpu" } },
@@ -325,19 +325,19 @@ const config = (appUrl: string, idleMs: number, extra: Record<string, unknown> =
   const [card, app] = [pool.get("card")!, pool.get("app")!];
 
   await app.state.refresh();
-  await pool.sampleActivity(app);
+  await pool.hardware.sampleActivity(app);
   assert.equal(reads, 0, "seat down: the path is not read, so reading it cannot start the app");
-  assert.equal(pool.heldOff(card.cfg, "memory"), false);
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), false);
 
   running = [{ model: "image-seat", state: "ready" }];
   await app.state.refresh();
-  await pool.sampleActivity(app);
+  await pool.hardware.sampleActivity(app);
   assert.equal(reads, 1, "seat up: the path is read through the swapper");
-  assert.equal(pool.heldOff(card.cfg, "memory"), true, "and the app's work holds the card");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), true, "and the app's work holds the card");
 
   running = [{ model: "main", state: "ready" }];
   await app.state.refresh();
-  assert.equal(pool.heldOff(card.cfg, "memory"), false, "the swapper dropped the seat: the hold ends at once, not when the app's last reading ages out");
+  assert.equal(pool.hardware.heldOff(card.cfg, "memory"), false, "the swapper dropped the seat: the hold ends at once, not when the app's last reading ages out");
 
   swap.closeAllConnections();
   swap.close();

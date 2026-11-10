@@ -1133,7 +1133,7 @@ export function createCanary(cfg: HearthConfig, pool: BackendPool, log: Logger):
   if (conf === null) return null;
 
   const target = (slot: BackendSlot, id: string): ProbeTarget => {
-    const wire = pool.outboundId(id);
+    const wire = pool.models.outboundId(id);
     const mine = slot.scheduler.capacityFor(id);
     const back = slot.scheduler.capacity();
     const waiting = Object.values(back.queued).reduce((a, b) => a + b, 0);
@@ -1147,7 +1147,7 @@ export function createCanary(cfg: HearthConfig, pool: BackendPool, log: Logger):
       idle: back.running === 0 && waiting === 0,
       ready: mine.free > 0 && waiting === 0,
       // An app holding the card counts as a model on it: a recovery reload must not swap it out.
-      loadedCount: slot.state.loaded().length + (pool.appHolds(slot.cfg) ? 1 : 0),
+      loadedCount: slot.state.loaded().length + (pool.hardware.appHolds(slot.cfg) ? 1 : 0),
       probe: (spec, signal, load) => queued(slot, id, spec, signal, load),
       unload: () => unloadOne(slot, wire),
     };
@@ -1167,7 +1167,7 @@ export function createCanary(cfg: HearthConfig, pool: BackendPool, log: Logger):
         // waits for whatever else holds it, rather than loading around it.
         { lane: WARM_LANE, model: id, caller: "canary", signal, claimHardware: load },
         async () => {
-          const body = pool.outboundBody(id, probeBody(pool.outboundId(id), spec));
+          const body = pool.models.outboundBody(id, probeBody(pool.models.outboundId(id), spec));
           out = await askModel(slot.cfg.url, body, spec, signal);
         },
       );
@@ -1194,7 +1194,7 @@ export function createCanary(cfg: HearthConfig, pool: BackendPool, log: Logger):
     cfg: conf,
     log,
     ...(conf.notify ? { notify: webhook(conf.notify, cfg.name, log) } : {}),
-    wireOf: (id) => pool.outboundId(id),
+    wireOf: (id) => pool.models.outboundId(id),
     /** Every model opted in, on the backend that would serve it. Recomputed each tick. */
     targets: () => {
       const out: ProbeTarget[] = [];
@@ -1210,7 +1210,7 @@ export function createCanary(cfg: HearthConfig, pool: BackendPool, log: Logger):
       for (const slot of pool.all()) {
         const offered = slot.cfg.serves.length > 0
           ? slot.cfg.serves
-          : slot.state.catalog().map((wire) => pool.advertised(wire));
+          : slot.state.catalog().map((wire) => pool.models.advertised(wire));
         for (const id of offered) add(slot, id);
         for (const [id, route] of Object.entries(cfg.models)) {
           if (route.backend === slot.name) add(slot, id);
@@ -1218,8 +1218,8 @@ export function createCanary(cfg: HearthConfig, pool: BackendPool, log: Logger):
       }
       // A model named outright, on whichever backend would serve it.
       for (const id of Object.keys(conf.models)) {
-        if (seen.has(id) || !pool.catalog().includes(id)) continue;
-        add(pool.for(id), id);
+        if (seen.has(id) || !pool.models.catalog().includes(id)) continue;
+        add(pool.models.for(id), id);
       }
       return out;
     },

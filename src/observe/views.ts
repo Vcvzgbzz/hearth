@@ -113,7 +113,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
   async function uiPayload(operator: string | null = null): Promise<UiData> {
     await peers.ensureFresh();
     // Declared activity paths are read only while a page is building data, never on a timer.
-    for (const b of pool.all()) void pool.sampleActivity(b);
+    for (const b of pool.all()) void pool.hardware.sampleActivity(b);
     return {
       build,
       // Who this request signed in as, so the page can show it and offer a sign-out;
@@ -127,14 +127,14 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       configuredShare: cfg.share,
       // Where every edit lands, and what is waiting on a restart; replaces the old pending-changes block.
       config: config.status(),
-      catalog: pool.catalog(),
+      catalog: pool.models.catalog(),
       // The canary's verdict per model. Present even when no canary is
       // configured, so the page can say "off" instead of drawing nothing.
       canary: canary(),
       contexts: (() => {
         const out: Record<string, number> = {};
-        for (const id of pool.catalog()) {
-          const ctx = pool.contextLength(id);
+        for (const id of pool.models.catalog()) {
+          const ctx = pool.models.contextLength(id);
           if (ctx !== null) out[id] = ctx;
         }
         return out;
@@ -203,7 +203,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
 
   /** Advertised id -> the backend that serves it here. Where its requests go is `flows`. */
   function routingView(): Record<string, { backend: string }> {
-    return Object.fromEntries(Object.keys(cfg.models).map((id) => [id, { backend: pool.for(id).name }]));
+    return Object.fromEntries(Object.keys(cfg.models).map((id) => [id, { backend: pool.models.for(id).name }]));
   }
 
   /** advertised id -> `as`, for every model that declares one. */
@@ -226,12 +226,12 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
     // Stats per node, since two nodes can serve one id with different windows.
     const selfStats: Record<string, ModelStats> = {};
     // Route models too: for a `kind: none` backend a declaration is all that is known. Reported, not enforced.
-    const named = new Set(pool.catalog());
+    const named = new Set(pool.models.catalog());
     for (const b of pool.all()) {
       for (const r of b.cfg.routes) if (r.model !== "") named.add(r.model);
     }
     for (const m of named) {
-      const st = pool.statsFor(m);
+      const st = pool.models.statsFor(m);
       if (st) selfStats[m] = st;
     }
 
@@ -240,8 +240,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
         name: cfg.name,
         self: true,
         up: true,
-        serves: pool.catalog(),
-        loaded: pool.loaded(),
+        serves: pool.models.catalog(),
+        loaded: pool.models.loaded(),
         stats: selfStats,
         free: cap.free,
         slots: cap.slots,
@@ -267,7 +267,7 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
             // Sent whenever declared, including unread (ok:false), which the page shows as unknown.
             ...(b.cfg.activity ? { activity: b.state.activity() } : {}),
             // Which lanes this backend keeps off its hardware while its app is in use, and whether it does so now.
-            ...(b.cfg.hold ? { hold: { lanes: [...b.cfg.hold.lanes], idleMs: b.cfg.hold.idleMs, active: pool.holds().some((h) => h.backend === b.name && h.active), quietMs: b.state.quietMs() } } : {}),
+            ...(b.cfg.hold ? { hold: { lanes: [...b.cfg.hold.lanes], idleMs: b.cfg.hold.idleMs, active: pool.hardware.holds().some((h) => h.backend === b.name && h.active), quietMs: b.state.quietMs() } } : {}),
             // Only a kind that unloads evicts; one that keeps its set resident has no thrash to warn about.
             evicts: b.state.canUnload(),
             slots: c.slots,
@@ -275,17 +275,17 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
             queued: Object.values(c.queued).reduce((a, x) => a + x, 0),
             // Only what is actually resident, mapped back into advertised ids.
             loaded: b.cfg.serves.length
-              ? [...b.cfg.serves].filter((m) => b.state.isWarm(pool.outboundId(m)))
+              ? [...b.cfg.serves].filter((m) => b.state.isWarm(pool.models.outboundId(m)))
               : b.state.loaded(),
             // Models loading off the disk, and where resident weights sit; both advertised ids.
             offload: [...b.state.placement()].map(([wire, p]) => ({
-              model: pool.advertised(wire),
+              model: pool.models.advertised(wire),
               cpuLayers: p.cpuLayers,
               cpuExpertsAll: p.cpuExpertsAll,
               cpuOnly: p.cpuOnly,
             })),
             loading: b.cfg.serves.length
-              ? [...b.cfg.serves].filter((m) => b.state.loading().includes(pool.outboundId(m)))
+              ? [...b.cfg.serves].filter((m) => b.state.loading().includes(pool.models.outboundId(m)))
               : b.state.loading(),
             // Unqueued work we are proxying for this backend right now. Real
             // traffic, no admission — see `proxying` above.
@@ -313,8 +313,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
     // Ready now means loaded somewhere reachable. Loaded but busy still counts,
     // because warm-and-queued beats cold-and-idle on anything large, and
     // merging the two would hide the distinction this endpoint exists for.
-    const readyNow = new Set(pool.loaded());
-    const available = new Set(pool.catalog());
+    const readyNow = new Set(pool.models.loaded());
+    const available = new Set(pool.models.catalog());
 
     for (const p of peers.all()) {
       const theirs = peers.config(p.name);
@@ -380,11 +380,11 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       // The scarce thing. A backend is an admission domain; a card is what
       // decides whether an admission domain may run at all, and it belongs at
       // the top of the payload rather than inferred from a list of backends.
-      resources: pool.resources(),
+      resources: pool.hardware.resources(),
       // What the last few handoffs cost somebody.
-      evictions: [...pool.evictions()],
+      evictions: [...pool.hardware.evictions()],
       // Hardware kept for an app hearth does not schedule; a client can read this to plan around it.
-      holds: pool.holds(),
+      holds: pool.hardware.holds(),
       readyNow: [...readyNow].sort(),
       available: [...available].sort(),
       unknownWarm: [...unknownWarm].sort(),

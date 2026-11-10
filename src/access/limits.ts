@@ -68,8 +68,8 @@ export class Limits {
 
   /** Null when something here or on a mapped peer serves this id, else what is served instead. */
   unknownHere(m: string): string | null {
-    return this.pool.certainlyUnknown(m) && peersMapping(m, [], this.cfg.peers).length === 0
-      ? this.pool.catalog().join(", ") || "nothing"
+    return this.pool.models.certainlyUnknown(m) && peersMapping(m, [], this.cfg.peers).length === 0
+      ? this.pool.models.catalog().join(", ") || "nothing"
       : null;
   }
 

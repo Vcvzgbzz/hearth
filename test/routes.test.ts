@@ -284,7 +284,7 @@ console.log("routes.test.ts ok");
   });
   const pool = new BackendPool(cfg, silentLogger);
 
-  const hit = pool.forPath("/upstream/image-lora/generate");
+  const hit = pool.models.forPath("/upstream/image-lora/generate");
   assert.ok(hit, "a served model matches the pattern");
   assert.equal(hit.slot.name, "img");
   assert.equal(hit.rule.model, "image-lora", "the captured segment IS the model id");
@@ -292,15 +292,15 @@ console.log("routes.test.ts ok");
   assert.equal(hit.rule.queue, true);
 
   // The whole objection to wildcards, answered.
-  assert.equal(pool.forPath("/upstream/coder/generate"), undefined,
+  assert.equal(pool.models.forPath("/upstream/coder/generate"), undefined,
     "a model this backend does not serve must fall through to the passthrough");
-  assert.equal(pool.forPath("/upstream/image/generate/extra"), undefined,
+  assert.equal(pool.models.forPath("/upstream/image/generate/extra"), undefined,
     "{model} is one segment, not a prefix");
-  assert.equal(pool.forPath("/upstream/image"), undefined,
+  assert.equal(pool.models.forPath("/upstream/image"), undefined,
     "and the rest of the path still has to match");
 
   // A pattern route reports under the requested model, never the backend name.
-  assert.notEqual(pool.forPath("/upstream/image/generate")!.rule.model, "img");
+  assert.notEqual(pool.models.forPath("/upstream/image/generate")!.rule.model, "img");
 }
 
 // --- a pattern route matches the id we ADVERTISE ---------------------------
@@ -322,12 +322,12 @@ console.log("routes.test.ts ok");
   });
   const pool = new BackendPool(cfg, silentLogger);
 
-  assert.deepEqual(pool.catalog(), ["image-hq"], "the raw id is not offered to anyone");
-  const hit = pool.forPath("/upstream/image-hq/generate");
+  assert.deepEqual(pool.models.catalog(), ["image-hq"], "the raw id is not offered to anyone");
+  const hit = pool.models.forPath("/upstream/image-hq/generate");
   assert.ok(hit, "the advertised id matches the route");
   assert.equal(hit.rule.model, "image-hq", "and is reported in OUR vocabulary, not the wire's");
-  assert.ok(pool.forPath("/upstream/image/generate"), "the raw id still matches");
-  assert.equal(pool.forPath("/upstream/coder/generate"), undefined,
+  assert.ok(pool.models.forPath("/upstream/image/generate"), "the raw id still matches");
+  assert.equal(pool.models.forPath("/upstream/coder/generate"), undefined,
     "and a model this backend does not serve still falls through");
 }
 

@@ -171,7 +171,7 @@ await node.pool.first().state.refresh();
   assert.equal("chat_template_kwargs" in be.seen.at(-1)!.body, false, "a level with no entry stamps nothing");
   await chat(url, { model: "seat-low", messages: [], reasoning_effort: "none" });
   assert.equal("chat_template_kwargs" in be.seen.at(-1)!.body, false, "the id's params set the effort the stamp follows");
-  const lent = node.pool.outboundBody("seat-off", { model: "seat-off", messages: [] }, "their-seat");
+  const lent = node.pool.models.outboundBody("seat-off", { model: "seat-off", messages: [] }, "their-seat");
   assert.equal("chat_template_kwargs" in lent, false, "a peer's seat is not ours: our template switch stays home");
 }
 
@@ -185,7 +185,7 @@ await node.pool.first().state.refresh();
     }),
     silentLogger,
   );
-  const lent = n4.pool.outboundBody("seat-quick", { model: "seat-quick", messages: [], reasoning_effort: "none" }, "their-seat");
+  const lent = n4.pool.models.outboundBody("seat-quick", { model: "seat-quick", messages: [], reasoning_effort: "none" }, "their-seat");
   assert.deepEqual(lent.thinking, { type: "disabled" }, "the id means the same thing wherever it lands");
   await n4.close();
 }
@@ -202,19 +202,19 @@ await node.pool.first().state.refresh();
 // --- pool: one place owns the body rewrite ----------------------------------
 {
   const body = { model: "seat-low", messages: [], reasoning_effort: "high" };
-  const out = node.pool.outboundBody("seat-low", body);
+  const out = node.pool.models.outboundBody("seat-low", body);
   assert.equal(out.model, SEAT);
   assert.equal(out.reasoning_effort, "low");
   assert.notEqual(out, body, "a stamped body is a copy");
   const plain = { model: SEAT, messages: [] };
-  assert.equal(node.pool.outboundBody(SEAT, plain), plain, "identity for a route without as or params");
-  assert.equal(node.pool.for("seat-low").name, "swap", "resolution follows the alias");
+  assert.equal(node.pool.models.outboundBody(SEAT, plain), plain, "identity for a route without as or params");
+  assert.equal(node.pool.models.for("seat-low").name, "swap", "resolution follows the alias");
 
   // Addressed by the peer's id, still stamped. A `-low` turn that spilled over
   // came back at full effort otherwise — and at low effort again the moment
   // fallbackLocal brought it home, which is the same id answering twice
   // differently for a reason the caller cannot see.
-  const lent = node.pool.outboundBody("seat-low", body, "their-seat");
+  const lent = node.pool.models.outboundBody("seat-low", body, "their-seat");
   assert.equal(lent.model, "their-seat", "a peer is addressed in ITS vocabulary");
   assert.equal(lent.reasoning_effort, "low", "params travel with the job");
 }

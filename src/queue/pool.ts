@@ -3,32 +3,15 @@
  * concurrency, warm state), so an embedder never waits behind a GPU generation. Nothing
  * schedules across backends; shared hardware only makes one wait for another.
  */
-import { backendAuth, type BackendConfig, type RouteRule } from "../config/backends.js";
+import { backendAuth, type BackendConfig } from "../config/backends.js";
 import type { HearthConfig } from "../config/config.js";
-import { ANY } from "../config/flows.js";
-import type { ModelRoute, ModelStats } from "../config/models.js";
-import { BackendState } from "./backend.js";
-import { KINDS } from "./kinds.js";
 import type { Logger } from "../observe/log.js";
-import { mergeStats, type Need } from "../routing/stats.js";
-import { ResourceArbiter } from "./resources.js";
+import { BackendState } from "./backend.js";
+import { Hardware, RESIDENT_RESUME_MS } from "./hardware.js";
 import { KeyTally } from "./keytally.js";
+import { KINDS } from "./kinds.js";
+import { ModelCatalog } from "./models.js";
 import { Scheduler } from "./scheduler.js";
-import { send } from "../wire/upstream.js";
-
-/** How long a resident is asked to stay off the card; renewed by every later turn, released by /resume. */
-const RESIDENT_YIELD_S = 3600;
-/** The card must stay free this long before residents come back, so a burst of turns yields once. */
-export const RESIDENT_RESUME_MS = 30_000;
-
-/** The budget for a whole clear-the-card sequence, which may unload several neighbours. */
-const EVICT_BUDGET_MS = 45_000;
-
-/** How often a backend with a `hold` has its activity path read. */
-const HOLD_POLL_MS = 2_000;
-
-/** How long a hold outlasts its seat's load: time for the app to answer its activity path for the first time. */
-const SEAT_READY_GRACE_MS = 15_000;
 
 /** One backend, with the queue that fronts it. */
 export interface BackendSlot {
@@ -56,42 +39,27 @@ export interface ModelCapacity {
   warm: boolean;
 }
 
+/**
+ * The backends and their queues, and what they can take. What a model is called and which backend serves
+ * it is `models`; how backends that share hardware take turns on it is `hardware`.
+ */
 export class BackendPool {
   private readonly slots: BackendSlot[] = [];
   /** What each key is running here, across every backend. */
   readonly tally = new KeyTally();
   private kickQueued = false;
   private readonly byName = new Map<string, BackendSlot>();
-  /** Complained-about ambiguous ids, so a duplicate warns once and not per request. */
-  private readonly warned = new Set<string>();
-  /** Hardware shared between backends, so overlapping ones take turns; inert without `resources`. */
-  private readonly arbiter = new ResourceArbiter();
-  /** Declared non-OpenAI paths -> who serves them. See BackendConfig.routes. */
-  private readonly byPath = new Map<string, { slot: BackendSlot; rule: RouteRule }>();
-  /** Routes carrying a {model} segment, in declaration order. */
-  private readonly patterns: { slot: BackendSlot; rule: RouteRule; re: RegExp }[] = [];
-  /** A backend's arbitrated resources: shared ones are filtered out here, but still drawn. */
-  private arbitrated(names: readonly string[]): string[] {
-    return names.filter((n) => !this.cfg.resources[n]?.shared);
-  }
-
-  /** Residents asked to yield and not yet resumed. */
-  private readonly yielded = new Set<BackendSlot>();
-  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Reads the activity path of every backend with a `hold`, and what each read last decided. */
-  private holdTimer: ReturnType<typeof setInterval> | null = null;
-  private readonly holdWas = new Map<BackendSlot, boolean>();
-
-  /** The last twenty handoffs, so a card changing hands shows on the status page. */
-  private readonly evicted: { t: number; backend: string; for: string; resources: string[] }[] = [];
+  readonly models: ModelCatalog;
+  readonly hardware: Hardware;
 
   constructor(
     private readonly cfg: HearthConfig,
-    private readonly log: Logger,
-    private readonly resumeAfterMs = RESIDENT_RESUME_MS,
+    log: Logger,
+    resumeAfterMs = RESIDENT_RESUME_MS,
   ) {
-    this.arbiter.onRelease(() => this.scheduleResume());
+    this.models = new ModelCatalog(cfg, log, this.slots, this.byName);
+    this.hardware = new Hardware(cfg, log, this.slots, resumeAfterMs);
+    const { models, hardware } = this;
     // A key's waiter may be on another backend. One microtask, so a burst of endings looks once.
     this.tally.onEnded(() => {
       if (this.kickQueued) return;
@@ -112,44 +80,33 @@ export class BackendPool {
           maxPerLane: cfg.scheduler.maxPerLane,
           resident: () => state.resident(),
           // A predicate in the backend's vocabulary, so aliased ids of a resident model are warm too.
-          warm: (m) => state.isWarm(this.outboundId(m)),
+          warm: (m) => state.isWarm(models.outboundId(m)),
           // Keyed by the id we advertise, which is what submit() puts on a job.
           // Undeclared is null, not the backend's number: the scheduler owns
           // that fallback, and answering it here would freeze the value.
-          slots: (m) => this.slotsOf(m),
-          pool: (m) => this.poolOf(m)?.tokens ?? null,
+          slots: (m) => models.slotsOf(m),
+          pool: (m) => models.poolOf(m)?.tokens ?? null,
           // Inherited from the seat an alias fronts, like slots.
-          shareAfter: (m) => this.cfg.models[m]?.shareAfterMs ?? this.cfg.models[this.outboundId(m)]?.shareAfterMs ?? 0,
+          shareAfter: (m) => this.cfg.models[m]?.shareAfterMs ?? this.cfg.models[models.outboundId(m)]?.shareAfterMs ?? 0,
           // Two ids that resolve to the same resident model ARE the same model
           // to a backend that batches; without this the scheduler sees a
           // foreign job and refuses to run them together.
-          wire: (m) => this.outboundId(m),
+          wire: (m) => models.outboundId(m),
           // Ollama serves a resident set side by side, so a model's ceiling counts its own jobs.
           coresident: KINDS[b.kind].coresident,
           onChange: () => { for (const cb of this.jobListeners) cb(); },
           // A resident never takes turns: its own requests neither wait for the card nor evict.
-          resources: b.resident ? [] : this.arbitrated(b.resources),
-          arbiter: this.arbiter,
+          resources: b.resident ? [] : hardware.arbitrated(b.resources),
+          arbiter: hardware.arbiter,
           // Ask overlapping backends to unload before we load; weights stay resident after a run.
-          evict: !b.resident && this.arbitrated(b.resources).length > 0 ? () => this.evictFor(b) : undefined,
-          heldOff: (lane) => this.heldOff(b, lane),
+          evict: !b.resident && hardware.arbitrated(b.resources).length > 0 ? () => hardware.evictFor(b) : undefined,
+          heldOff: (lane) => hardware.heldOff(b, lane),
           tally: this.tally,
         }),
       };
       this.slots.push(slot);
       this.byName.set(b.name, slot);
-      for (const r of b.routes) {
-        if (r.path.includes("{model}")) {
-          const re = new RegExp(
-            "^" + r.path.split("{model}")
-              .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-              .join("([^/]+)") + "$",
-          );
-          this.patterns.push({ slot, rule: r, re });
-        } else {
-          this.byPath.set(r.path, { slot, rule: r });
-        }
-      }
+      models.addRoutes(slot);
     }
   }
 
@@ -168,226 +125,20 @@ export class BackendPool {
     return (id) => !theirs.has(id);
   }
 
-  /**
-   * The backend that declared this request path, by exact match. `{model}` matches one segment,
-   * and only a model this backend serves, so a pattern cannot pull in unrelated traffic.
-   */
-  forPath(pathname: string): { slot: BackendSlot; rule: RouteRule } | undefined {
-    const exact = this.byPath.get(pathname);
-    if (exact) return exact;
-    for (const p of this.patterns) {
-      const m = p.re.exec(pathname);
-      if (!m) continue;
-      let model: string;
-      try {
-        model = decodeURIComponent(m[1]!);
-      } catch {
-        continue; // a malformed escape is not a model id
-      }
-      // Match the captured segment in the backend's vocabulary, so an aliased id still routes.
-      if (!this.declaredBy(p.slot, this.outboundId(model))) continue;
-      return { slot: p.slot, rule: { ...p.rule, model } };
-    }
-    return undefined;
-  }
 
-  /**
-   * A path some backend declares with a `{model}` segment, as the name standing in that segment
-   * and the same path for another name. The name need not be a model anything serves: it may be
-   * one a flow takes, to be turned into a model before the path is matched to a backend.
-   */
-  named(pathname: string): { path: string; name: string; as: (model: string) => string } | undefined {
-    for (const p of this.patterns) {
-      const m = p.re.exec(pathname);
-      if (!m) continue;
-      try {
-        return { path: p.rule.path, name: decodeURIComponent(m[1]!), as: (model) => p.rule.path.replace("{model}", encodeURIComponent(model)) };
-      } catch {
-        continue; // a malformed escape is not a name
-      }
-    }
-    return undefined;
-  }
 
-  /** Every path a backend declares, as written: what a flow may say it takes. */
-  paths(): string[] {
-    return [...this.byPath.keys(), ...this.patterns.map((p) => p.rule.path)];
-  }
 
-  /** Does this backend serve this id: declared in `serves`, else reported by it? */
-  private declaredBy(slot: BackendSlot, model: string): boolean {
-    if (slot.cfg.serves.length) return slot.cfg.serves.includes(model);
-    return slot.state.catalog().includes(model);
-  }
 
-  /**
-   * Clear every other backend off the hardware `b` just took, one at a time and within
-   * EVICT_BUDGET_MS. Anything still resident afterwards, from a refusal, an unreachable
-   * unload or a spent budget, fails the job rather than loading on top of it.
-   */
-  private async evictFor(b: BackendConfig): Promise<void> {
-    // Shared hardware never causes an eviction: that is the whole hazard this
-    // exists to remove. Six sidecars on one CPU must not unload each other.
-    const mine = this.arbitrated(b.resources);
-    const overlap = this.slots.filter(
-      (s) => s.name !== b.name && this.arbitrated(s.cfg.resources).some((r) => mine.includes(r)),
-    );
-    // Residents first and together: they are small, and their memory is what the load needs.
-    await Promise.all(overlap.filter((s) => s.cfg.resident?.yield).map((s) => this.residentCall(s, "yield", b.name)));
-    // A model still loading holds the card as surely as a loaded one.
-    const onCard = (s: BackendSlot) => s.state.resident() !== null || s.state.loading().length > 0;
-    const deadline = Date.now() + EVICT_BUDGET_MS;
-    for (const s of overlap) {
-      if (s.cfg.resident || !onCard(s)) continue;
-      if (Date.now() >= deadline) {
-        this.log.warn("pool.evict_budget", {
-          for: b.name, resources: mine, skipped: s.name, budgetMs: EVICT_BUDGET_MS,
-        });
-        break;
-      }
-      this.log.info("pool.evict", { backend: s.name, for: b.name, resources: mine });
-      this.evicted.push({ t: Date.now(), backend: s.name, for: b.name, resources: [...mine] });
-      while (this.evicted.length > 20) this.evicted.shift();
-      await s.state.unload();
-    }
-    const left = overlap.filter((s) => !s.cfg.resident && onCard(s)).map((s) => s.name);
-    if (left.length > 0) {
-      throw new Error(`${left.join(", ")} still loaded on ${mine.join(", ")}: not loading ${b.name} on top`);
-    }
-  }
 
-  /** POST a resident's yield or resume path. Best-effort: a resident that does not answer never holds up a turn. */
-  private async residentCall(s: BackendSlot, what: "yield" | "resume", forName?: string): Promise<void> {
-    const path = s.cfg.resident![what];
-    if (path === null) return;
-    try {
-      const res = await send(`${s.cfg.url}${path}`, {
-        method: "POST",
-        json: what === "yield" ? { seconds: RESIDENT_YIELD_S } : {},
-        headersTimeoutMs: 30_000,
-      });
-      res.body.resume();
-      if (!res.ok) throw new Error(`answered ${res.status}`);
-      if (what === "yield") this.yielded.add(s);
-      else this.yielded.delete(s);
-      this.log.info(`pool.${what}`, { backend: s.name, ...(forName ? { for: forName } : {}) });
-    } catch (e) {
-      this.log.warn(`pool.${what}_failed`, { backend: s.name, detail: e instanceof Error ? e.message : String(e) });
-    }
-  }
 
-  /** After a release: once the card has stayed free for resumeAfterMs, give yielded residents it back. */
-  private scheduleResume(): void {
-    if (this.yielded.size === 0) return;
-    if (this.resumeTimer) clearTimeout(this.resumeTimer);
-    this.resumeTimer = setTimeout(() => {
-      this.resumeTimer = null;
-      const held = new Set(this.arbiter.snapshot().map(([r]) => r));
-      for (const s of [...this.yielded]) {
-        // Still taken by someone's turn: their release schedules this again.
-        if (this.arbitrated(s.cfg.resources).some((r) => held.has(r))) continue;
-        void this.residentCall(s, "resume");
-      }
-    }, this.resumeAfterMs);
-    this.resumeTimer.unref?.();
-  }
 
-  /** Is `lane` kept off `b`'s hardware right now by another backend's hold? */
-  heldOff(b: BackendConfig, lane: string): boolean {
-    const mine = this.arbitrated(b.resources);
-    if (mine.length === 0) return false;
-    for (const s of this.slots) {
-      const h = s.cfg.hold;
-      if (h === null || s.name === b.name || !h.lanes.includes(lane)) continue;
-      if (!s.cfg.resources.some((r) => mine.includes(r))) continue;
-      if (this.holdActive(s)) return true;
-    }
-    return false;
-  }
 
-  /** Does another backend's app hold `b`'s hardware right now, whatever the lane? */
-  appHolds(b: BackendConfig): boolean {
-    const mine = this.arbitrated(b.resources);
-    return this.slots.some((s) =>
-      s.cfg.hold !== null && s.name !== b.name && s.cfg.resources.some((r) => mine.includes(r)) && this.holdActive(s));
-  }
 
-  /** Is this backend's hold in force: its app in use, or its seat loading (or only just loaded)? */
-  private holdActive(s: BackendSlot): boolean {
-    const h = s.cfg.hold!;
-    const loader = h.seat === null ? undefined : this.slots.find((o) => o.cfg.serves.includes(h.seat!));
-    if (loader !== undefined) {
-      if (loader.state.sinceLoading(h.seat!) < SEAT_READY_GRACE_MS) return true;
-      // A seat its swapper says is gone holds nothing, whatever the app last reported.
-      if (loader.state.knowsWarm() && !loader.state.isWarm(h.seat!)) return false;
-    }
-    return s.state.holding(h.idleMs);
-  }
 
-  /**
-   * Read a backend's activity path, unless that would start its app: a seat's own path goes
-   * through its swapper, which loads whatever it is asked for.
-   */
-  sampleActivity(s: BackendSlot): Promise<void> {
-    if (s.cfg.activity === null) return Promise.resolve();
-    const seat = s.cfg.hold?.seat ?? null;
-    if (seat !== null && s.cfg.serves.includes(seat) && !s.state.isWarm(seat)) return Promise.resolve();
-    return s.state.sampleActivity(s.cfg.activity);
-  }
 
-  /** Every declared hold and whether it is in force, for status surfaces and clients that plan around it. */
-  holds(): { backend: string; resources: string[]; lanes: string[]; idleMs: number; active: boolean; quietMs: number | null }[] {
-    return this.slots.filter((s) => s.cfg.hold !== null).map((s) => ({
-      backend: s.name,
-      resources: this.arbitrated(s.cfg.resources),
-      lanes: [...s.cfg.hold!.lanes],
-      idleMs: s.cfg.hold!.idleMs,
-      active: this.holdActive(s),
-      quietMs: s.state.quietMs(),
-    }));
-  }
 
-  /** Read each holding backend's activity path, and wake the queues when a hold starts or ends. */
-  private async sampleHolds(): Promise<void> {
-    const holders = this.slots.filter((s) => s.cfg.hold !== null);
-    await Promise.all(holders.map((s) => this.sampleActivity(s)));
-    let changed = false;
-    for (const s of holders) {
-      const now = this.holdActive(s);
-      if (now === (this.holdWas.get(s) ?? false)) continue;
-      this.holdWas.set(s, now);
-      changed = true;
-      this.log.info(now ? "pool.hold" : "pool.hold_end", { backend: s.name, lanes: s.cfg.hold!.lanes, resources: this.arbitrated(s.cfg.resources) });
-    }
-    if (changed) for (const s of this.slots) s.scheduler.kick();
-  }
 
-  /** Recent handoffs, oldest first. See `evicted`. */
-  evictions(): readonly { t: number; backend: string; for: string; resources: string[] }[] {
-    return [...this.evicted];
-  }
 
-  /** Declared hardware, who is running on it, and who competes for it. `holder` is running, not resident. */
-  resources(): { name: string; kind: "gpu" | "cpu" | "other"; shared: boolean; holder: string | null; backends: string[] }[] {
-    const held = new Map(this.arbiter.snapshot());
-    const names = [...new Set(this.slots.flatMap((s) => s.cfg.resources))].sort();
-    return names.map((name) => {
-      // An undeclared name is an exclusive gpu: that is what every config
-      // written before declarations existed meant by it, and what the arbiter
-      // has always done with it.
-      const decl = this.cfg.resources[name] ?? { kind: "gpu" as const, shared: false };
-      return {
-        name,
-        kind: decl.kind,
-        shared: decl.shared,
-        // Map the holder back to a backend name; a shared resource never has one.
-        holder: decl.shared
-          ? null
-          : this.slots.find((s) => held.get(name) === s.scheduler)?.name ?? null,
-        backends: this.slots.filter((s) => s.cfg.resources.includes(name)).map((s) => s.name),
-      };
-    });
-  }
 
   all(): BackendSlot[] {
     return [...this.slots];
@@ -406,244 +157,26 @@ export class BackendPool {
     return this.slots.length === 1;
   }
 
-  /**
-   * Which backend serves this model: a config pin, else the one catalogue listing it, else
-   * the first backend (an unlisted id may still load there).
-   */
-  for(model: string): BackendSlot {
-    const pinned = this.cfg.models[model]?.backend;
-    if (pinned) {
-      const slot = this.byName.get(pinned);
-      // Unreachable while backends are fixed at startup; warned rather than silently misrouted.
-      if (slot) return slot;
-      // Namespaced, since a backend and a model may share a name.
-      if (!this.warned.has(`pin:${pinned}`)) {
-        this.warned.add(`pin:${pinned}`);
-        this.log.warn("backend.pinned_missing", {
-          model,
-          pinned,
-          available: this.slots.map((s) => s.name),
-          // The pin is ignored and normal resolution runs.
-          hint: `ignoring the pin and resolving ${model} by catalogue — set models.${model}.backend to a real name`,
-        });
-      }
-    }
 
-    // Past the pin, compare in the backend's vocabulary, so an aliased id is found.
-    const wire = this.outboundId(model);
 
-    // A backend that declares what it serves is believed, and nothing else
-    // resolves to it. Discovery only speaks for backends that stayed quiet.
-    const declared = this.slots.find((s) => s.cfg.serves.includes(wire));
-    if (declared) return declared;
 
-    // A path with no name in it is answered by the model its route names, which is that backend's to run.
-    const routed = this.slots.find((s) => s.cfg.routes.some((r) => r.model === wire));
-    if (routed) return routed;
 
-    const claiming = this.slots.filter(
-      (s) => s.cfg.serves.length === 0 && s.state.catalog().includes(wire),
-    );
-    if (claiming.length === 1) return claiming[0]!;
-    if (claiming.length > 1) {
-      if (!this.warned.has(model)) {
-        this.warned.add(model);
-        this.log.warn("backend.ambiguous_model", {
-          model,
-          backends: claiming.map((s) => s.name),
-          chose: claiming[0]!.name,
-          hint: `set models.${model}.backend to pick one and silence this`,
-        });
-      }
-      return claiming[0]!;
-    }
-    return this.first();
-  }
 
-  /**
-   * The model a routed request is queued as: the route's model, unless the caller's id is this
-   * backend's own, so an arbitrary string never mints a queue entry.
-   */
-  routedModel(slot: BackendSlot, rule: RouteRule, asked: string | undefined): string {
-    if (asked === undefined || asked === rule.model) return rule.model;
-    return this.owns(slot, asked) ? asked : rule.model;
-  }
 
-  /** Is this id this backend's own: pinned to it, declared by it, or in its catalogue? */
-  owns(slot: BackendSlot, model: string): boolean {
-    // A pin decides it: two backends may run the same id, and a name pinned to one is not the other's.
-    const pinned = this.cfg.models[model]?.backend;
-    if (pinned && this.byName.has(pinned)) return pinned === slot.name;
-    const wire = this.outboundId(model);
-    return slot.cfg.serves.includes(wire) || slot.state.catalog().includes(wire);
-  }
 
-  /** True only when every backend declares what it serves and none names this id, so a typo can be refused. */
-  certainlyUnknown(model: string): boolean {
-    // Named in `models:` — the operator said this id means something, and
-    // `backend`/`as` may point it somewhere this check cannot see.
-    if (this.cfg.models[model]) return false;
-    // A name a flow takes, with or without a variant after it, is that flow's to answer.
-    const cut = model.lastIndexOf(":");
-    if (Object.values(this.cfg.flows).some((flow) => flow.inputs.includes(model) || (cut > 0 && flow.inputs.includes(model.slice(0, cut))))) return false;
-    const wire = this.outboundId(model);
-    for (const s of this.slots) {
-      if (s.cfg.serves.length === 0) return false;
-      if (s.cfg.serves.includes(wire) || s.cfg.serves.includes(model)) return false;
-      for (const r of s.cfg.routes) if (r.model === wire || r.model === model) return false;
-    }
-    return true;
-  }
 
-  /** The id to put on the wire for an advertised id (`as`), used by every dispatch path and catalogue comparison. */
-  outboundId(model: string): string {
-    const r = this.cfg.models[model];
-    if (r?.follow && r.backend !== null) {
-      // `as` when it is among what is loaded, so several resident models never make this arbitrary.
-      const loaded = this.byName.get(r.backend)?.state.loaded() ?? [];
-      if (loaded.length > 0 && !loaded.includes(r.as!)) return loaded[0]!;
-    }
-    return r?.as ?? model;
-  }
 
-  /** The ids configured with `follow`. */
-  private followIds(): string[] {
-    return Object.entries(this.cfg.models).filter(([, r]) => r.follow).map(([id]) => id);
-  }
 
-  /** A model's shared-context pool, inherited from the seat it fronts like its slots. */
-  private poolOf(model: string): ModelRoute["pool"] {
-    const r = this.cfg.models[model];
-    if (!r) return null;
-    return r.pool ?? (r.as === null ? null : this.cfg.models[this.outboundId(model)]?.pool ?? null);
-  }
 
-  /** What a request holds of its model's pool while it runs, or undefined without one. */
-  poolTokens(model: string, need: Need): number | undefined {
-    const p = this.poolOf(model);
-    if (!p) return undefined;
-    const output = need.output ?? 0;
-    return need.tokens - output + Math.min(output, p.output ?? output);
-  }
 
-  /** A model's slot ceiling, inherited from the seat it fronts when it declares none. */
-  private slotsOf(model: string): number | null {
-    const r = this.cfg.models[model];
-    if (!r) return null;
-    if (r.as === null) return r.concurrency;
-    return r.concurrency ?? this.cfg.models[this.outboundId(model)]?.concurrency ?? null;
-  }
 
-  /**
-   * The chat body for the backend: `as` for the id and the route's `params` over the client's.
-   * `wire` overrides the id for a peer, and params still apply. Untouched when neither is set.
-   * The `efforts` fields for the effort asked (after params) go under params: the seat's only when
-   * it runs here, a template switch being the seat's own, then the id's, which travel like params.
-   */
-  outboundBody(
-    model: string,
-    payload: Record<string, unknown>,
-    wire: string = this.outboundId(model),
-  ): Record<string, unknown> {
-    const params = this.cfg.models[model]?.params ?? null;
-    const asked = params?.reasoning_effort ?? payload.reasoning_effort;
-    const level = typeof asked === "string" ? asked : "";
-    const seat = wire === this.outboundId(model) && wire !== model ? this.cfg.models[wire]?.efforts?.[level] : undefined;
-    const own = this.cfg.models[model]?.efforts?.[level];
-    if (wire === model && params === null && seat === undefined && own === undefined) return payload;
-    return { ...payload, ...(seat ?? {}), ...(own ?? {}), ...(params ?? {}), model: wire };
-  }
 
-  /** Every advertised id for a backend's `raw` id: its aliases, plus `raw` when it is a first-class id. */
-  private advertisedIds(raw: string): string[] {
-    const ids: string[] = [];
-    for (const [id, route] of Object.entries(this.cfg.models)) {
-      if (route.as === raw && !route.follow) ids.push(id);
-    }
-    if (ids.length === 0 || this.cfg.models[raw] !== undefined) ids.push(raw);
-    return ids;
-  }
 
-  /** The id we advertise for something a backend calls `raw`. The way back
-   *  from a backend's vocabulary into ours, for anything read off the wire. */
-  advertised(raw: string): string {
-    return this.advertisedId(raw);
-  }
 
-  /** The advertised id for a backend's `raw` id, if we alias it. */
-  private advertisedId(raw: string): string {
-    // Built per call rather than cached: `models` is small, and a cache here
-    // would need invalidating on any future config reload.
-    for (const [id, route] of Object.entries(this.cfg.models)) {
-      if (route.as === raw && !route.follow) return id;
-    }
-    return raw;
-  }
-
-  /** Everything any backend could serve, deduped; a backend's declared `serves` replaces what it reports. */
-  catalog(): string[] {
-    const out = new Set<string>();
-    for (const s of this.slots) {
-      for (const m of s.cfg.serves.length ? s.cfg.serves : s.state.catalog()) {
-        // Advertise our names, never the backend's raw id behind an alias.
-        for (const id of this.advertisedIds(m)) out.add(id);
-      }
-    }
-    for (const id of this.followIds()) {
-      if (out.has(this.cfg.models[id]!.as!)) out.add(id);
-    }
-    // An id a flow takes is advertised whether or not a backend serves it: where it lands is decided per request.
-    for (const flow of Object.values(this.cfg.flows)) for (const id of flow.inputs) if (id !== ANY) out.add(id);
-    return [...out];
-  }
-
-  /** The learned context window for an advertised id, or null until it has loaded once. */
-  contextLength(model: string): number | null {
-    return this.statsFor(model)?.context ?? null;
-  }
-
-  /** Declared stats under observed ones for an advertised id; a variant falls back to its parent's declaration. */
-  statsFor(model: string): ModelStats | null {
-    const route = this.cfg.models[model];
-    const declared = route?.stats ?? (route?.as ? this.cfg.models[route.as]?.stats : null) ?? null;
-    const merged = mergeStats(declared, this.for(model).state.statsFor(this.outboundId(model)));
-    const note = this.cfg.notes?.[model] ?? (route?.as ? this.cfg.notes?.[route.as] : undefined);
-    return note ? { ...merged, note } : merged;
-  }
-
-  /** Everything warm anywhere. Several at once is normal now: one backend per
-   *  model means several models can be resident simultaneously. */
-  loaded(): string[] {
-    const out = new Set<string>();
-    for (const s of this.slots) {
-      // With `serves` declared, trust ids the backend reports when usable; otherwise the declared names.
-      if (s.cfg.serves.length) {
-        // Expand each warm id through advertisedIds: aliases of one resident model are warm together.
-        const raw = s.state.loaded();
-        const recognised = raw.filter((m) => s.cfg.serves.includes(m));
-        if (recognised.length) {
-          for (const m of recognised) for (const id of this.advertisedIds(m)) out.add(id);
-        } else if (raw.length) {
-          for (const m of s.cfg.serves) for (const id of this.advertisedIds(m)) out.add(id);
-        }
-        continue;
-      }
-      // Translated too, and this one is NOT cosmetic: warm state feeds the
-      // scheduler's warm bonus and the "ready now" set. Left raw, an aliased
-      // model would read as permanently cold and quietly lose its priority.
-      for (const m of s.state.loaded()) for (const id of this.advertisedIds(m)) out.add(id);
-    }
-    // A follow id goes out as whatever is resident, so it costs no load while
-    // anything is.
-    for (const id of this.followIds()) {
-      if (this.byName.get(this.cfg.models[id]!.backend!)?.state.resident()) out.add(id);
-    }
-    return [...out];
-  }
 
   /** Capacity for one model: that of the backend serving it. */
   capacityFor(model: string): ModelCapacity {
-    const slot = this.for(model);
+    const slot = this.models.for(model);
     // Per model, not the backend's flat number: a batching model can take work
     // the backend as a whole looks too busy for, and a peer deciding where to
     // send a job is exactly who needs to know that.
@@ -656,7 +189,7 @@ export class BackendPool {
       // asked in the backend's vocabulary.
       warm: slot.cfg.serves.length
         ? slot.state.loaded().length > 0
-        : slot.state.isWarm(this.outboundId(model)),
+        : slot.state.isWarm(this.models.outboundId(model)),
     };
   }
 
@@ -673,7 +206,7 @@ export class BackendPool {
     const raw = slot.state.resident();
     if (raw === null) return base;
     // Asked under the advertised id; aliases of one seat inherit the same ceiling.
-    const c = slot.scheduler.capacityFor(this.advertisedId(raw));
+    const c = slot.scheduler.capacityFor(this.models.advertised(raw));
     return c.free < base.free || c.slots < base.slots ? c : base;
   }
 
@@ -694,7 +227,7 @@ export class BackendPool {
       offbox += c.offbox;
       for (const [lane, n] of Object.entries(c.queued)) queued[lane] = (queued[lane] ?? 0) + n;
     }
-    return { slots, free, running, offbox, queued, resident: this.loaded()[0] ?? null };
+    return { slots, free, running, offbox, queued, resident: this.models.loaded()[0] ?? null };
   }
 
   /** Give every backend's scheduler these lanes and order settings. Pair with `kickAll`. */
@@ -716,11 +249,7 @@ export class BackendPool {
 
   start(): void {
     for (const s of this.slots) s.state.start();
-    if (this.slots.some((s) => s.cfg.hold !== null)) {
-      this.holdTimer = setInterval(() => void this.sampleHolds(), HOLD_POLL_MS);
-      this.holdTimer.unref?.();
-      void this.sampleHolds();
-    }
+    this.hardware.start();
   }
 
   private readonly jobListeners = new Set<() => void>();
@@ -733,7 +262,6 @@ export class BackendPool {
 
   stop(): void {
     for (const s of this.slots) s.state.stop();
-    if (this.holdTimer) clearInterval(this.holdTimer);
-    this.holdTimer = null;
+    this.hardware.stop();
   }
 }
