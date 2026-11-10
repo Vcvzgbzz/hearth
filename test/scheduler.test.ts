@@ -270,6 +270,21 @@ function holdSlot(s: Scheduler, order: string[]) {
   assert.ok(seen.includes(1), `positions seen: ${seen.join(",")}`);
 }
 
+// --- positions rank by score, and equal scores share a place ---------------
+{
+  const s = new Scheduler({ lanes, agePerSecond: 0 });
+  const slot = holdSlot(s, []);
+  await slot.started;
+  const pos: Record<string, number> = {};
+  const jobs = (["batch", "chat", "chat"] as const).map((lane, i) =>
+    s.submit({ lane, model: "m", caller: `c${i}`, onPosition: (p) => (pos[`c${i}`] = p) }, async () => {}),
+  );
+  assert.deepEqual(pos, { c0: 3, c1: 1, c2: 1 }, "two tied chat turns behind the blocker, batch behind both");
+  assert.deepEqual(s.view().filter((j) => j.state === "queued").map((j) => j.position), [3, 1, 1], "and /queue agrees");
+  slot.release();
+  await Promise.all(jobs);
+}
+
 // --- capacity is what a peer polls -----------------------------------------
 {
   const s = new Scheduler({ lanes, concurrency: 1, resident: () => "m" });
