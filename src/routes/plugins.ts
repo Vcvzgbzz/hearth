@@ -13,6 +13,12 @@ import { resolve } from "../route.js";
 import { send } from "../upstream.js";
 import type { Call, RouteContext } from "./context.js";
 
+/**
+ * How long a plugin's service has to accept the connection. A service on the network accepts in milliseconds;
+ * one that is gone would otherwise hold the caller for as long as the OS keeps trying, before its fallback is asked.
+ */
+const PLUGIN_CONNECT_MS = 3_000;
+
 export function pluginRoutes(ctx: RouteContext) {
   const { cfg, log, plugins, callers, worlds, readJson, readBody } = ctx;
 
@@ -61,16 +67,20 @@ export function pluginRoutes(ctx: RouteContext) {
       json(res, refused !== null ? 403 : 404, { error: refused ?? `no plugin named ${asked} serves an API here, and no rule gives that name to one` });
       return;
     }
+    const path = m?.[2] ?? "/";
+    // The plugin that answers if this one cannot: it serves the same API, so it is sent the same request.
+    const fb = plugins.fallbackOf(name);
     const to = plugins.serve(name);
-    if ("why" in to) {
+    if ("why" in to && fb === null) {
       json(res, to.status, { error: to.why });
       return;
     }
+    const done = "why" in to ? () => {} : to.done;
     let body: Buffer | undefined;
     try {
       body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
     } catch (e) {
-      to.done(false);
+      done(false);
       fail(res, e);
       return;
     }
@@ -83,33 +93,82 @@ export function pluginRoutes(ctx: RouteContext) {
       log.info("plugin.served", { plugin: name, method: req.method, path: m?.[2] ?? "/", status: a.status, caller: c.caller, ms: Date.now() - t0 });
       return;
     }
-    const headers = callers.headersFor(req) as Record<string, string>;
-    delete headers["x-hearth-caller"];
-    // The plugin's own key and headers replace a caller's of the same name.
-    for (const h of Object.keys(headers)) if (h.toLowerCase() in to.auth) delete headers[h];
-    Object.assign(headers, to.auth);
-    headers["x-hearth-caller"] = c.caller;
     const ctrl = new AbortController();
     res.on("close", () => { if (!res.writableEnded) ctrl.abort(); });
     const t0 = Date.now();
-    try {
-      const up = await send(`${to.url}${m?.[2] ?? "/"}${url.search}`, {
+    const call = (target: { url: string; auth: Record<string, string> }, at: string, search: string) => {
+      const headers = callers.headersFor(req) as Record<string, string>;
+      delete headers["x-hearth-caller"];
+      // The plugin's own key and headers replace a caller's of the same name.
+      for (const h of Object.keys(headers)) if (h.toLowerCase() in target.auth) delete headers[h];
+      Object.assign(headers, target.auth);
+      headers["x-hearth-caller"] = c.caller;
+      return send(`${target.url}${at}${search}`, {
         method: req.method ?? "GET",
         ...(body && body.length > 0 ? { raw: body } : {}),
         headers,
         signal: ctrl.signal,
+        connectTimeoutMs: PLUGIN_CONNECT_MS,
         ...(cfg.backendFirstByteMs > 0 ? { headersTimeoutMs: cfg.backendFirstByteMs } : {}),
       });
-      to.done(up.status < 500);
+    };
+    const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    // Why this plugin did not answer, when its fallback is asked instead.
+    let failure: string;
+    if ("why" in to) failure = to.why;
+    else {
+      try {
+        const up = await call(to, path, url.search);
+        if (fb !== null && (up.status >= 500 || up.status === 429)) {
+          to.done(false);
+          up.body.resume();
+          failure = `it answered ${up.status}`;
+        } else {
+          to.done(up.status < 500);
+          res.writeHead(up.status, forwardable(up.headers));
+          await pipeline(up.body, res);
+          log.info("plugin.served", { plugin: name, method: req.method, path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+          return;
+        }
+      } catch (e) {
+        to.done(false);
+        // A caller that hung up mid-stream is the end of the exchange, not a failure of the service.
+        if (ctrl.signal.aborted) return;
+        log.warn("plugin.serve_failed", { plugin: name, path, error: said(e) });
+        // Once an answer has begun there is no taking it back, so only a plugin that never answered falls back.
+        if (res.headersSent) { res.destroy(); return; }
+        if (fb === null) { json(res, 502, { error: `plugin ${name} could not be reached: ${said(e)}` }); return; }
+        failure = said(e);
+      }
+    }
+    // The caller's router is asked about the fallback as about any plugin: one it would not send this caller to
+    // does not answer in its place, so a fallback is never a way past a refusal.
+    const fbKind = plugins.kindOf(fb!.plugin);
+    const open = fbKind !== null && resolve(`${fbKind}:${fb!.plugin}`, { ...world, plugin: fb!.plugin }).plugin === fb!.plugin;
+    if (!open) {
+      log.info("plugin.fallback_refused", { plugin: name, to: fb!.plugin, why: failure, caller: c.caller });
+      json(res, 502, { error: `plugin ${name} could not answer (${failure}), and its fallback ${fb!.plugin} is not open to this caller` });
+      return;
+    }
+    // A fallback is one hop: it answers with its own API, and its own fallback is not followed.
+    const alt = plugins.serve(fb!.plugin);
+    log.info("plugin.fallback", { plugin: name, to: fb!.plugin, why: failure, caller: c.caller });
+    if ("why" in alt || "stdio" in alt) {
+      if ("done" in alt) alt.done(false);
+      json(res, 502, { error: `plugin ${name} could not answer (${failure}), and neither could its fallback ${fb!.plugin}${"why" in alt ? `: ${alt.why}` : ""}` });
+      return;
+    }
+    try {
+      const up = await call(alt, path, url.search);
+      alt.done(up.status < 500);
       res.writeHead(up.status, forwardable(up.headers));
       await pipeline(up.body, res);
-      log.info("plugin.served", { plugin: name, method: req.method, path: m?.[2] ?? "/", status: up.status, caller: c.caller, ms: Date.now() - t0 });
+      log.info("plugin.served", { plugin: fb!.plugin, for: name, method: req.method, path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
     } catch (e) {
-      to.done(false);
-      // A caller that hung up mid-stream is the end of the exchange, not a failure of the service.
+      alt.done(false);
       if (ctrl.signal.aborted) return;
-      log.warn("plugin.serve_failed", { plugin: name, path: m?.[2] ?? "/", error: e instanceof Error ? e.message : String(e) });
-      if (!res.headersSent) json(res, 502, { error: `plugin ${name} could not be reached: ${e instanceof Error ? e.message : String(e)}` });
+      log.warn("plugin.serve_failed", { plugin: fb!.plugin, for: name, path, error: said(e) });
+      if (!res.headersSent) json(res, 502, { error: `plugin ${name} could not answer (${failure}), and its fallback ${fb!.plugin} failed: ${said(e)}` });
       else res.destroy();
     }
   }

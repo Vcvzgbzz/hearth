@@ -372,9 +372,11 @@ plugins:
 ```
 
 - **`/plugins/<name>/<path>`** goes to `<serves>/<path>` with the query, method, headers and body as sent,
-  and the service's answer comes back as it is written. The service has `backendDefaults.firstByteMs` to start
-  answering (502 if it does not); after that there is no deadline, so a stream it holds open (server-sent
-  events, an MCP session) stays open until one side closes it.
+  and the service's answer comes back as it is written. The service has 3 seconds to accept the connection and
+  `backendDefaults.firstByteMs` to start answering (502 if it does not); after that there is no deadline, so a
+  stream it holds open (server-sent events, an MCP session) stays open until one side closes it. The connect
+  deadline is short so a host that is gone fails, or falls back, at once; a service on the network accepts in
+  milliseconds.
 - **Callers are let in as on `/v1`**: this machine, or one of `apiKeys`. A peer never is, and neither is a key
   scoped to `models:`. The caller's router then decides, as it does for a model: the request is asked of it
   as `API:<name>` (or `MCP:<name>`), so it can let a plugin through, send it to another, or refuse it. With
@@ -395,6 +397,34 @@ plugins:
 - **In the console** each one is a box under the router on the Topology map, in a Plugins frame, since callers
   reach it through this node as they reach a backend; a click opens it on the Plugins page, which says where
   its path goes and how many requests it has served.
+
+### A fallback
+
+`fallback` names another plugin that answers when this one cannot, as a backend route's `fallback` does for a
+model. The fallback serves the same API and is sent the same request: the same method, path, query and body.
+It is set on the plugin, and the caller's router is asked about it as about the plugin itself (below).
+
+```yaml
+plugins:
+  crawler:
+    serves: http://crawler:8080
+    trust: http
+    fallback: crawler-2                  # or { plugin: crawler-2 }
+  crawler-2:
+    serves: http://crawler-2:8080
+    trust: http
+```
+
+- **It is asked when the plugin cannot answer**: it cannot be reached (within 3 seconds) or does not start answering in time, it
+  answers 5xx or 429, or it is paused or did not start. A 4xx is the plugin's answer and is passed on. A
+  plugin that has begun answering is not replaced partway.
+- **One hop.** The fallback answers with its own API; its own `fallback` is not followed.
+- **The caller's router decides about the fallback too.** It is asked about the fallback as about any plugin
+  ([Plugins on the router](routing.md#plugins-on-the-router)); a caller it would not send to the fallback gets the
+  plugin's own failure (502), so a fallback is never a way past a refusal.
+- Only a plugin that serves an API other than MCP has a fallback, and only such a plugin is one.
+- The log says `plugin.fallback` with why; the Routing map draws "↳ falls back to" on the plugin's box, and
+  the Plugins page sets it.
 
 ## A plugin that speaks MCP
 

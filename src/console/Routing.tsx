@@ -123,7 +123,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     const p = servingKind(name);
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
-      data: { title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}` } satisfies Dest,
+      data: { title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }) } satisfies Dest,
     });
     y += 56;
   }
@@ -294,7 +294,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     return e.source.startsWith("flow:") ? top + RULE.head + n * RULE.row + RULE.row / 2 : top + 50 + n * SIDE.place + SIDE.place / 2;
   };
   const free = nodes.filter((n) => n.type === "dest" && !placed(n.id));
-  const level = besideLines(free.map((n) => n.id), (id) => edges.filter((e) => e.target === id).map(leaves), 60);
+  // A box that says where it falls back to is a line taller.
+  const room = new Map(free.map((n) => [n.id, (n.data as Dest).fallback ? 82 : 60]));
+  const level = besideLines(free.map((n) => n.id), (id) => edges.filter((e) => e.target === id).map(leaves), (id) => room.get(id) ?? 60);
   for (const n of free) n.position = { x: n.position.x, y: level.get(n.id) ?? n.position.y };
   return { nodes, edges, rides };
 }

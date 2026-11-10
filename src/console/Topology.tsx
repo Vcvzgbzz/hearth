@@ -801,7 +801,7 @@ function layout(d: UiData, sel: { kind: string; id: string } | null, who: Who = 
           data: {
             title: p.name, icon: <Plug size={14} />, tone: out ? "bad" : p.paused ? "warn" : mcp?.error && said === "not answering" ? "warn" : "ok",
             sub: out ? (p.error ?? "did not start") : p.paused ? "paused" : [at, said, p.served.calls ? `${p.served.calls} served${p.served.errors ? `, ${p.served.errors} failed` : ""}` : null].filter(Boolean).join(" · "),
-            tip: `${at} goes to ${p.run ?? p.serves}.${mcp?.error && said === "not answering" ? ` Its MCP server: ${mcp.error}.` : ""} Click to open it on the Plugins page.`,
+            tip: `${at} goes to ${p.run ?? p.serves}.${mcp?.error && said === "not answering" ? ` Its MCP server: ${mcp.error}.` : ""}${p.fallback ? ` When it cannot answer, ${p.fallback.plugin} does.` : ""} Click to open it on the Plugins page.`,
           } satisfies Card,
         });
       });
