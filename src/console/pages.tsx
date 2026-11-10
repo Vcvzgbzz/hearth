@@ -1,12 +1,12 @@
 /** The pages beside the topology, and the inspector sheet that opens over it. */
-import { ChevronRight, Trash2, X } from "lucide-react";
+import { ChevronRight, Link2, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 
 import type { UiData, Used } from "../observe/uidata.js";
 import { Refs, refsOf, Value } from "./config.js";
 import { draftView, isObj, obj, put } from "./draft.js";
 import { change, useEdit } from "./editStore.js";
-import { control, doneWithKey, evict, go, select, useStore, warm } from "./store.js";
+import { control, copyLink, doneWithKey, evict, go, select, useLink, useStore, warm, type Sel } from "./store.js";
 import { ago, Button, Card, cx, Dialog, Empty, mono, Pill, Switch, type Tone } from "./ui.js";
 
 const selfOf = (d: UiData) => d.net.nodes.find((n) => n.self)!;
@@ -70,6 +70,19 @@ export function Inspector() {
   const draft = useEdit((s) => s.draft);
   const err = useEdit((s) => s.err);
   const editable = draft !== null;
+  const settled = useEdit((s) => s.draft !== null || s.unread !== null);
+  // `self`, or `<kind>:<name>`; something only in the draft can be linked once the draft is read.
+  useLink(sel ? [sel.kind === "self" ? "self" : `${sel.kind}:${sel.id}`] : [], settled, ([at = ""]) => {
+    const [kind = "", ...rest] = at.split(":");
+    const id = rest.join(":");
+    const d = draft ? draftView(draft, live) : live;
+    const backends = selfOf(d).backends ?? [];
+    const found: Record<string, boolean> = {
+      self: id === "", peer: d.net.nodes.some((n) => !n.self && n.name === id), backend: backends.some((b) => b.name === id),
+      resource: (d.net.resources ?? []).some((r) => r.name === id), machine: id !== "" && (id in obj(draft?.servers) || backends.some((b) => b.server === id)),
+    };
+    if (found[kind] === true) select({ kind: kind as NonNullable<Sel>["kind"], id: kind === "self" ? selfOf(d).name : id });
+  });
   if (!sel) return null;
   // What is drawn is the draft where there is one, so something added or moved can be opened before it is published.
   const d = draft ? draftView(draft, live) : live;
@@ -163,7 +176,7 @@ export function Inspector() {
     <aside className={cx("shrink-0 overflow-auto border-l border-line bg-panel p-4 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-10", isObj(entry) ? "w-[440px]" : "w-[340px]")}>
       <div className="mb-2 flex items-center">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind === "resource" ? "hardware" : sel.kind}</div>
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-dim">{sel.kind === "self" ? "this node" : sel.kind === "resource" ? "hardware" : sel.kind}{navigator.clipboard && <button className="hover:text-fg" aria-label="copy a link to this" title="copy a link to this" onClick={copyLink}><Link2 size={12} /></button>}</div>
           <div className="text-base font-semibold">{title}</div>
         </div>
         {/* What it is doing is here; what it is set to is the same node's settings. */}

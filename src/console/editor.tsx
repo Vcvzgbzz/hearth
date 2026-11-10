@@ -8,10 +8,10 @@ import { Fragment, useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
 import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
+import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
-import { sendTest, useStore, type Ran } from "./store.js";
+import { sendTest, useLink, useStore, type Ran } from "./store.js";
 import { Button, cx, Dialog, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
@@ -172,6 +172,16 @@ export function EditBar() {
   const { draft, err, plan, past, future, unread, adding, router } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
+  const ruleOpen = useEdit((s) => (s.opened && s.sel?.kind === "flow" ? s.sel.id : null));
+  // `<router>` (`default` for the rules everyone goes by), then `rule:<name>` while a rule is open in its dialog.
+  useLink(router === null && ruleOpen === null ? [] : [router ?? "default", ...(ruleOpen === null ? [] : [`rule:${ruleOpen}`])], draft !== null || unread !== null, ([r, rule]) => {
+    const full = whole(useEdit.getState());
+    if (!full || r === undefined || (r !== "default" && !isObj(obj(full.routers)[r]))) return;
+    const to = r === "default" ? null : r;
+    if (to !== useEdit.getState().router) showRouter(to);
+    const name = rule?.startsWith("rule:") ? rule.slice(5) : null;
+    if (name !== null && isObj(obj(useEdit.getState().draft?.flows)[name])) openRule(name);
+  });
   // The map's keys, from anywhere on the page unless something is being typed into or a list is open:
   // "/" searches, Delete takes out what is selected, and copy, paste, duplicate and undo are where they always are.
   useEffect(() => {

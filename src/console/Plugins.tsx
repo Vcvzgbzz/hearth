@@ -3,7 +3,7 @@
  * runs on and how it is doing, with a panel to wire its models and pause it. Where a plugin runs is
  * decided on the Routing map, where it is a block on a line; this page links to each.
  */
-import { AlertTriangle, CircleDashed, Lock, Pause, ShieldAlert, X, XCircle } from "lucide-react";
+import { AlertTriangle, CircleDashed, Link2, Lock, Pause, ShieldAlert, X, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AddPlugin } from "./AddPlugin.js";
@@ -11,7 +11,7 @@ import { Review, type File, type Plan } from "./config.js";
 import { showRouter } from "./editStore.js";
 import { modelsOfKind } from "./flowNodes.js";
 import type { PluginStage, PluginView, PluginsView } from "../observe/uidata.js";
-import { go, openYaml, pausePlugin, refresh, request, toast, useStore } from "./store.js";
+import { copyLink, go, openYaml, pausePlugin, refresh, request, toast, useLink, useStore } from "./store.js";
 import { Button, Card, cx, mono, Switch } from "./ui.js";
 
 const NO_MODELS: string[] = [];
@@ -124,6 +124,7 @@ function Panel({ p, pv, onClose, onWire, onFallback }: { p: PluginView; pv: Plug
     <aside className="flex w-[26rem] shrink-0 flex-col self-start overflow-hidden rounded-xl border border-line bg-panel max-lg:fixed max-lg:inset-0 max-lg:z-30 max-lg:w-full max-lg:self-stretch max-lg:rounded-none">
       <div className="flex items-center gap-2 border-b border-line px-4 py-3">
         <span className="text-[15px] font-semibold">{p.name}</span>
+        {navigator.clipboard && <button className="text-dim hover:text-fg" aria-label="copy a link to this plugin" title="copy a link to this plugin" onClick={copyLink}><Link2 size={13} /></button>}
         <span className="text-[11px]"><Tier p={p} /></span>
         {p.locked && <span className="flex items-center gap-1 text-[11px] text-dim"><Lock size={11} />locked</span>}
         <span className="ml-auto" />
@@ -291,6 +292,7 @@ export function Plugins() {
   const [plan, setPlan] = useState<Plan | null>(null);
   useEffect(() => () => useStore.setState({ plugin: null }), []);
   const pick = (name: string | null) => useStore.setState({ plugin: name });
+  useLink(picked ? [picked] : [], true, ([name]) => { if (pv?.plugins.some((p) => p.name === name)) pick(name!); });
 
   if (!pv) return <Card className="p-6 text-center text-dim">This hearth does not report plugins.</Card>;
   if (pv.plugins.length === 0 && pv.pending.length === 0) return <><EmptyState onAdd={() => setAdding(true)} />{adding && <AddPlugin onClose={() => setAdding(false)} />}</>;

@@ -109,6 +109,24 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   second form for the same keys. The section stays in place, so that an old habit
   lands somewhere.
 
+The address names the page and what is selected on it, so a link lands on the
+thing itself and Back returns to the page before. Each part after the page is
+URI-encoded:
+
+| address | opens |
+|---|---|
+| `#topology/self`, `#topology/backend:<name>` (also `peer:`, `resource:`, `machine:`) | that box's details on the Topology map |
+| `#plugins/<name>` | that plugin's panel |
+| `#keys/<label>` | that key, opened |
+| `#routing/<router>`, `#routing/<router>/rule:<name>` | that router's map (`default` for the rules everyone goes by), and that rule's dialog |
+| `#config/<tab>` | that section of the Config page, or `yaml` for the text |
+| `#scheduler/lane:<name>`, `#scheduler/order:<setting>` | that lane or order setting in the Scheduler's inspector |
+
+Selecting something rewrites the address without adding to the history;
+changing page adds an entry. A link to something that does not exist opens the
+page with nothing selected. The details on Topology and a plugin's panel have a
+link button that copies the address.
+
 Behind the Models, Keys, Lending and Scheduler pages a faint ASCII smoke rises,
 and beside the Topology and Routing maps it rises behind the sidebar instead,
 thicker and quicker the more the node has queued and running. The load is a

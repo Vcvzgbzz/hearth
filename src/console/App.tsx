@@ -10,7 +10,7 @@ import { Scheduler } from "./Scheduler.js";
 import { NodeSmoke } from "./Smoke.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "../observe/uidata.js";
-import { go, login, logout, openPlugin, pageOf, restartNode, select, useStore, type Page } from "./store.js";
+import { followLink, go, login, logout, openPlugin, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
 import { changes, useSched } from "./schedStore.js";
@@ -377,9 +377,8 @@ export default function App() {
 
   useEffect(() => {
     // `go` has already moved the page and may have picked something on it since: only a page change that came from the address clears the selection.
-    const onHash = () => { if (pageOf() !== useStore.getState().page) useStore.setState({ page: pageOf(), sel: null }); };
-    addEventListener("hashchange", onHash);
-    return () => removeEventListener("hashchange", onHash);
+    addEventListener("hashchange", followLink);
+    return () => removeEventListener("hashchange", followLink);
   }, []);
 
   // Signed out, nothing else works: the card is the whole page.

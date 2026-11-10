@@ -9,7 +9,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { keyLines, lineDiff, opsBetween, type Op } from "./diff.js";
 import { FIELDS, fieldAt, humanMs, scopeOf, seedOf, type Field, type Ref, type Scope } from "../config/fields.js";
 import { changed, choose, useEdit } from "./editStore.js";
-import { go, request, RequestError, toast, useStore } from "./store.js";
+import { go, request, RequestError, toast, useLink, useStore } from "./store.js";
 import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";
 
 import type { File } from "../observe/uidata.js";
@@ -641,6 +641,7 @@ export function Config({ versions }: { versions?: ReactNode } = {}) {
   const pending = useEdit(changed);
   const [file, setFile] = useState<File | null>(null);
   const [tab, setTab] = useState<string>(() => (useStore.getState().yamlAt ? "yaml" : "backends"));
+  useLink([tab], true, ([t]) => { if (t === "yaml" || SECTIONS.some((s) => s.key === t)) setTab(t!); });
   const yamlBox = useRef<HTMLTextAreaElement>(null);
   const [drafts, setDrafts] = useState<Record<string, unknown>>({});
   const [renames, setRenames] = useState<Record<string, Op[]>>({});

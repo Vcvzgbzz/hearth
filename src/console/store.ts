@@ -2,9 +2,10 @@
  * Live state: /ui/events pushes a snapshot then top-level patches; /ui/data is polled if the
  * stream never delivers. Components select narrow slices, so one tick re-renders only what moved.
  */
+import { useEffect } from "react";
 import { create } from "zustand";
 
-import { pageFor } from "./knobs.js";
+import { linkOf, parseLink, type Page } from "./link.js";
 import type { UiData } from "../observe/uidata.js";
 
 const KEY_STORE = "hearth.apikey";
@@ -19,10 +20,10 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "scheduler", "logs", "config"] as const;
-export type Page = (typeof PAGE_IDS)[number];
+export { PAGE_IDS, type Page } from "./link.js";
 /** The page the address names, an old `#queue` link included; anything else is the first one. */
-export const pageOf = (): Page => PAGE_IDS.find((p) => p === pageFor(location.hash.slice(1))) ?? "topology";
+export const pageOf = (): Page => parseLink(location.hash).page;
+const linkNow = (): string[] | null => { const { rest } = parseLink(location.hash); return rest.length ? rest : null; };
 export type Sel = { kind: "self" | "peer" | "backend" | "resource" | "machine"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 
@@ -47,6 +48,8 @@ interface State {
   yamlAt: string[] | null;
   /** A key just minted or rotated: its plaintext, to be shown once and then let go. */
   fresh: { label: string; key: string; rotated?: boolean } | null;
+  /** What the address names past its page, until that page has applied it. */
+  link: string[] | null;
 }
 
 export const useStore = create<State>(() => ({
@@ -61,14 +64,40 @@ export const useStore = create<State>(() => ({
   plugin: null,
   yamlAt: null,
   fresh: null,
+  link: linkNow(),
   toast: null,
   askKey: null,
 }));
 
 export const go = (page: Page) => {
   location.hash = page;
-  useStore.setState({ page, sel: null });
+  useStore.setState({ page, sel: null, link: null });
 };
+/** Back, Forward or a pasted link: a new page clears the selection, and what the address names is applied by its page. */
+export const followLink = () => useStore.setState(pageOf() !== useStore.getState().page ? { page: pageOf(), sel: null, link: linkNow() } : { link: linkNow() });
+/** Name what is selected on this page in the address, without a history entry. */
+const mark = (rest: string[]) => {
+  const at = linkOf(useStore.getState().page, ...rest);
+  if (location.hash !== at) history.replaceState(history.state, "", at);
+};
+/**
+ * Keep the address naming `here`, what the page has selected, and once `ready` hand a link to this page to
+ * `apply`, which selects what it names if that exists; the address is then rewritten to what is selected.
+ */
+export function useLink(here: string[], ready: boolean, apply: (rest: string[]) => void): void {
+  const link = useStore((s) => s.link);
+  const at = JSON.stringify(here);
+  useEffect(() => {
+    if (link) {
+      if (!ready) return;
+      useStore.setState({ link: null });
+      apply(link);
+    }
+    mark(here);
+  }, [link, ready, at]);
+}
+/** Copy this page's address, which names what is selected on it. */
+export const copyLink = () => void navigator.clipboard.writeText(location.href).then(() => toast("ok", "link copied"), () => {});
 export const select = (sel: Sel) => useStore.setState({ sel });
 /** Open a plugin on the Plugins page, from wherever it was named. */
 export const openPlugin = (name: string) => { go("plugins"); useStore.setState({ plugin: name }); };
