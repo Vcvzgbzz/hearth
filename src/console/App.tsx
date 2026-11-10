@@ -472,10 +472,10 @@ export default function App() {
                 {/* The strip stands over the map, not on it: nothing drawn is ever under it. */}
                 <div className="flex min-w-0 flex-1 flex-col">
                   <EditBar />
+                  <Replay />
                   <div className="relative min-h-0 flex-1">
                     {/* Its own instance: the two pictures share nothing but the node they draw. */}
                     <Routing />
-                    <Replay />
                   </div>
                   <Picker />
                   <Menu />

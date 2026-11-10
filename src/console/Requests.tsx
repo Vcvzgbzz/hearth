@@ -40,12 +40,12 @@ export async function replayId(id: string): Promise<void> {
 
 const clock = (t: number) => new Date(t).toLocaleTimeString();
 
-/** The slim strip over the Routing map while a request is replayed on it. */
+/** The slim strip above the Routing map, under the edit bar, while a request is replayed on it. */
 export function Replay() {
   const t = useEdit((s) => (s.trial ? null : s.replay));
   if (!t) return null;
   return (
-    <div className="absolute left-1/2 top-2 z-10 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border border-accent/50 bg-panel px-3 py-1.5 text-[12px] shadow">
+    <div className="mx-3 mt-2 flex items-center gap-2 rounded-xl border border-accent/50 bg-panel px-3 py-1.5 text-[12px] shadow-sm">
       <span className="min-w-0 truncate">Replaying <span className={mono}>{t.asked}</span> from {t.caller}, {clock(t.t)} — {verdict(t)}</span>
       <button type="button" className="shrink-0 text-accent hover:underline" onClick={() => openTrace(t.id)}>open trace</button>
       <button type="button" aria-label="stop replaying" title="stop replaying" className="shrink-0 text-dim hover:text-fg" onClick={() => replay(null)}><X size={13} /></button>
