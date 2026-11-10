@@ -826,8 +826,8 @@ export const held = (fresh: Node[], now: Node[], dragging: string | null): Node[
 
 /** Arrive fitted, and never drawn too small to read: a big picture is panned across, not squinted at. `top` is what a strip over the picture covers. */
 export function arrive(rf: ReactFlowInstance, top = 84): void {
-  setTimeout(() => {
-    void rf.fitView({ padding: 0.06, minZoom: 0.7, maxZoom: 1 });
+  setTimeout(async () => {
+    await rf.fitView({ padding: 0.06, minZoom: 0.7, maxZoom: 1 });
     // A picture too big to fit starts from its top left, clear of the strip above it, not from its middle.
     const box = rf.getNodesBounds(rf.getNodes());
     const v = rf.getViewport();

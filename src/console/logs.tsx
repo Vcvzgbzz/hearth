@@ -5,15 +5,11 @@
 import { ChevronRight, Download } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { failed, keysOf, passes, type LogEntry } from "./logfilter.js";
 import { downloadReport } from "./store.js";
 import { Button, Card, cx, Empty, mono, Pill, type Tone } from "./ui.js";
 
-export interface LogEntry {
-  t: string;
-  level: "debug" | "info" | "warn" | "error";
-  msg: string;
-  fields: Record<string, unknown>;
-}
+export type { LogEntry };
 
 const ms = (v: unknown) => (typeof v !== "number" ? "?" : v < 1000 ? `${v}ms` : `${(v / 1000).toFixed(v < 10_000 ? 1 : 0)}s`);
 const s = (v: unknown) => (v === undefined || v === null ? "?" : String(v));
@@ -86,7 +82,7 @@ export function Logs() {
   const [requests, setRequests] = useState(true);
   const [model, setModel] = useState("");
   const [q, setQ] = useState("");
-  const [open, setOpen] = useState<number | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     const load = async () => {
@@ -105,8 +101,9 @@ export function Logs() {
   // The models a filter could name: every one that has a line, newest line wins nothing — the set is the set.
   const models = [...new Set((entries ?? []).map((e) => e.fields.model).filter((m): m is string => typeof m === "string" && m !== ""))].sort();
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = (entries ?? []).map((e, i) => ({ e, i, text: say(e) })).reverse().filter(({ e, text }) =>
-    (level === "all" || (level === "warn" ? e.level !== "info" && e.level !== "debug" : e.level === "error"))
+  const keys = keysOf(entries ?? []);
+  const shown = (entries ?? []).map((e, i) => ({ e, i: keys[i]!, text: say(e) })).reverse().filter(({ e, text }) =>
+    passes(e, level)
     && (requests || e.msg !== "request")
     && (model === "" || e.fields.model === model)
     && words.every((w) => `${text} ${e.msg}`.toLowerCase().includes(w)));
@@ -148,7 +145,8 @@ export function Logs() {
                   <ChevronRight size={12} className={cx("mt-1 shrink-0 text-dim transition-transform", open === i && "rotate-90")} />
                   <span className="tabular w-32 shrink-0 text-[12px] text-dim">{when(e.t)}</span>
                   <span className={cx("min-w-0 flex-1 text-[13px]", e.level === "error" && "text-bad")}>
-                    {e.level !== "info" && <span className="mr-2"><Pill tone={TONE[e.level]}>{e.level}</Pill></span>}{text}
+                    {failed(e) && e.level === "info" ? <span className="mr-2"><Pill tone="warn">failed</Pill></span>
+                      : e.level !== "info" && <span className="mr-2"><Pill tone={TONE[e.level]}>{e.level}</Pill></span>}{text}
                   </span>
                 </button>
                 {open === i && (
@@ -158,6 +156,7 @@ export function Logs() {
                 )}
               </li>
             ))}
+            {shown.length > 1000 && <li className="px-4 py-1.5 text-[12px] text-dim">showing the newest 1,000 of {shown.length.toLocaleString()}</li>}
           </ul>
         )}
       </div>

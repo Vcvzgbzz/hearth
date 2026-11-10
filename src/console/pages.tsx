@@ -241,11 +241,11 @@ export function Models() {
   const state = (m: string): [Tone, string] =>
     types.has(m) ? ["accent", "type"] : hosted.has(m) ? ["dim", "hosted"]
     : d.net.readyNow.includes(m) ? ["ok", "warm"] : (d.net.unknownWarm ?? []).includes(m) ? ["dim", "unknown"] : ["info", "cold"];
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string[]>([]);
   const act = (k: string, fn: () => Promise<void>): void => {
-    if (busy !== null) return;
-    setBusy(k);
-    void fn().finally(() => setBusy(null));
+    if (busy.includes(k)) return;
+    setBusy((b) => [...b, k]);
+    void fn().finally(() => setBusy((b) => b.filter((x) => x !== k)));
   };
   return (
     <Card className="overflow-hidden">
@@ -266,19 +266,20 @@ export function Models() {
             const [tone, word] = state(m);
             const stats = self.stats?.[m];
             const lent = d.configuredShare.includes(m);
+            const doing = busy.includes(`warm:${m}`) ? "warming…" : busy.includes(`evict:${m}`) ? "evicting…" : null;
             return (
               <tr key={m} className="border-b border-line/60 last:border-0 hover:bg-muted/40">
                 <td className={cx("px-4 py-2", mono)}>{m}</td>
                 <td className="px-2 py-2"><Pill tone={tone}>{word}</Pill></td>
                 <td className="px-2 py-2">
                   {local.has(m) && !types.has(m) && !hosted.has(m) ? (
-                    <button disabled={busy !== null}
+                    <button disabled={doing !== null}
                             onClick={() => {
                               if (word === "warm" && !confirm(`Evict ${m}? It leaves the card and the next request for it pays the reload.`)) return;
                               act(word === "warm" ? `evict:${m}` : `warm:${m}`, word === "warm" ? () => evict(m) : () => warm(m));
                             }}
                             className={cx("h-6 rounded-md border border-line px-2 text-[12px] hover:bg-muted hover:text-fg disabled:opacity-40", word === "warm" ? "text-dim" : "text-accent")}>
-                      {word === "warm" ? "evict" : "warm"}
+                      {doing ?? (word === "warm" ? "evict" : "warm")}
                     </button>
                   ) : <span className="text-dim">—</span>}
                 </td>

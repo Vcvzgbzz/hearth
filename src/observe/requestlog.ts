@@ -14,7 +14,7 @@ import type { Meter, Usage } from "./usage.js";
 import { derived } from "../config/derived.js";
 
 /** One request this node asked for, where it ran, and how it ended; `backend` and `peer` are both absent when it never ran. */
-export interface RecentCall { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }
+export interface RecentCall { t: number; model: string; caller: string; backend?: string; peer?: string; target?: "cache"; ms: number; ok: boolean }
 const RECENT_KEPT = 12;
 
 /** Per-request timing for the one-line request log; `waitedMs` shows whether admission queued it. */
@@ -113,7 +113,7 @@ export class RequestLog {
     if (fields.forPeer === undefined && typeof fields.model === "string") {
       this.latest.unshift({
         t: Date.now(), model: fields.model, caller: typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : "local",
-        ...(fields.target === "peer" && typeof fields.peer === "string" ? { peer: fields.peer } : t.startedAt > 0 ? { backend: String(fields.backend ?? "") } : {}),
+        ...(fields.target === "peer" && typeof fields.peer === "string" ? { peer: fields.peer } : t.startedAt > 0 ? { backend: String(fields.backend ?? "") } : fields.target === "cache" ? { target: "cache" as const } : {}),
         ms: t.startedAt > 0 ? Date.now() - started : 0, ok,
       });
       if (this.latest.length > RECENT_KEPT) this.latest.length = RECENT_KEPT;
