@@ -29,7 +29,7 @@ import { KINDS } from "../queue/kinds.js";
 import type { Logger } from "./log.js";
 import type { BackendPool, BackendSlot } from "../queue/pool.js";
 import { send } from "../wire/upstream.js";
-import type { CanaryView } from "./views.js";
+import type { Canary as CanaryPage } from "./uidata.js";
 
 /**
  * Why an answer failed to pass, or that it did. `ok` is the only good one;
@@ -757,7 +757,7 @@ export class Canary {
   }
 
   /** What the status page draws. */
-  page(): CanaryView {
+  page(): CanaryPage {
     return {
       enabled: true,
       passive: this.cfg.passive,

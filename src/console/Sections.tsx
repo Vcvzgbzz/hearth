@@ -10,7 +10,7 @@ import { FIELDS, humanMs } from "../config/fields.js";
 import { backendRows, callerRows, defaultJobs, editedAt, editedIn, hiddenModels, LANE_DEFAULT_WORDS, laneCanClear, laneMenu, lanePinGroups, laneText, modelRows, pinLanes, pinRowsOf, savePool, strayLane, valueAt, waitingOn, type Caller, type LanePin, type ModelRow, type Path, type PoolMode } from "./knobs.js";
 import { Field, Fields, Inspect, Num, useTick, type Knobs } from "./Scheduler.js";
 import { go, useStore } from "./store.js";
-import type { Job } from "./types.js";
+import type { Job } from "../observe/uidata.js";
 import { ago, Button, cx, Empty, mono, Pill } from "./ui.js";
 
 /** What the inspector shows: a lane, an order setting, the new-lane box, or a row of one of the tabs. */

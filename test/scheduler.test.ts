@@ -8,7 +8,8 @@
 import assert from "node:assert/strict";
 
 import { ResourceArbiter } from "../src/queue/resources.js";
-import { QueueFullError, Scheduler } from "../src/queue/scheduler.js";
+import { Scheduler } from "../src/queue/scheduler.js";
+import { QueueFullError } from "../src/errors.js";
 
 const lanes = {
   chat: { priority: 0 },

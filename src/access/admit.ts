@@ -1,34 +1,8 @@
 /**
- * Every refusal a request can meet before it runs, and the status each one carries. The
- * scheduler answers "can this start now"; this answers "may it run at all", for every route.
+ * The model gates a request meets before it is queued: named, lent to this peer, within the key's
+ * scope, served by someone. The scheduler answers "can this start now"; this, "may it run at all".
  */
-import { PeerStatusError } from "../peers/peers.js";
-import { QueueFullError, QueueTimeoutError } from "../queue/scheduler.js";
-
-/** A request turned away, with the status and OpenAI error type to answer it with. */
-export class Refusal extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-    readonly type: string = "invalid_request_error",
-    /**
-     * Extra fields for the error envelope. A degraded model needs more than a
-     * sentence: the client should be able to read the reason and the bad output
-     * without going to the logs.
-     */
-    readonly extra: Record<string, unknown> | null = null,
-  ) {
-    super(message);
-    this.name = "Refusal";
-  }
-}
-
-export class BodyTooLargeError extends Error {
-  constructor(public readonly limitBytes: number) {
-    super(`request body exceeds ${limitBytes} bytes`);
-    this.name = "BodyTooLargeError";
-  }
-}
+import { Refusal } from "../errors.js";
 
 /** Who is asking for which model. */
 export interface Ask {
@@ -81,14 +55,3 @@ export function callerCap(peer: string | null, cfg: { peerMaxConcurrent: number;
   return cfg.scheduler.maxPerCaller > 0 ? cfg.scheduler.maxPerCaller : undefined;
 }
 
-/** The answer for any failure: a refusal as itself, a full queue as 429, a peer's 4xx as theirs, the rest 502. */
-export function refusalOf(e: unknown): Refusal {
-  if (e instanceof Refusal) return e;
-  if (e instanceof BodyTooLargeError) return new Refusal(413, e.message);
-  if (e instanceof QueueFullError) return new Refusal(429, e.message, "rate_limit_error");
-  if (e instanceof QueueTimeoutError) return new Refusal(503, e.message, "server_error");
-  if (e instanceof PeerStatusError && e.isRefusal) {
-    return new Refusal(e.status, e.message, e.status === 429 ? "rate_limit_error" : "invalid_request_error");
-  }
-  return new Refusal(502, e instanceof Error ? e.message : String(e), "server_error");
-}

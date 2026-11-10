@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 import { pageFor } from "./knobs.js";
-import type { UiData } from "./types.js";
+import type { UiData } from "../observe/uidata.js";
 
 const KEY_STORE = "hearth.apikey";
 const storedKey = (): string | null => {

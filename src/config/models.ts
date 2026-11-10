@@ -1,8 +1,8 @@
 /**
  * Per-model settings: params, efforts, slots, price, pool, and the stats an operator declares.
  */
-import { known, type ModelStats } from "../routing/stats.js";
-import type { Emulation } from "../wire/emulate.js";
+
+
 import { asRecord, atLeast, bad, count, only, str } from "./read.js";
 
 export interface ModelRoute {
@@ -134,3 +134,38 @@ export function modelPool(v: unknown, id: string): ModelRoute["pool"] {
     output: p.output === undefined || p.output === null ? null : count(p.output, `models.${id}.pool.output`, 1, 1),
   };
 }
+
+/** The stable, cacheable facts about a loaded model that can refuse a request or move it. */
+export interface ModelStats {
+  /** Tokens the process was launched with (-c), NOT what the weights support. */
+  context?: number;
+  /** Accepts images. */
+  vision?: boolean;
+  /** Its chat template can express tool calls. */
+  tools?: boolean;
+  /** It reasons before answering. Observed only as true; `false` is an operator's declaration. */
+  thinking?: boolean;
+  /** Its template takes `reasoning_effort`. Says the lever exists, not where it is set. */
+  effort?: boolean;
+  /** e.g. "Q5_K - Medium". Cosmetic, but it is the only quality signal you get
+   *  about a model running on hardware you do not own. */
+  quant?: string;
+  /** The operator's own words on what the model is for and how to use it. */
+  note?: string;
+  /** Provenance: a declared value is unverified until the process reports its own. */
+  from?: "declared" | "observed" | "both";
+}
+
+/** A note is a sentence or two, not a manual. */
+export const NOTE_MAX = 500;
+
+/** Anything at all learned? An empty object is not worth caching or sending. */
+export function known(s: ModelStats): boolean {
+  return s.context !== undefined || s.vision !== undefined || s.tools !== undefined
+    || s.thinking !== undefined || s.effort !== undefined || s.quant !== undefined
+    || s.note !== undefined;
+}
+
+export type Emulation = "llama-server";
+
+export const EMULATIONS: readonly Emulation[] = ["llama-server"];

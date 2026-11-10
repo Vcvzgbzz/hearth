@@ -12,7 +12,7 @@ import { changed, choose, useEdit } from "./editStore.js";
 import { go, request, RequestError, toast, useStore } from "./store.js";
 import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";
 
-import type { File } from "./types.js";
+import type { File } from "../observe/uidata.js";
 export type { File };
 export type Plan = { before: string; after: string; restartPending: string[]; /** Write it, under a name for the list of versions when one was typed. */ commit: (name?: string) => Promise<void>; /** Offer to name this version. */ naming?: boolean; /** What it changes, a line per thing, in the map's words. */ summary?: string[]; /** What the button that writes says. */ verb?: string; /** Things worth knowing before writing: the file loads, but may not do what was meant. */ notes?: string[] };
 export type Err = { message: string; path: string | null };

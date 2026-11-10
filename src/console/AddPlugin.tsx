@@ -11,7 +11,7 @@ import { Review, type File, type Plan } from "./config.js";
 import { splitMcp } from "./draft.js";
 import { modelsOfKind } from "./flowNodes.js";
 import { LockedOpen } from "./Plugins.js";
-import type { PluginStage } from "./types.js";
+import type { PluginStage } from "../observe/uidata.js";
 import { refresh, request, toast, useStore } from "./store.js";
 import { Button, cx, Dialog, mono } from "./ui.js";
 

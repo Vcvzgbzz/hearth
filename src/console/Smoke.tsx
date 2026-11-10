@@ -18,7 +18,7 @@
 import { useEffect, useRef } from "react";
 import { fire, seedOf } from "./fire.js";
 import { useStore } from "./store.js";
-import type { UiData } from "./types.js";
+import type { UiData } from "../observe/uidata.js";
 
 // Least ink first. The smoke is punctuation only: anything heavier clumps into blocks where it is
 // dense and fights the page, and a dash reads as a ruled line. The fire ends in two shades, so

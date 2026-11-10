@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 
 import type { KeyLimit, KeyTally } from "./keytally.js";
 import type { ResourceArbiter } from "./resources.js";
+import { AbortedError, QueueFullError, QueueTimeoutError } from "../errors.js";
 
 export interface LaneConfig {
   /** Lower goes first. Put interactive lanes near zero. */
@@ -127,39 +128,6 @@ export interface JobView {
 
 /** Why a queued job is waiting, in priority order. */
 export type WaitReason = "key" | "card" | "hold" | "lane" | "model" | "pool" | "share" | "slots";
-
-export class QueueFullError extends Error {
-  constructor(
-    public readonly reason: "caller_cap" | "lane_full" | "key_full",
-    public readonly lane: string,
-  ) {
-    super(
-      reason === "caller_cap"
-        ? `too many concurrent jobs in the ${lane} lane`
-        : reason === "key_full"
-          ? `this key's queue is full in the ${lane} lane`
-          : `the ${lane} queue is full`,
-    );
-    this.name = "QueueFullError";
-  }
-}
-
-export class QueueTimeoutError extends Error {
-  constructor(
-    public readonly lane: string,
-    public readonly waitMs: number,
-  ) {
-    super(`nothing in the ${lane} lane started for ${Math.round(waitMs / 1000)}s`);
-    this.name = "QueueTimeoutError";
-  }
-}
-
-export class AbortedError extends Error {
-  constructor() {
-    super("aborted");
-    this.name = "AbortedError";
-  }
-}
 
 interface Job<T = unknown> {
   id: string;

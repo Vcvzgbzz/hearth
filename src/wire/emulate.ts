@@ -7,10 +7,6 @@ import { StringDecoder } from "node:string_decoder";
 
 import { MAX_HELD_CHARS, type UpstreamResponse } from "./upstream.js";
 
-export type Emulation = "llama-server";
-
-export const EMULATIONS: readonly Emulation[] = ["llama-server"];
-
 /** Asks for the usage chunk a streamed answer needs for timings. */
 export function emulatedRequest(payload: Record<string, unknown>): Record<string, unknown> {
   if (payload.stream !== true) return payload;

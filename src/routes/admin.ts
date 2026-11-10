@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 
-import { BodyTooLargeError, Refusal } from "../access/admit.js";
+import { BodyTooLargeError, Refusal } from "../errors.js";
 import { troubleSays } from "../queue/backend.js";
 import { backendAuth, backendBase } from "../config/backends.js";
 import type { RoutePolicy } from "../config/flows.js";
@@ -12,7 +12,7 @@ import { ConfigError, resolveSecret } from "../config/read.js";
 import { link, setNote, setShare, unlink } from "../config/configfile.js";
 import { apiError, fail, json } from "../wire/http.js";
 import { bugReport } from "../observe/report.js";
-import { NOTE_MAX } from "../routing/stats.js";
+import { NOTE_MAX } from "../config/models.js";
 import { UpstreamError, getJson } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
 

@@ -6,9 +6,11 @@
  */
 import { Document, isMap, isScalar, isSeq, YAMLMap, type Node } from "yaml";
 
-import { CONFIG_VERSION } from "./config.js";
-import { ANY, MOVED_TO_FLOWS, rawFlow, type Flow } from "./flows.js";
-import { routedFlow } from "../routing/route.js";
+
+import { ANY, type Flow, MOVED_TO_FLOWS, rawFlow, routedFlow } from "./flows.js";
+
+/** The layout of hearth.yaml this build reads and writes. A file that names a later one is refused, never half-read. */
+export const CONFIG_VERSION = 3;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 

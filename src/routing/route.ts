@@ -3,7 +3,7 @@
  * condition and a place to send the request. Pure, so it tests without a socket.
  */
 import type { HearthConfig } from "../config/config.js";
-import { ANY, endsOf, type Flow, type FlowEnd, type FlowStep, type FlowTo, type FlowWhen } from "../config/flows.js";
+import { ANY, endsOf, type Flow, type FlowEnd, type FlowStep, type FlowWhen } from "../config/flows.js";
 import type { PeerRegistry } from "../peers/peers.js";
 import { unfit, type Need } from "./stats.js";
 
@@ -87,28 +87,6 @@ export type Resolution = {
 function pressure(queued: number, free: number, slots: number, warm: boolean, coldPenalty: number): number {
   const busy = slots - free;
   return queued + (free > 0 ? 0 : Math.max(busy, 1)) + (warm ? 0 : coldPenalty);
-}
-
-const step = (to: FlowTo, when: FlowWhen | null = null): FlowStep => ({ when, to, lane: null, params: null, do: [] });
-
-/**
- * A flow to start a model from, in one of the common shapes: `peer` tries each peer in turn,
- * `spillover` runs here until the queue is `spilloverAt` deep, `fastest` picks whoever would
- * start it soonest. `peers` are the ones that map the id, in order; with none, or with `local`,
- * it only ever runs here and null says no flow is needed.
- */
-export function routedFlow(id: string, o: { policy: "local" | "peer" | "spillover" | "fastest"; peers: readonly string[]; spilloverAt?: number; fallbackLocal?: boolean }): Flow | null {
-  if (o.policy === "local" || o.peers.length === 0) return null;
-  const steps: FlowStep[] = [];
-  const fallbackLocal = o.fallbackLocal ?? true;
-  const home: FlowEnd = { model: id };
-  const away = o.peers.map((peer): FlowEnd => ({ peer, model: null }));
-  const refuse: FlowTo = { refuse: "no peer could take it, and it does not run here" };
-  // Unless it may run here, nothing does once no peer could have taken it.
-  if (!fallbackLocal && o.policy !== "peer") steps.push(step(refuse, { down: [...o.peers] }));
-  if (o.policy === "fastest") return { inputs: [id], steps: [...steps, step({ fastest: [home, ...away] })] };
-  if (o.policy === "spillover") steps.push(step(home, { queuedUnder: o.spilloverAt ?? 1 }));
-  return { inputs: [id], steps: [...steps, ...away.map((a) => step(a)), step(fallbackLocal ? home : refuse)] };
 }
 
 /** Every flow in force. */

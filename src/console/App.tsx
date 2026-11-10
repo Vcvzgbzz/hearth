@@ -9,7 +9,7 @@ import { CanaryAlert, Inspector, KeyOnce, Models } from "./pages.js";
 import { Scheduler } from "./Scheduler.js";
 import { NodeSmoke } from "./Smoke.js";
 import { Palette } from "./Palette.js";
-import type { UiData } from "./types.js";
+import type { UiData } from "../observe/uidata.js";
 import { go, login, logout, openPlugin, pageOf, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
