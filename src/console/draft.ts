@@ -1000,8 +1000,8 @@ export function refusal(when: Doc | null | undefined, to: To, facts: Facts, path
 }
 
 /**
- * Why the file would refuse where line `i` of a rule sends work, or null: a rule that is gone, a last
- * line that cannot always answer, or a peer asked for an id it does not lend.
+ * Why the file would refuse where line `i` of a rule sends work, or null: a rule that is gone, a last line
+ * of the rule for every other name that cannot always answer, or a peer asked for an id it does not lend.
  */
 export function lineTrouble(doc: Doc, rule: string, i: number): string | null {
   const flow = obj(obj(doc.flows)[rule]);
@@ -1011,8 +1011,9 @@ export function lineTrouble(doc: Doc, rule: string, i: number): string | null {
   if (to.kind === "flow" && !isObj(obj(doc.flows)[to.flow])) return `It hands to the rule "${to.flow}", which is gone: choose where it sends requests.`;
   const ends: End[] = to.kind === "fastest" ? to.of : to.kind === "peer" ? [to] : [];
   const away = ends.filter((e): e is Extract<End, { kind: "peer" }> => e.kind === "peer");
-  if (i === steps.length - 1 && away.length > 0 && away.length === ends.length) return "A peer can be down, and the last line has to answer every time: end it at a model here, another rule or a refusal.";
   const inputs = list(flow.inputs);
+  // Only the rule for every other name must answer: any other rule passes on what its last line cannot take.
+  if (i === steps.length - 1 && inputs.includes(ANY) && away.length > 0 && away.length === ends.length) return "A peer can be down, and the rule for every other name has to answer every time: end it at a model here, another rule or a refusal.";
   for (const end of away) {
     const lent = obj(obj(obj(doc.peers)[end.peer]).models);
     if (end.model === null && inputs.includes(ANY)) return `${end.peer} is sent every other name as asked, and a peer lends its models one by one: choose which of them this line runs as.`;
