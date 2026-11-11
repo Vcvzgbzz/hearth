@@ -55,6 +55,11 @@ export function pluginRoutes(ctx: RouteContext) {
     // through, and refusing refuses them until a rule for that type is added. The plugin a step names answers.
     let asked = m?.[1] ?? "";
     try { asked = decodeURIComponent(asked); } catch { /* left as sent */ }
+    // A name is one path segment: one that decodes to more than one names no plugin, and goes no further.
+    if (asked.includes("/")) {
+      json(res, 404, { error: "a plugin's name is one path segment" });
+      return;
+    }
     const kind = plugins.kindOf(asked);
     const world = { ...worlds.worldFor(c.caller, Object.keys(cfg.scheduler.lanes)[0]!, undefined, worlds.rulesFor(c.caller), headersOf(req)), plugin: asked };
     let name: string | null = null;
