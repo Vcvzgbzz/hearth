@@ -199,6 +199,51 @@ export interface Call {
   ok: boolean;
 }
 
+/** One finished request, from `/ui/requests`: where routing sent it and how it went. Never a body, prompt, reply or credential. */
+export interface RequestTrace {
+  /** The id sent back in `X-Request-Id`. A request that fell back after a failed attempt has a record per attempt. */
+  id: string;
+  /** When it finished. */
+  t: number;
+  /** The name it was asked for, and the model it ran as. */
+  asked: string;
+  model: string;
+  /** Who asked: a key's caller, `local`, or `peer:<name>` for work lent to a peer. */
+  caller: string;
+  lane?: string;
+  target: "local" | "peer" | "refused" | "unavailable" | "cache";
+  backend?: string;
+  peer?: string;
+  /** The status a backend answered, when it was an error. */
+  status?: number;
+  ok: boolean;
+  error?: string;
+  waitedMs: number;
+  runMs: number;
+  /** From the start of the run to the first byte relayed to the client; absent when nothing was relayed after it started. */
+  firstByteMs?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensCached?: number;
+  tokensEstimated?: true;
+  /** The step that decided in each flow it passed through; empty when no rule took it. */
+  path: { flow: string; step: number }[];
+  reason?: string;
+  /** The rulebook it went by: a router's name, or `default` for `flows:`. Absent when it was turned away before routing. */
+  router?: string;
+  /** The actions the deciding steps set off. */
+  actions: string[];
+  /** The plugins that ran on it. */
+  plugins?: string[];
+  /** The headers some rule tests, as sent. */
+  headers?: Record<string, string>;
+  /** The model it tried first, when it ran as another after that one failed. */
+  fallbackFrom?: string;
+  /** A chat request that carried images, or offered tools: what routing read of it besides its size. */
+  images?: true;
+  tools?: true;
+}
+
 /** hearth.yaml: where every edit lands, and what is waiting on a restart. */
 export interface ConfigStatus {
   /** Null for a node built in code, whose edits live in memory only. */
@@ -436,8 +481,8 @@ export interface UiData {
   lendDefaults?: { tokensPerDay: number; maxConcurrent: number; rateLimit: number };
   /** A newer published hearth, or null. */
   update?: string | null;
-  /** The requests this node made most recently, newest first; neither `backend` nor `peer` when it never ran. */
-  recent?: { t: number; model: string; caller: string; backend?: string; peer?: string; ms: number; ok: boolean }[];
+  /** The requests this node made most recently, newest first; neither `backend` nor `peer` when it never ran (`target: "cache"` when a stored answer served it). */
+  recent?: { t: number; id?: string; model: string; caller: string; backend?: string; peer?: string; target?: "cache"; ms: number; ok: boolean }[];
   /** Plugins, for the Plugins page and the Routing map. Absent on an older server's payload. */
   plugins?: PluginsView;
   /** The lanes, the order settings and the lane defaults, for the Scheduler page. */

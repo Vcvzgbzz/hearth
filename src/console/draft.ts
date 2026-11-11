@@ -34,6 +34,18 @@ export function peerChoices(draft: Record<string, unknown>, q: string): { peer: 
   ]);
 }
 
+/** The node a line to a peer ends at: one for each model it lends that a line uses, and one for the id asked for. */
+export const peerNode = (peer: string, model: string | null): string => (model === null ? `peer:${peer}` : `peer:${peer}/${model}`);
+
+/**
+ * What a line let go on a peer as a whole runs as: the one model it lends, or null where it lends
+ * several or none and only whoever drew the line can say.
+ */
+export function peerLanding(doc: Doc, peer: string): End | null {
+  const lent = Object.keys(obj(obj(obj(doc.peers)[peer]).models));
+  return lent.length === 1 ? { kind: "peer", peer, model: lent[0]! } : null;
+}
+
 /** Somewhere a request can run: a model here, or a peer's copy of one (null: the id asked for). */
 export type End = { kind: "model"; model: string } | { kind: "peer"; peer: string; model: string | null };
 /** A step's `to`, read the same way whether it came from the file or from the running node. */
@@ -605,7 +617,8 @@ export const NODES: Record<string, NodeKind> = {
   },
   refuse: { opens: (id) => ({ kind: "flow", id: lineOf(id).flow }) },
   model: { lands: (id) => ({ kind: "model", model: id }) },
-  peer: { lands: (id) => ({ kind: "peer", peer: id, model: null }) },
+  // `peer:<name>` is the peer taking the id asked for; `peer:<name>/<model>` is one model it lends.
+  peer: { lands: (id) => { const cut = id.indexOf("/"); return cut < 0 ? { kind: "peer", peer: id, model: null } : { kind: "peer", peer: id.slice(0, cut), model: id.slice(cut + 1) }; } },
   plugin: { lands: (id) => ({ kind: "plugin", plugin: id }) },
   action: { lands: (id) => ({ kind: "action", action: id }), opens: (id) => ({ kind: "action", id }) },
 };
@@ -986,6 +999,31 @@ export function refusal(when: Doc | null | undefined, to: To, facts: Facts, path
   return null;
 }
 
+/**
+ * Why the file would refuse where line `i` of a rule sends work, or null: a rule that is gone, a last
+ * line that cannot always answer, or a peer asked for an id it does not lend.
+ */
+export function lineTrouble(doc: Doc, rule: string, i: number): string | null {
+  const flow = obj(obj(doc.flows)[rule]);
+  const steps = Array.isArray(flow.steps) ? (flow.steps as unknown[]).map(obj) : [];
+  if (!steps[i]) return null;
+  const to = toOf(steps[i].to);
+  if (to.kind === "flow" && !isObj(obj(doc.flows)[to.flow])) return `It hands to the rule "${to.flow}", which is gone: choose where it sends requests.`;
+  const ends: End[] = to.kind === "fastest" ? to.of : to.kind === "peer" ? [to] : [];
+  const away = ends.filter((e): e is Extract<End, { kind: "peer" }> => e.kind === "peer");
+  if (i === steps.length - 1 && away.length > 0 && away.length === ends.length) return "A peer can be down, and the last line has to answer every time: end it at a model here, another rule or a refusal.";
+  const inputs = list(flow.inputs);
+  for (const end of away) {
+    const lent = obj(obj(obj(doc.peers)[end.peer]).models);
+    if (end.model === null && inputs.includes(ANY)) return `${end.peer} is sent every other name as asked, and a peer lends its models one by one: choose which of them this line runs as.`;
+    const missing = (end.model === null ? inputs : [end.model]).find((id) => lent[id] === undefined);
+    if (missing !== undefined) return end.model === null
+      ? `${end.peer} is sent "${missing}" as asked, which it does not lend: choose which of its models this line runs as.`
+      : `${end.peer} does not lend "${missing}": choose another of its models, or link it on the Topology page.`;
+  }
+  return null;
+}
+
 /** Does a line test something its target has not said whether it can take? Then the line stands, but unchecked. */
 export function unchecked(when: Doc | null | undefined, to: To, facts: Facts): boolean {
   const w = obj(when);
@@ -1004,13 +1042,16 @@ export function problems(doc: Doc, facts?: Facts): string[] {
   if (restOf(doc).mode === "none") out.push(`Say what happens to a name no type takes: on the Router, choose "run it as itself" or "refuse it". The file does not load without one.`);
   for (const f of flows) {
     const fed = f.inputs.length > 0 || flows.some((o) => o.steps.some((s) => { const to = toOf(s.to); return to.kind === "flow" && to.flow === f.name; }));
-    if (!fed) out.push(`Nothing reaches the rule "${f.name}" yet: drag a model name onto it, or it does nothing.`);
+    const order = orderOf({ ...obj(obj(doc.flows)[f.name]), inputs: f.inputs, steps: f.steps }) !== null;
+    if (!fed) out.push(order ? `No line hands to the order "${f.name}": drag a line's dot onto it, or delete it.` : `Nothing reaches the rule "${f.name}" yet: drag a model name onto it, or it does nothing.`);
     f.steps.forEach((s, i) => {
       const last = i === f.steps.length - 1;
       const to = toOf(s.to);
       // A condition changed after the line was drawn can leave it pointing somewhere that cannot take it.
       const no = facts ? refusal(obj(s.when), to, facts, f.paths) : null;
       if (no) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: ${no}`);
+      const trouble = lineTrouble(doc, f.name, i);
+      if (trouble) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: ${trouble}`);
       for (const k of ["header", "headerNot"]) if ("" in obj(obj(s.when)[k])) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: say which header it tests, by name.`);
       if (to.kind === "unset") out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: choose where it sends requests.`);
       // In an order a line with nothing to test is the point: the next is where the request goes when it fails.

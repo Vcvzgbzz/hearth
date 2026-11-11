@@ -1,21 +1,27 @@
 /** hearth console 2.0: a sidebar of pages over one live store, the topology first. */
-import { AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
+import { Activity as ActivityIcon, AlertTriangle, Boxes, CheckCircle2, FileCog, Flame, Globe, Handshake, BarChart3, KeyRound, ListOrdered, LogOut, Moon, Network, Puzzle, ScrollText, Split, Sun, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Boundary } from "./Boundary.js";
 import { Config } from "./config.js";
 import { Logs } from "./logs.js";
 import { Keys } from "./Keys.js";
+import { Replay, Requests } from "./Requests.js";
+import { Usage } from "./Usage.js";
 import { CanaryAlert, Inspector, KeyOnce, Models } from "./pages.js";
 import { Scheduler } from "./Scheduler.js";
 import { NodeSmoke } from "./Smoke.js";
 import { Palette } from "./Palette.js";
 import type { UiData } from "../observe/uidata.js";
-import { go, login, logout, openPlugin, pageOf, restartNode, select, useStore, type Page } from "./store.js";
+import { followLink, go, login, logout, openPlugin, restartNode, select, useStore, type Page } from "./store.js";
 import { EditBar, EditRail, Menu, Picker, TryStrip, VersionsHere } from "./editor.js";
 import { changed, useEdit } from "./editStore.js";
+import { changes as configChanges, useConfig } from "./configStore.js";
 import { changes, useSched } from "./schedStore.js";
 import { Plugins } from "./Plugins.js";
 import { Routing } from "./Routing.js";
+import { MessageSquare } from "lucide-react";
+import { Playground } from "./Playground.js";
 import { Lending } from "./Lending.js";
 import { Topology } from "./Topology.js";
 import { Button, Card, cx, Dialog, Pill } from "./ui.js";
@@ -23,12 +29,15 @@ import { Button, Card, cx, Dialog, Pill } from "./ui.js";
 const PAGES: { id: Page; label: string; icon: typeof Network }[] = [
   { id: "topology", label: "Topology", icon: Network },
   { id: "routing", label: "Routing", icon: Split },
+  { id: "playground", label: "Playground", icon: MessageSquare },
   { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "models", label: "Models", icon: Boxes },
   { id: "lending", label: "Lending", icon: Handshake },
   { id: "keys", label: "Keys", icon: KeyRound },
+  { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "scheduler", label: "Scheduler", icon: ListOrdered },
   { id: "logs", label: "Logs", icon: ScrollText },
+  { id: "requests", label: "Requests", icon: ActivityIcon },
   { id: "config", label: "Config", icon: FileCog },
 ];
 
@@ -101,10 +110,11 @@ function ConfigPill() {
   const routing = useEdit(changed);
   // The Scheduler page's draft is kept too, so an edit made there is unsaved however far the reader walks.
   const scheduler = useSched(changes);
-  const unsaved = routing + scheduler;
+  const config = useConfig(configChanges);
+  const unsaved = routing + scheduler + config;
   if (!c) return null;
-  // The count leads the way back to the page that holds the edits: routing's first, since it is the map.
-  if (unsaved > 0 && !c.error) return <button onClick={() => go(routing > 0 ? "routing" : "scheduler")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
+  // The count leads the way back to the page that holds the edits: routing's first, since it is the map, then scheduler's.
+  if (unsaved > 0 && !c.error) return <button onClick={() => go(routing > 0 ? "routing" : scheduler > 0 ? "scheduler" : "config")}><Pill tone="accent">{unsaved} unsaved</Pill></button>;
   const tone = c.error ? "bad" : c.restartPending.length ? "warn" : "ok";
   const text = c.error ? "config does not load" : c.restartPending.length ? `restart to apply ${c.restartPending.length}` : c.path ? "saved" : "in memory";
   return (
@@ -217,6 +227,8 @@ function MoreFindings({ rest }: { rest: Finding[] }) {
 /** One sentence answering "is anything wrong?": the worst finding, or what is working when nothing is. */
 function Health() {
   const d = useStore((s) => s.data);
+  const worst0 = d ? findings(d)[0]?.text : undefined;
+  useEffect(() => { document.title = worst0 === undefined ? "hearth" : `(!) ${worst0} — hearth`; }, [worst0]);
   if (!d) return null;
   const f = findings(d);
   if (f.length === 0) {
@@ -316,10 +328,10 @@ function LoginCard() {
             : "From another machine this page needs a login. It opens the whole console — status, config, controls — from anywhere on your network."}</p>
           <input autoFocus value={user} onChange={(e) => setUser(e.target.value)} placeholder="username" aria-label="username" autoComplete="username"
                  className="mt-3 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
-          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password" aria-label="password"
+          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="password" aria-label="password" autoComplete={setup ? "new-password" : "current-password"}
                  className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           {setup && (
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again" aria-label="password again"
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="password again" aria-label="password again" autoComplete="new-password"
                    className="mt-2 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm focus:border-accent focus:outline-none" />
           )}
           {err !== null && <div className="mt-2 text-sm text-bad">{err}</div>}
@@ -377,9 +389,8 @@ export default function App() {
 
   useEffect(() => {
     // `go` has already moved the page and may have picked something on it since: only a page change that came from the address clears the selection.
-    const onHash = () => { if (pageOf() !== useStore.getState().page) useStore.setState({ page: pageOf(), sel: null }); };
-    addEventListener("hashchange", onHash);
-    return () => removeEventListener("hashchange", onHash);
+    addEventListener("hashchange", followLink);
+    return () => removeEventListener("hashchange", followLink);
   }, []);
 
   // Signed out, nothing else works: the card is the whole page.
@@ -441,13 +452,15 @@ export default function App() {
         {data && <CanaryAlert />}
         {endpoints && data && <Endpoints onClose={() => setEndpoints(false)} />}
 
+        {/* Keyed by page, so walking to another page leaves a failed one behind. */}
+        <Boundary key={page}>
         {!data ? (
           <div className="grid flex-1 place-items-center text-dim">{dead ? "hearth is not answering" : "connecting…"}</div>
         ) : page === "topology" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">
             <Activity />
-            <Card className="flex min-h-[420px] flex-1 overflow-hidden">
-              {/* A panel sits beside the picture, never over it: what was clicked stays in view. */}
+            <Card className="relative flex min-h-[420px] flex-1 overflow-hidden">
+              {/* A panel sits beside the picture from xl up; narrower, it lies over the map's right side so the map keeps its width. */}
               <div className="relative min-w-0 flex-1"><Topology /></div>
               <Inspector />
             </Card>
@@ -459,6 +472,7 @@ export default function App() {
                 {/* The strip stands over the map, not on it: nothing drawn is ever under it. */}
                 <div className="flex min-w-0 flex-1 flex-col">
                   <EditBar />
+                  <Replay />
                   <div className="relative min-h-0 flex-1">
                     {/* Its own instance: the two pictures share nothing but the node they draw. */}
                     <Routing />
@@ -471,8 +485,11 @@ export default function App() {
               <TryStrip />
             </Card>
           </div>
+        ) : page === "playground" ? (<div className="flex min-h-0 flex-1 flex-col p-5"><Playground /></div>
         ) : page === "logs" ? (
           <div className="flex min-h-0 flex-1 flex-col p-5"><Logs /></div>
+        ) : page === "requests" ? (
+          <div className="flex min-h-0 flex-1 flex-col p-5"><Requests /></div>
         ) : (
           // The smoke fills the page behind the cards and stays put while they scroll; Config is a form, read without it.
           <div className="relative flex min-h-0 flex-1 flex-col">
@@ -482,12 +499,14 @@ export default function App() {
               {page === "models" && <Models />}
               {page === "lending" && <Lending />}
               {page === "keys" && <Keys />}
+              {page === "usage" && <Usage />}
               {page === "scheduler" && <Scheduler />}
               {/* What has been published, and the way back to it, wherever the file is edited. */}
               {page === "config" && <Config versions={<VersionsHere />} />}
             </div>
           </div>
         )}
+        </Boundary>
       </main>
 
       {/* A key made from any other page is shown over it, once; the keys page shows it in place. */}
