@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config/config.js";
-import { peerChoices, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
+import { peerChoices, peerNode, peerLanding, lineTrouble, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
 import type { UiData } from "../src/observe/uidata.js";
 
 const doc = (): Doc => ({
@@ -297,6 +297,35 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual([(out.flows as Record<string, Doc>)["pick-copy"]!.inputs, (out.actions as Record<string, Doc>)["note-copy"]], [[], { log: "hello" }], "a copied rule takes no names");
   assert.doesNotThrow(() => parseConfig(out));
   assert.deepEqual(pastedAll(from, []), { doc: from, made: [] });
+}
+
+// --- a peer that lends several models: a line says which, and each has a box of its own -------------------------
+{
+  assert.deepEqual(lands("peer:friend"), { kind: "peer", peer: "friend", model: null });
+  assert.deepEqual(lands(peerNode("friend", "org/big")), { kind: "peer", peer: "friend", model: "org/big" }, "a model id may hold a slash");
+  assert.equal(peerLanding(doc(), "friend"), null, "it lends two: whoever drew the line says which");
+  assert.deepEqual(peerLanding({ peers: { solo: { models: { big: "theirs" } } } }, "solo"), { kind: "peer", peer: "solo", model: "big" });
+  assert.equal(peerLanding(doc(), "nobody"), null);
+
+  // Each of these the file refuses, and the draft says so first in the map's words.
+  const refused = (flows: Doc, rule: string, line: number, said: RegExp) => {
+    const d = { ...withRest(doc(), "asked"), flows: Object.fromEntries(Object.entries({ ...(withRest(doc(), "asked").flows as Doc), ...flows }).filter(([, f]) => f !== undefined)) };
+    assert.throws(() => parseConfig(d));
+    assert.match(lineTrouble(d, rule, line) ?? "", said);
+    assert.ok(problems(d).some((p) => p.startsWith(`Rule "${rule}"`) && said.test(p)));
+  };
+  refused({ pick: { inputs: ["other"], steps: [{ when: { images: true }, to: { peer: "friend" } }, { to: "chat" }] } }, "pick", 0, /sent "other" as asked, which it does not lend/);
+  refused({ pick: { inputs: ["auto"], steps: [{ when: { images: true }, to: { peer: "friend", model: "gone" } }, { to: "chat" }] } }, "pick", 0, /does not lend "gone"/);
+  refused({ pick: { inputs: ["auto"], steps: [{ to: { peer: "friend" } }] } }, "pick", 0, /the last line has to answer every time/);
+  refused({ pick: { inputs: ["auto"], steps: [{ when: { images: true }, to: "image" }, { to: { flow: "heavy" } }] }, heavy: undefined }, "pick", 1, /hands to the rule "heavy", which is gone/);
+
+  const fine = { ...withRest(doc(), "asked"), flows: { ...(withRest(doc(), "asked").flows as Doc), pick: { inputs: ["auto"], steps: [{ when: { images: true }, to: { peer: "friend" } }, { when: { tools: true }, to: { peer: "friend", model: "chat" } }, { to: "chat" }] } } };
+  assert.doesNotThrow(() => parseConfig(fine));
+  assert.deepEqual([0, 1, 2].map((i) => lineTrouble(fine, "pick", i)), [null, null, null], "a peer sent an id it lends is in order");
+
+  // An order nothing hands to is not a rule waiting for a name.
+  const loose = put(withRest(doc(), "asked"), "flows", "chat-then", { inputs: [], steps: [{ to: "chat" }, { to: "other" }] });
+  assert.ok(problems(loose).some((p) => /No line hands to the order "chat-then"/.test(p)));
 }
 
 // --- what a person can fix is said before the file refuses it -----------------------------------------------------

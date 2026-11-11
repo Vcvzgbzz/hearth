@@ -1,5 +1,5 @@
 /**
- * The chat doors (`/v1/chat/completions`, `/v1/messages`) and `/flows/try`: admit a request, route it
+ * The chat doors (`/v1/chat/completions`, `/v1/messages`), `/flows/try` and `/flows/replay`: admit a request, route it
  * through its flow, and run it on a local backend or a peer, falling back where the flow allows.
  */
 import { pipeline as pipelineCb } from "node:stream";
@@ -10,13 +10,15 @@ import { PeerStatusError, QueueFullError, Refusal } from "../errors.js";
 import { relayAnthropic, toAnthropic } from "../wire/anthropic.js";
 import { type BackendConfig, backendAuth } from "../config/backends.js";
 import type { HearthConfig } from "../config/config.js";
-import { flowsFor } from "../config/flows.js";
+import { callerDecls, flowsFor, routerDecls } from "../config/flows.js";
 import { ConfigError } from "../config/read.js";
 import { emulatedRequest, relayEmulated } from "../wire/emulate.js";
 import { KEY_REFUSED, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../wire/http.js";
 import { MessagesResponse, chatOf } from "../wire/messages.js";
 import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins/plugins.js";
-import { type Timing, notRun } from "../observe/requestlog.js";
+import { type Timing, type Traced, firstByte, notRun } from "../observe/requestlog.js";
+import { REQUESTS_KEPT } from "../observe/requests.js";
+import type { RequestTrace } from "../observe/uidata.js";
 import { type Resolution, type World, mayLeave, resolve } from "../routing/route.js";
 import type { BackendSlot } from "../queue/pool.js";
 import { fitOutput, type Need, needsOf, unfit } from "../routing/stats.js";
@@ -85,6 +87,48 @@ export function chatRoutes(ctx: RouteContext) {
     constructor(status: number, detail: string) { super(status, detail || `backend answered ${status}`, "server_error"); }
   }
 
+  /** The config with a draft's sections in force in place of the live ones; a section left out stays as it is. */
+  function draftOf(b: Record<string, unknown>): HearthConfig {
+    if (b.flows === undefined) return cfg;
+    try {
+      const actions = b.actions === undefined ? cfg.actions : actionDecls(b.actions);
+      const flows = flowsFor(b.flows, cfg, actions);
+      const routers = b.routers === undefined ? cfg.routers : routerDecls(b.routers, (raw) => flowsFor(raw, cfg, actions), cfg.plugins);
+      const callerMap = b.callers === undefined ? cfg.callers : callerDecls(b.callers, routers);
+      return { ...cfg, actions, flows, routers, callers: callerMap };
+    } catch (e) {
+      if (e instanceof ConfigError) throw new Refusal(400, e.message);
+      throw e;
+    }
+  }
+
+  /** Where one request would go under `from` right now, as `/flows/try` answers it; `pretend` stands in for state that cannot be arranged on demand. */
+  function decideNow(asked: string, from: HearthConfig, q: { caller: string; lane: string; need: Need; headers: World["headers"]; pretend?: Record<string, unknown> }) {
+    const real = worlds.worldFor(q.caller, from.models[asked]?.lane ?? q.lane, q.need, from, q.headers);
+    const pretend = q.pretend ?? {};
+    const said = (k: string): string[] => (Array.isArray(pretend[k]) ? (pretend[k] as unknown[]).filter((x): x is string => typeof x === "string") : []);
+    const r = resolve(asked, {
+      ...real,
+      idleMs: (m) => (said("idle").includes(m) ? Number.MAX_SAFE_INTEGER : said("used").includes(m) ? 0 : real.idleMs!(m)),
+      held: (m, l) => said("held").includes(m) || real.held(m, l),
+      ready: (m) => !said("unready").includes(m) && (said("warm").includes(m) || worlds.ready(m)),
+      // `full` names steps to read as at their limit, each `<step>:<flow>`.
+      inFlight: (flow, step) => (said("full").includes(`${step}:${flow}`) ? Number.MAX_SAFE_INTEGER : real.inFlight!(flow, step)),
+      // `now` is a time of day to read the clock as, HH:MM.
+      ...(typeof pretend["now"] === "string" && /^\d\d:\d\d$/.test(pretend["now"]) ? { now: () => { const d = new Date(); d.setHours(Number((pretend["now"] as string).slice(0, 2)), Number((pretend["now"] as string).slice(3)), 0, 0); return d; } } : {}),
+      local: (m) => {
+        const l = real.local(m);
+        return { ...l, ...(said("busy").includes(m) ? { queued: Math.max(l.queued, 99), free: 0 } : {}), loaded: said("warm").includes(m) ? [...l.loaded, m] : l.loaded };
+      },
+    });
+    // What the backend it lands on is known to take, as a real request would be checked before it is queued.
+    const small = r.target === "local" ? unfit(pool.models.statsFor(r.model), q.need) : null;
+    return {
+      target: r.target, model: r.model, lane: r.lane, reason: r.reason, path: r.path, params: r.params, actions: r.actions.map((a) => a.name), ...(r.unlisted ? { unlisted: true } : {}), ...(small ? { unfit: `${r.model} ${small}` } : {}),
+      ...(r.target === "peer" ? { peer: r.peer } : r.target === "local" ? { backend: pool.models.for(r.model).name } : {}),
+    };
+  }
+
   /**
    * Where a request would go right now, without sending it: for the console's "try a request".
    * `flows` and `actions` try unsaved sections in place of the ones in force, and `pretend` names
@@ -96,44 +140,59 @@ export function chatRoutes(ctx: RouteContext) {
       const asked = typeof b.model === "string" ? b.model : "";
       if (asked === "") throw new Refusal(400, "model is required: the id the request would ask for");
       const lane = typeof b.lane === "string" && b.lane in cfg.scheduler.lanes ? b.lane : Object.keys(cfg.scheduler.lanes)[0]!;
-      let from: HearthConfig = cfg;
-      if (b.flows !== undefined) {
-        try {
-          const actions = b.actions === undefined ? cfg.actions : actionDecls(b.actions);
-          from = { ...cfg, actions, flows: flowsFor(b.flows, cfg, actions) };
-        } catch (e) {
-          if (e instanceof ConfigError) throw new Refusal(400, e.message);
-          throw e;
-        }
-      }
+      const from = draftOf(b);
       if (mayLeave(from, asked)) await peers.ensureFresh();
       const need = { tokens: typeof b.tokens === "number" ? b.tokens : 0, images: b.images === true, tools: b.tools === true };
       // Headers to try it with, as `{ name: value }`; anything that is not text is left out.
-      const tried = Object.fromEntries(Object.entries(typeof b.headers === "object" && b.headers !== null ? b.headers as Record<string, unknown> : {})
+      const headers = Object.fromEntries(Object.entries(typeof b.headers === "object" && b.headers !== null ? b.headers as Record<string, unknown> : {})
         .flatMap(([k, v]) => (typeof v === "string" ? [[k.toLowerCase(), v]] : [])));
-      const real = worlds.worldFor(typeof b.caller === "string" ? b.caller : "local", from.models[asked]?.lane ?? lane, need, from, tried);
-      // `pretend` stands in for state that cannot be arranged on demand: models named as idle, just used, busy, loaded or held.
       const pretend = (typeof b.pretend === "object" && b.pretend !== null ? b.pretend : {}) as Record<string, unknown>;
-      const said = (k: string): string[] => (Array.isArray(pretend[k]) ? (pretend[k] as unknown[]).filter((x): x is string => typeof x === "string") : []);
-      const r = resolve(asked, {
-        ...real,
-        idleMs: (m) => (said("idle").includes(m) ? Number.MAX_SAFE_INTEGER : said("used").includes(m) ? 0 : real.idleMs!(m)),
-        held: (m, l) => said("held").includes(m) || real.held(m, l),
-        ready: (m) => !said("unready").includes(m) && (said("warm").includes(m) || worlds.ready(m)),
-        // `full` names steps to read as at their limit, each `<step>:<flow>`.
-        inFlight: (flow, step) => (said("full").includes(`${step}:${flow}`) ? Number.MAX_SAFE_INTEGER : real.inFlight!(flow, step)),
-        // `now` is a time of day to read the clock as, HH:MM.
-        ...(typeof pretend["now"] === "string" && /^\d\d:\d\d$/.test(pretend["now"]) ? { now: () => { const d = new Date(); d.setHours(Number((pretend["now"] as string).slice(0, 2)), Number((pretend["now"] as string).slice(3)), 0, 0); return d; } } : {}),
-        local: (m) => {
-          const l = real.local(m);
-          return { ...l, ...(said("busy").includes(m) ? { queued: Math.max(l.queued, 99), free: 0 } : {}), loaded: said("warm").includes(m) ? [...l.loaded, m] : l.loaded };
-        },
-      });
-      // What the backend it lands on is known to take, as a real request would be checked before it is queued.
-      const small = r.target === "local" ? unfit(pool.models.statsFor(r.model), need) : null;
+      json(c.res, 200, decideNow(asked, from, { caller: typeof b.caller === "string" ? b.caller : "local", lane, need, headers, pretend }));
+    } catch (e) {
+      fail(c.res, e);
+    }
+  }
+
+  /**
+   * The recent routed requests decided again under a draft and under the rules in force, both against
+   * the state now, with the requests whose destination differs grouped by where they went and would go.
+   * Each keeps what was recorded of it: the name, caller, lane, tested headers, prompt size, images and tools.
+   */
+  async function routeFlowsReplay(c: Call): Promise<void> {
+    try {
+      const b = await readJson(c.req);
+      if (b.flows === undefined) throw new Refusal(400, "flows is required: the draft to replay recent requests against");
+      const draft = draftOf(b);
+      const limit = Math.min(Math.max(1, typeof b.limit === "number" ? Math.floor(b.limit) : 500), REQUESTS_KEPT);
+      // Newest first, one per id: a request that fell back has a record per attempt, and the first is the routing decision.
+      const seen = new Set<string>();
+      const firsts: RequestTrace[] = [];
+      for (const r of requests.traces.all()) {
+        if (r.router === undefined || (r.id !== "" && seen.has(r.id))) continue;
+        seen.add(r.id);
+        firsts.push(r);
+      }
+      const picked = firsts.reverse().slice(0, limit);
+      if (picked.some((r) => mayLeave(cfg, r.asked) || mayLeave(draft, r.asked))) await peers.ensureFresh();
+      const label = (d: { target: string; model: string; peer?: string; backend?: string }): string =>
+        d.target === "peer" ? `peer ${d.peer}/${d.model}` : d.target === "local" ? `${d.model} on ${d.backend}` : "refused";
+      const groups = new Map<string, { from: string; to: string; count: number; example: string; asked: string }>();
+      let same = 0;
+      for (const r of picked) {
+        const q = { caller: r.caller, lane: r.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, need: { tokens: r.tokensIn ?? 0, images: r.images === true, tools: r.tools === true }, headers: r.headers ?? {} };
+        const from = label(decideNow(r.asked, worlds.rulesFor(r.caller), q));
+        const to = label(decideNow(r.asked, worlds.rulesFor(r.caller, draft), q));
+        if (from === to) { same++; continue; }
+        const key = `${r.asked}\0${from}\0${to}`;
+        const g = groups.get(key);
+        if (g) g.count++;
+        else groups.set(key, { from, to, count: 1, example: r.id, asked: r.asked });
+      }
+      const changed = [...groups.values()].sort((a, b) => b.count - a.count);
       json(c.res, 200, {
-        target: r.target, model: r.model, lane: r.lane, reason: r.reason, path: r.path, params: r.params, actions: r.actions.map((a) => a.name), ...(r.unlisted ? { unlisted: true } : {}), ...(small ? { unfit: `${r.model} ${small}` } : {}),
-        ...(r.target === "peer" ? { peer: r.peer } : r.target === "local" ? { backend: pool.models.for(r.model).name } : {}),
+        considered: picked.length, same, changed,
+        refusedNow: changed.filter((g) => g.to === "refused").reduce((n, g) => n + g.count, 0),
+        note: "Both sides are decided against the state now (idle, free, queue, warm, held, step limits, time of day), not as it was when each request ran; a request keeps the lane it ran in, a conversation is decided as an opening turn, and images and tools are known only for chat requests.",
       });
     } catch (e) {
       fail(c.res, e);
@@ -221,6 +280,8 @@ export function chatRoutes(ctx: RouteContext) {
     /** The conversation this turn belongs to, for a sticky flow; null for a request with no user turn. */
     private readonly talk: { key: string; later: boolean } | null;
     private decision!: Resolution;
+    /** The decision it last landed on, a fallback's included, for its trace. */
+    private last: Resolution | undefined;
     private model = "";
     private lane = "";
     private local!: BackendSlot;
@@ -275,7 +336,7 @@ export function chatRoutes(ctx: RouteContext) {
         // Nor is one that takes paths of its own a chat model.
         : paths ? `"${asked}" is not offered as chat: it takes ${paths.join(", ")}` : null;
       if (notHere !== null) {
-        requests.record(notRun(), { model: asked, lane, caller, target: "refused" }, false, notHere);
+        requests.record(notRun(), { model: asked, lane, caller, target: "refused" }, false, notHere, this.traced());
         throw new Refusal(404, notHere);
       }
       this.decision = decision;
@@ -300,6 +361,7 @@ export function chatRoutes(ctx: RouteContext) {
     private fire(d: Resolution): void {
       const { asked, caller, res, id } = this.r;
       const { flowsNow, talk, world } = this;
+      this.last = d;
       if (flowsNow === cfg.flows) worlds.countHits(d.path);
       // A sticky flow remembers where it put this conversation, for its later turns.
       const sticky = flowsNow[d.path.at(-1)?.flow ?? ""]?.sticky;
@@ -333,6 +395,18 @@ export function chatRoutes(ctx: RouteContext) {
       }
     }
 
+    /** What routing decided, for the request's trace; `from` is the model a failure moved it off. */
+    private traced(from?: string): Traced {
+      const d = this.last;
+      return {
+        asked: this.r.asked, router: worlds.routerNameOf(this.r.caller),
+        ...(this.world.need?.images ? { images: true as const } : {}), ...(this.world.need?.tools ? { tools: true as const } : {}),
+        ...(d ? { path: d.path, reason: d.reason, actions: d.actions.map((a) => a.name) } : {}),
+        ...(this.r.plugins ? { plugins: this.r.plugins.active.map((p) => p.name) } : {}),
+        ...(from !== undefined && from !== this.model ? { fallbackFrom: from } : {}),
+      };
+    }
+
     /** The plugins that run once a request is routed; one that changes it, or keeps it here, has it routed once more. */
     private async afterRouted(): Promise<void> {
       const p = this.r.plugins;
@@ -347,7 +421,7 @@ export function chatRoutes(ctx: RouteContext) {
         after = await plugins.run("routed", p.active, p.hook);
       } catch (e) {
         if (!(e instanceof PluginRefusal)) throw e;
-        requests.record(notRun(), { model: this.model, lane: this.lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+        requests.record(notRun(), { model: this.model, lane: this.lane, caller, target: "refused", plugin: e.plugin }, false, e.message, this.traced());
         throw new Refusal(e.status, e.message);
       }
       const changed = after.req.body !== p.hook.body;
@@ -381,17 +455,17 @@ export function chatRoutes(ctx: RouteContext) {
         worlds.using(model, res);
       }
       this.need = needsOf(payload, cfg.models[model]?.videoTokens);
-      this.t = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (this.need?.tokens ?? 0) - (this.need?.output ?? 0)) };
+      this.t = firstByte(res, { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res), need: Math.max(0, (this.need?.tokens ?? 0) - (this.need?.output ?? 0)) });
       if (decision.target === "unavailable") {
         // Refusing is the point: the flow's own words, with why a peer was passed over when one was.
-        requests.record(this.t, { model, lane, caller, target: "unavailable" }, false, decision.reason);
+        requests.record(this.t, { model, lane, caller, target: "unavailable" }, false, decision.reason, this.traced());
         throw new Refusal(503, `${asked} is not being run: ${decision.reason}`, "server_error");
       }
       // A flow that runs a name as itself still needs something here to serve it.
       const instead = decision.target === "local" ? limits.unknownHere(model) : null;
       if (instead !== null) {
         const why = `no backend here serves "${model}" (${instead})`;
-        requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, why);
+        requests.record(notRun(), { model: asked, lane: askedLane, caller, target: "refused" }, false, why, this.traced());
         throw new Refusal(404, why);
       }
       checkLimits?.();
@@ -421,7 +495,7 @@ export function chatRoutes(ctx: RouteContext) {
       }
       res.writeHead(200, { "Content-Type": hit.type, "X-Hearth-Cache": "hit", "X-Accel-Buffering": "no", ...(res.hasHeader("x-hearth-model") ? { "x-hearth-model": String(res.getHeader("x-hearth-model")) } : {}) });
       res.end(hit.body);
-      requests.record(this.t, { model: this.model, lane: this.lane, caller, target: "cache" }, true);
+      requests.record(this.t, { model: this.model, lane: this.lane, caller, target: "cache" }, true, undefined, this.traced());
       return true;
     }
 
@@ -467,7 +541,7 @@ export function chatRoutes(ctx: RouteContext) {
         const fitted = fitOutput(pool.models.statsFor(model), needsOf(payload, cfg.models[model]?.videoTokens), payload);
         const tooMuch = unfit(pool.models.statsFor(model), fitted);
         if (tooMuch !== null) {
-          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch);
+          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local" }, false, tooMuch, this.traced([...failed][0]));
           throw new Refusal(400, `${model} ${tooMuch}`);
         }
         try {
@@ -482,7 +556,7 @@ export function chatRoutes(ctx: RouteContext) {
             },
           );
         } catch (e) {
-          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e);
+          requests.record(this.t, { model, lane, caller, backend: local.name, target: "local", reason: why }, false, e, this.traced([...failed][0]));
           // Its own fault, not the caller's or a full queue's: counted towards resting it, and a reason to move on.
           const itsOwn = !signal.aborted && !(e instanceof QueueFullError) && (e instanceof BackendFailed || !(e instanceof Refusal));
           if (itsOwn) local.state.struck(cfg.backendRestMs);
@@ -501,6 +575,7 @@ export function chatRoutes(ctx: RouteContext) {
           { model, lane, caller, backend: local.name, target: "local", reason: why, ...(status >= 400 ? { status } : {}) },
           status < 400,
           status >= 400 ? `backend answered ${status}` : undefined,
+          this.traced([...failed][0]),
         );
         return status;
       }
@@ -559,13 +634,13 @@ export function chatRoutes(ctx: RouteContext) {
         );
       } catch (e) {
         // Logged as where it last ran, a local fallback included, with its backend so the call ring counts it.
-        requests.record(this.t, logged(), false, e);
+        requests.record(this.t, logged(), false, e, this.traced(fellBack ? decision.model : undefined));
         throw e;
       }
       const status = this.localStatus;
       // Only the fallback can have relayed a bad status: a peer's own 4xx threw a PeerStatusError above.
       const bad = fellBack && status >= 400;
-      requests.record(this.t, { ...logged(), offbox: !fellBack, ...(bad ? { status } : {}) }, !bad, bad ? `backend answered ${status}` : undefined);
+      requests.record(this.t, { ...logged(), offbox: !fellBack, ...(bad ? { status } : {}) }, !bad, bad ? `backend answered ${status}` : undefined, this.traced(fellBack ? decision.model : undefined));
       return fellBack ? status : 0;
     }
   }
@@ -659,7 +734,7 @@ export function chatRoutes(ctx: RouteContext) {
           before = await plugins.run("request", active, hook);
         } catch (e) {
           if (!(e instanceof PluginRefusal)) throw e;
-          requests.record(notRun(), { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message);
+          requests.record(notRun(), { model, lane, caller, target: "refused", plugin: e.plugin }, false, e.message, { router: hook.router, plugins: active.map((p) => p.name) });
           throw new Refusal(e.status, e.message);
         }
         payload = before.req.body;
@@ -679,7 +754,7 @@ export function chatRoutes(ctx: RouteContext) {
     // A peer running a model here is that model in use.
     worlds.using(model, res);
 
-    const t: Timing = { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res) };
+    const t = firstByte(res, { enqueuedAt: Date.now(), startedAt: 0, meter: meter(res) });
     const serving = pool.models.for(model);
     // As on the local path: what we relayed to the borrower, so lent
     // capacity that failed is not filed as lent capacity that worked.
@@ -710,5 +785,5 @@ export function chatRoutes(ctx: RouteContext) {
     );
   }
 
-  return { routeChat, routeMessages, routeFlowsTry };
+  return { routeChat, routeMessages, routeFlowsTry, routeFlowsReplay };
 }

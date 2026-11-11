@@ -7,12 +7,13 @@ import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Redo2, Refr
 import { useContext, useEffect, useState } from "react";
 
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, selectMany, rename, revert, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, wire, type Choice } from "./editStore.js";
+import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, pickOut, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Replayed } from "./editStore.js";
 import { pluginKind, pluginKinds } from "../config/kind.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
-import { sendTest, useStore, type Ran } from "./store.js";
+import { sendTest, useLink, useStore, type Ran } from "./store.js";
+import { replayId } from "./Requests.js";
 import { Button, cx, Dialog, mono } from "./ui.js";
 
 const SECTION = { flow: "flows", action: "actions" } as const;
@@ -55,7 +56,7 @@ export function finding(draft: Doc): Choice[] {
   const rules = flows.filter((f) => directTo(f.name, f) === null);
   const ends = flows.flatMap((f) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "fastest" ? t.of : t.kind === "model" || t.kind === "peer" ? [t] : []; }));
   const models = [...new Set(ends.flatMap((e) => (e.kind === "model" ? [e.model] : [])))];
-  const peers = [...new Set(ends.flatMap((e) => (e.kind === "peer" ? [e.peer] : [])))];
+  const peers = [...new Map(ends.flatMap((e) => (e.kind === "peer" ? [[peerNode(e.peer, e.model), e] as const] : []))).entries()];
   const names = [...new Set(flows.flatMap((f) => f.inputs))];
   const group = (label: string, items: Choice[]): Choice[] => (items.length ? [{ label, head: true }, ...items] : []);
   return [
@@ -63,7 +64,7 @@ export function finding(draft: Doc): Choice[] {
     ...group("actions", Object.keys(obj(draft.actions)).map((a) => ({ label: a, value: `action:${a}`, mono: true }))),
     ...group("types that are routed", names.map((n) => ({ label: n, value: `name:${n}`, mono: true, hint: `goes into ${flows.find((f) => f.inputs.includes(n))!.name}` }))),
     ...group("models a line ends at", models.map((m) => ({ label: m, value: `model:${m}`, mono: true }))),
-    ...group("peers a line ends at", peers.map((p) => ({ label: p, value: `peer:${p}`, mono: true }))),
+    ...group("peers a line ends at", peers.map(([node, e]) => ({ label: toText(e), value: node, mono: true }))),
   ];
 }
 
@@ -164,15 +165,69 @@ export function VersionsButton() {
   );
 }
 
+/** "what would change?": the recent requests replayed against the draft, and the ones it would send somewhere else. */
+function WhatChanges() {
+  const [shown, setShown] = useState<{ got?: Replayed; error?: string } | null>(null);
+  const open = () => {
+    setShown({});
+    replayDraft().then((got) => setShown({ got }), (e: unknown) => setShown({ error: e instanceof Error ? e.message : String(e) }));
+  };
+  const got = shown?.got;
+  const moved = got ? got.changed.reduce((n, c) => n + c.count, 0) : 0;
+  return (
+    <>
+      <Button onClick={open}>what would change?</Button>
+      {shown && (
+        <Dialog title="What would change" size="md" onClose={() => setShown(null)}>
+          <div className="space-y-2 overflow-auto px-4 py-3 text-[13px]">
+            {shown.error ? <div className="text-bad">{shown.error}</div>
+              : !got ? <div className="text-dim">Replaying recent requests…</div>
+              : moved === 0 ? <div>All {got.considered} would go where they go now.</div>
+              : (
+                <>
+                  <div>Of the last {got.considered} requests, {moved} would go somewhere else.</div>
+                  {got.refusedNow > 0 && <div className="text-bad">{got.refusedNow} would now be refused.</div>}
+                  <ul className="space-y-1">
+                    {got.changed.map((c) => (
+                      <li key={`${c.asked}\0${c.from}\0${c.to}`} className="flex flex-wrap items-baseline gap-x-2">
+                        <span className={mono}>{c.asked}</span>
+                        <span className="text-dim">{c.from} → <span className={c.to === "refused" ? "text-bad" : "text-fg"}>{c.to}</span></span>
+                        <span>×{c.count}</span>
+                        {c.example !== "" && <a className="text-accent hover:underline" href={`#requests/${encodeURIComponent(c.example)}`}>show one</a>}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            {got && <div className="text-[12px] text-dim">{got.note}</div>}
+          </div>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 /** A first place for a choice between several to start from: something a backend already serves. */
 const anyModel = (draft: Doc | null): string =>
   list(Object.values(obj(draft?.backends)).flatMap((b) => list(obj(b).serves)))[0] ?? Object.keys(obj(draft?.models))[0] ?? "";
 
 /** The strip over the graph: add things, and review what the draft changes. */
 export function EditBar() {
-  const { draft, err, plan, past, future, unread, adding, router } = useEdit();
+  const { draft, err, plan, past, future, unread, adding, router, replay } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
+  const ruleOpen = useEdit((s) => (s.opened && s.sel?.kind === "flow" ? s.sel.id : null));
+  // `<router>` (`default` for the rules everyone goes by), then `rule:<name>` while a rule is open in its dialog, or `req:<id>` while a request is replayed.
+  const extra = ruleOpen !== null ? [`rule:${ruleOpen}`] : replay ? [`req:${replay.id}`] : [];
+  useLink(router === null && extra.length === 0 ? [] : [router ?? "default", ...extra], draft !== null || unread !== null, ([r, rule]) => {
+    const full = whole(useEdit.getState());
+    if (!full || r === undefined || (r !== "default" && !isObj(obj(full.routers)[r]))) return;
+    const to = r === "default" ? null : r;
+    if (to !== useEdit.getState().router) showRouter(to);
+    const name = rule?.startsWith("rule:") ? rule.slice(5) : null;
+    if (name !== null && isObj(obj(useEdit.getState().draft?.flows)[name])) openRule(name);
+    if (rule?.startsWith("req:")) void replayId(rule.slice(4));
+  });
   // The map's keys, from anywhere on the page unless something is being typed into or a list is open:
   // "/" searches, Delete takes out what is selected, and copy, paste, duplicate and undo are where they always are.
   useEffect(() => {
@@ -185,6 +240,8 @@ export function EditBar() {
       // Several nodes picked out together are acted on together, before the one that is open.
       const several = s.many.length > 1;
       if (k === "/" && !mod) openSearch(innerWidth / 2 - 150, 120);
+      // With a rule open in its dialog the key belongs to the dialog, not to the map under it.
+      else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.opened) return;
       else if ((e.key === "Backspace" || e.key === "Delete") && !mod && several) removeMany();
       else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.sel) remove(s.sel);
       else if (mod && k === "d" && several) { if (copyMany()) paste(); }
@@ -194,7 +251,7 @@ export function EditBar() {
       else if (mod && k === "c" && s.sel && !String(getSelection() ?? "")) copy(s.sel);
       else if (mod && k === "v" && !e.shiftKey) paste();
       else if (mod && k === "z") (e.shiftKey ? redo : undo)();
-      else if (e.key === "Escape" && (s.sel || several)) { editSelect(null); selectMany([]); }
+      else if (e.key === "Escape" && (s.sel || several)) { editSelect(null); pickOut([]); }
       else return;
       e.preventDefault();
     };
@@ -275,6 +332,7 @@ export function EditBar() {
           <Button disabled={past.length === 0} onClick={undo}><Undo2 size={13} />undo</Button>
           {future.length > 0 && <Button onClick={redo}><Redo2 size={13} />redo</Button>}
           <Button disabled={!isDirty} onClick={revert}><RotateCcw size={13} />discard draft</Button>
+          {isDirty && issues.length === 0 && <WhatChanges />}
           <Button tone="primary" disabled={!isDirty} onClick={() => void review()}><Save size={13} />review &amp; publish</Button>
         </div>
         {err && <div className="w-full text-[12px] text-bad">{err.message}</div>}
@@ -319,7 +377,7 @@ export function Picker() {
   const picking = useEdit((s) => s.picking);
   const draft = useEdit((s) => s.draft);
   const [q, setQ] = useState("");
-  useEffect(() => setQ(""), [picking]);
+  useEffect(() => setQ(picking?.q ?? ""), [picking]);
   if (!picking || !draft) return null;
   const from = picking.from;
   const send = (to: To) => { if (from) wire(from, to); pick(null); };
@@ -347,7 +405,6 @@ export function Picker() {
   const entering = self ? list(obj(obj(draft.flows)[self]).inputs) : [];
   // With several names entering, "its own model" is whichever of them was asked for.
   const own = entering.length === 1 ? entering[0]! : entering.length > 1 ? "whichever was asked for" : null;
-  // A rule that takes MCP or API routes requests of that type: as asked, each goes to the plugin it named.
   const row = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-line/60";
   const head = "px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-dim";
   return (
@@ -358,9 +415,12 @@ export function Picker() {
         <div className="border-b border-line p-2">
           <input autoFocus aria-label="send it to" placeholder="send these requests to…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => {
                    if (e.key === "Escape") pick(null);
-                   // Enter takes the first model that fits what was typed.
+                   // Enter takes the first place that fits what was typed: a model here, else one a peer lends.
                    const first = models.find((m) => !chat || known?.kind(m) !== "paths");
-                   if (e.key === "Enter" && q.trim() && first) send({ kind: "model", model: first });
+                   const lent = peers.find((p) => p.model !== null);
+                   if (e.key !== "Enter" || !q.trim()) return;
+                   if (first) send({ kind: "model", model: first });
+                   else if (lent) send({ kind: "peer", ...lent });
                  }}
                  className="h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         </div>

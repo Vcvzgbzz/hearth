@@ -6,7 +6,7 @@ import { Menu } from "./editor.js";
 import { choose } from "./editStore.js";
 import { Num, Today } from "./Lending.js";
 import { money, short, UsedCell } from "./pages.js";
-import { doneWithKey, go, mintKey, revokeKey, rotateKey, updateKey, useStore } from "./store.js";
+import { doneWithKey, go, mintKey, revokeKey, rotateKey, updateKey, useLink, useStore } from "./store.js";
 import type { KeyModelRule, KeyRow, ReachEnd, Used } from "../observe/uidata.js";
 import { ago, Card, cx, Empty, mono } from "./ui.js";
 
@@ -250,6 +250,7 @@ export function Keys() {
   const others = useStore((s) => s.data!.others ?? []);
   const routers = useStore((s) => s.data!.keySettings.routers);
   const [open, setOpen] = useState<string | null>(null);
+  useLink(open ? [open] : [], true, ([l]) => { if (keys.some((k) => k.label === l)) setOpen(l!); });
   const [label, setLabel] = useState("");
   const [router, setRouter] = useState("default");
   const shown = useStore((s) => s.fresh);
@@ -313,7 +314,7 @@ export function Keys() {
                   <td className={cx(cell, "text-dim", mono)}>{k.id}</td>
                   <td className={cx(cell, mono, k.router === "default" && "text-dim")}>{k.router}</td>
                   <td className={cx(cell, "text-dim")}>{limitsOf(k)}</td>
-                  <td className={cx(cell, "tabular")}><UsedCell used={k.today} />{waiting > 0 && <span className="text-warn"> · {waiting} waiting</span>}</td>
+                  <td className={cx(cell, "tabular")}><UsedCell used={k.today} />{waiting > 0 && <span className="whitespace-nowrap text-warn"> · {waiting} waiting</span>}</td>
                   <td className={cx(cell, "tabular")}><UsedCell used={k.month} /></td>
                   <td className={cx(cell, "tabular text-right", k.lastSeen === null ? "text-dim" : "text-fg")}>{k.lastSeen === null ? "never" : ago(k.lastSeen)}</td>
                   <td className={cx(cell, "whitespace-nowrap text-right")}>

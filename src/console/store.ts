@@ -2,9 +2,10 @@
  * Live state: /ui/events pushes a snapshot then top-level patches; /ui/data is polled if the
  * stream never delivers. Components select narrow slices, so one tick re-renders only what moved.
  */
+import { useEffect } from "react";
 import { create } from "zustand";
 
-import { pageFor } from "./knobs.js";
+import { linkOf, parseLink, type Page } from "./link.js";
 import type { UiData } from "../observe/uidata.js";
 
 const KEY_STORE = "hearth.apikey";
@@ -19,10 +20,10 @@ const forgetKey = (): void => {
   try { localStorage.removeItem(KEY_STORE); } catch { /* private mode */ }
 };
 
-export const PAGE_IDS = ["topology", "routing", "plugins", "models", "lending", "keys", "scheduler", "logs", "config"] as const;
-export type Page = (typeof PAGE_IDS)[number];
+export { PAGE_IDS, type Page } from "./link.js";
 /** The page the address names, an old `#queue` link included; anything else is the first one. */
-export const pageOf = (): Page => PAGE_IDS.find((p) => p === pageFor(location.hash.slice(1))) ?? "topology";
+export const pageOf = (): Page => parseLink(location.hash).page;
+const linkNow = (): string[] | null => { const { rest } = parseLink(location.hash); return rest.length ? rest : null; };
 export type Sel = { kind: "self" | "peer" | "backend" | "resource" | "machine"; id: string } | null;
 type Toast = { tone: "ok" | "bad"; text: string; id: number } | null;
 
@@ -47,6 +48,8 @@ interface State {
   yamlAt: string[] | null;
   /** A key just minted or rotated: its plaintext, to be shown once and then let go. */
   fresh: { label: string; key: string; rotated?: boolean } | null;
+  /** What the address names past its page, until that page has applied it. */
+  link: string[] | null;
 }
 
 export const useStore = create<State>(() => ({
@@ -61,14 +64,55 @@ export const useStore = create<State>(() => ({
   plugin: null,
   yamlAt: null,
   fresh: null,
+  link: linkNow(),
   toast: null,
   askKey: null,
 }));
 
+/** The address the app last wrote or applied; a `hashchange` that finds it unchanged is the app's own. */
+let known = location.hash;
 export const go = (page: Page) => {
   location.hash = page;
-  useStore.setState({ page, sel: null });
+  known = location.hash;
+  useStore.setState({ page, sel: null, link: null });
 };
+/** Change page with something selected on it, as following a link would. */
+export const goLink = (page: Page, ...rest: string[]) => {
+  location.hash = linkOf(page, ...rest);
+  known = location.hash;
+  useStore.setState({ page, sel: null, link: rest });
+};
+/** Back, Forward or a pasted link: a new page clears the selection, and what the address names is applied by its page. */
+export const followLink = () => {
+  if (location.hash === known) return;
+  known = location.hash;
+  const { rest } = parseLink(location.hash);
+  useStore.setState(pageOf() !== useStore.getState().page ? { page: pageOf(), sel: null, link: linkNow() } : { link: rest });
+};
+/** Name what is selected on this page in the address, without a history entry. */
+const mark = (rest: string[]) => {
+  const at = linkOf(useStore.getState().page, ...rest);
+  if (location.hash !== at) history.replaceState(history.state, "", at);
+  known = location.hash;
+};
+/**
+ * Keep the address naming `here`, what the page has selected, and once `ready` hand a link to this page to
+ * `apply`, which selects what it names if that exists; the address is then rewritten to what is selected.
+ */
+export function useLink(here: string[], ready: boolean, apply: (rest: string[]) => void): void {
+  const link = useStore((s) => s.link);
+  const at = JSON.stringify(here);
+  useEffect(() => {
+    if (link) {
+      if (!ready) return;
+      useStore.setState({ link: null });
+      apply(link);
+    }
+    mark(here);
+  }, [link, ready, at]);
+}
+/** Copy this page's address, which names what is selected on it. */
+export const copyLink = () => void navigator.clipboard.writeText(location.href).then(() => toast("ok", "link copied"), () => {});
 export const select = (sel: Sel) => useStore.setState({ sel });
 /** Open a plugin on the Plugins page, from wherever it was named. */
 export const openPlugin = (name: string) => { go("plugins"); useStore.setState({ plugin: name }); };
@@ -307,12 +351,12 @@ export async function request<T = Record<string, unknown>>(method: string, path:
   return d as T;
 }
 
-/** The node's answer with whatever credential it takes, asking for a key as `request` does; a 401 that stands is thrown. */
-async function authed(method: string, path: string, body?: unknown): Promise<Response> {
+/** The node's answer with whatever credential it takes, asking for a key as `request` does; a 401 that stands is thrown. The body is left unread, so it can be streamed. */
+export async function authed(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
   const doFetch = (k: string): Promise<Response> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (k) headers.Authorization = `Bearer ${k}`;
-    return fetch(path, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return fetch(path, { method, headers, signal, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   };
   let key = storedKey() ?? "";
   let r = await doFetch(key);

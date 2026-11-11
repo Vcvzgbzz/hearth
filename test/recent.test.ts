@@ -23,7 +23,7 @@ const node = createNode(parseV1({ backend: { url: `http://127.0.0.1:${(backend.a
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
 const url = `http://127.0.0.1:${(node.server.address() as AddressInfo).port}`;
 const chat = (model: string) => fetch(`${url}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }) }).then((r) => r.text());
-type Recent = { model: string; caller: string; backend?: string; peer?: string; ok: boolean; t: number; ms: number };
+type Recent = { id?: string; model: string; caller: string; backend?: string; peer?: string; ok: boolean; t: number; ms: number };
 const recent = async () => ((await (await fetch(`${url}/ui/data`)).json()) as { recent: Recent[] }).recent;
 
 assert.deepEqual(await recent(), [], "nothing asked, nothing listed");
@@ -34,6 +34,8 @@ assert.deepEqual(two.map((r) => r.model), ["chat", "my-model"], "newest first");
 assert.equal(two[0]!.caller, "local", "this machine with no key is the local caller");
 assert.ok(two[0]!.backend && two[0]!.peer === undefined, "it ran on a backend here");
 assert.equal(two[0]!.ok, true);
+assert.ok(two[0]!.id, "it carries the request id");
+assert.equal(((await (await fetch(`${url}/ui/requests/${two[0]!.id}`)).json()) as { model: string }).model, "chat", "the id finds its trace");
 
 for (let i = 0; i < 12; i++) await chat("my-model");
 assert.equal((await recent()).length, 12, "a bounded number are kept");
