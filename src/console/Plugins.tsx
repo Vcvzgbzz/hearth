@@ -174,8 +174,7 @@ function Panel({ p, pv, onClose, onWire, onFallback }: { p: PluginView; pv: Plug
               <option value="">nobody: the caller is told it failed</option>
               {others.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
-            {p.fallback?.adapt && <span className="text-dim">via the <code className={mono}>{p.fallback.adapt}</code> adapter</span>}
-            <span className="text-dim">Asked when {p.name} cannot be reached, answers 5xx or 429, or is paused{p.fallback?.adapt ? ", translated by its adapter into the fallback's API" : ", with the same request: it serves the same API"}. One hop: its own fallback is not followed.{others.length === 0 ? " No other plugin serves an API yet." : ""}</span>
+            <span className="text-dim">Asked when {p.name} cannot be reached, answers 5xx or 429, or is paused, with the same request: it serves the same API. One hop: its own fallback is not followed.{others.length === 0 ? " No other plugin serves an API yet." : ""}</span>
           </section>
         )}
 
@@ -305,10 +304,8 @@ export function Plugins() {
 
   /** Write the plugin that answers for this one when it cannot, through the usual review. */
   const fallBack = (name: string, to: { plugin: string } | null) => {
-    // An adapter is for one pair of APIs: it stays only while the fallback does.
-    const adapt = to !== null && sel?.fallback?.plugin === to.plugin ? sel.fallback.adapt ?? null : null;
-    propose([{ path: ["plugins", name, "fallback"], ...(to === null ? { delete: true } : { value: adapt ? { plugin: to.plugin, adapt } : to.plugin }) }], "save it",
-      to === null ? `${name} gets no fallback: when it cannot answer, the caller is told so` : `when ${name} cannot answer, ${to.plugin} does${adapt ? `, translated by ${adapt}` : ", sent the same request"}`);
+    propose([{ path: ["plugins", name, "fallback"], ...(to === null ? { delete: true } : { value: to.plugin }) }], "save it",
+      to === null ? `${name} gets no fallback: when it cannot answer, the caller is told so` : `when ${name} cannot answer, ${to.plugin} does, sent the same request`);
   };
 
   /** Show a config change in the usual review, and write it if it is kept. */

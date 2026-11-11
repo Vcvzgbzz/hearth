@@ -129,7 +129,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     const p = servingKind(name);
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
-      data: { title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin + (p.fallback.adapt ? ` via ${p.fallback.adapt}` : "") }) } satisfies Dest,
+      data: { title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }) } satisfies Dest,
     });
     y += 56;
   }

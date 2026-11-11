@@ -50,8 +50,8 @@ export interface PluginDecl {
   key: string | null;
   /** For a service: headers sent on every call beside (or instead of) its key, such as an API that reads its key from `X-Api-Key`. Values may be `env:NAME`. */
   headers: Record<string, string>;
-  /** Another plugin that answers `/plugins/<name>/*` when this one cannot. `adapt` names a trust: code plugin that translates the request to the fallback's API, if they differ. */
-  fallback: { plugin: string; adapt: string | null } | null;
+  /** Another plugin that answers `/plugins/<name>/*` when this one cannot, with the same request: one hop, same API. */
+  fallback: { plugin: string } | null;
   /** Narrows what the plugin itself declares; absent hooks all of it. */
   kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
   when: PluginWhen | null;
@@ -178,9 +178,10 @@ export function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     let fallback: PluginDecl["fallback"] = null;
     if (r.fallback !== undefined) {
       const f = typeof r.fallback === "string" ? { plugin: r.fallback } : asRecord(r.fallback, `${at}.fallback`);
-      if (typeof r.fallback !== "string") only(f, ["plugin", "adapt"], `${at}.fallback`);
+      if (f.adapt !== undefined) throw bad(`${at}.fallback.adapt`, "was removed before it shipped: an adapter is a flow line's `adapt:` now, on a second line — see docs/routing.md");
+      if (typeof r.fallback !== "string") only(f, ["plugin"], `${at}.fallback`);
       if (serves === null || mcp !== null) throw bad(`${at}.fallback`, "is for a plugin that serves an API other than MCP");
-      fallback = { plugin: str(f.plugin, `${at}.fallback.plugin`), adapt: f.adapt === undefined ? null : str(f.adapt, `${at}.fallback.adapt`) };
+      fallback = { plugin: str(f.plugin, `${at}.fallback.plugin`) };
     }
     out[name] = {
       use, serves, mcp, run, trust, integrity, key, headers, fallback, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
@@ -202,14 +203,6 @@ export function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     if (p.fallback.plugin === name) throw bad(at, "names the plugin itself");
     if (!to) throw bad(at, `names ${p.fallback.plugin}, which is not a plugin under plugins:`);
     if (to.serves === null || to.mcp !== null) throw bad(at, `names ${p.fallback.plugin}, which serves no API other than MCP`);
-    // An adapter is code the operator chose to run: a trust: code plugin loaded from a file or package.
-    const adapt = p.fallback.adapt;
-    if (adapt === null) continue;
-    const by = out[adapt];
-    if (adapt === name) throw bad(`${at}.adapt`, "names the plugin itself");
-    if (adapt === p.fallback.plugin) throw bad(`${at}.adapt`, "names the fallback itself");
-    if (!by) throw bad(`${at}.adapt`, `names ${adapt}, which is not a plugin under plugins:`);
-    if (by.trust !== "code" || by.use === null || !/^(file|npm):/.test(by.use)) throw bad(`${at}.adapt`, `names ${adapt}, which is not a trust: code plugin with a file: or npm: use`);
   }
   return out;
 }

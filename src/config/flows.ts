@@ -72,9 +72,16 @@ export type FlowEnd = { model: string } | { peer: string; model: string | null }
 
 /**
  * Where a step sends a request: to run, into another flow, to whichever of several would start
- * it soonest, nowhere, or here as the very id that was asked for.
+ * it soonest, nowhere, here as the very id that was asked for, or to a plugin (with an adapter in
+ * front of it when the two APIs differ).
  */
-export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true } | { plugin: string };
+export type FlowTo =
+  | FlowEnd
+  | { flow: string }
+  | { fastest: FlowEnd[] }
+  | { refuse: string }
+  | { asked: true; adapt?: string }
+  | { plugin: string; adapt?: string };
 
 /** The input that stands for every name no other flow takes: the flow that has it decides what happens to those. */
 export const ANY = "*";
@@ -125,21 +132,40 @@ const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "p
 
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, or a refusal. */
-function flowTo(raw: unknown, at: string): FlowTo {
+type Adapters = Readonly<Record<string, unknown>>;
+
+/** An adapter a target names, which must be one the config declares. */
+function adaptOf(raw: unknown, at: string, adapters: Adapters): string | undefined {
+  if (raw === undefined) return undefined;
+  const name = str(raw, at);
+  if (!(name in adapters)) throw bad(at, `names ${name}, which is not under adapters:`);
+  return name;
+}
+
+/** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, a refusal, or a plugin (with an adapter on the way). */
+function flowTo(raw: unknown, at: string, adapters: Adapters = {}): FlowTo {
   if (typeof raw === "string" && raw.trim() !== "") return { model: raw.trim() };
   const o = asRecord(raw, at);
-  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked", "plugin"], at);
+  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked", "plugin", "adapt"], at);
   const said = ["peer", "flow", "fastest", "refuse", "asked", "plugin"].filter((k) => o[k] !== undefined);
   if (said.length > 1 || (said.length === 1 && said[0] !== "peer" && o.model !== undefined)) {
     throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse, asked or a plugin");
   }
+  // An adapter reshapes what a plugin is sent and what it answers, so it sits on a plugin target
+  // and nowhere else: a model's answer is a stream, and a peer's is another node's to shape.
+  if (o.adapt !== undefined && o.plugin === undefined && o.asked === undefined) {
+    throw bad(`${at}.adapt`, "sits on a line that sends to a plugin: give the step a `plugin` target, or `asked: true` for the plugin a request asks for");
+  }
   if (o.asked !== undefined) {
     if (o.asked !== true) throw bad(`${at}.asked`, "must be true: run it here as the id that was asked for");
-    return { asked: true };
+    const adapt = adaptOf(o.adapt, `${at}.adapt`, adapters);
+    return { asked: true, ...(adapt !== undefined ? { adapt } : {}) };
   }
   if (o.refuse !== undefined) return { refuse: str(o.refuse, `${at}.refuse`) };
-  if (o.plugin !== undefined) return { plugin: str(o.plugin, `${at}.plugin`) };
+  if (o.plugin !== undefined) {
+    const adapt = adaptOf(o.adapt, `${at}.adapt`, adapters);
+    return { plugin: str(o.plugin, `${at}.plugin`), ...(adapt !== undefined ? { adapt } : {}) };
+  }
   if (o.flow !== undefined) return { flow: str(o.flow, `${at}.flow`) };
   if (o.fastest !== undefined) {
     if (!Array.isArray(o.fastest) || o.fastest.length < 2) throw bad(`${at}.fastest`, "must list at least two places to choose between");
@@ -229,7 +255,7 @@ export function callerDecls(raw: unknown, routers: Record<string, Router>): Reco
 
 /** Check a `flows:` section against a running config, as loading the file would. */
 export function flowsFor(raw: unknown, cfg: HearthConfig, actions: Record<string, unknown> = cfg.actions): Record<string, Flow> {
-  return flowDecls(raw, cfg.scheduler.lanes, cfg.peers, actions, cfg.backends.flatMap((b) => b.routes.map((r) => r.path)), cfg.plugins);
+  return flowDecls(raw, cfg.scheduler.lanes, cfg.peers, actions, cfg.backends.flatMap((b) => b.routes.map((r) => r.path)), cfg.plugins, cfg.adapters);
 }
 
 /** A step's `plugins:`: names under `plugins:`, or `{ use, models }` to wire this line's own models. */
@@ -272,7 +298,7 @@ function takesOf(raw: unknown, at: string, steps: readonly FlowStep[], routed: r
 /** `flows:`, checked whole: every name resolves, every flow ends in an answer, and none leads back to itself. */
 export function flowDecls(
   raw: unknown, lanes: Record<string, unknown>, peers: readonly PeerConfig[], actions: Record<string, unknown>, routed: readonly string[],
-  plugins: Record<string, PluginDecl> = {},
+  plugins: Record<string, PluginDecl> = {}, adapters: Adapters = {},
 ): Record<string, Flow> {
   const flows: Record<string, Flow> = {};
   const entry = new Map<string, string>();
@@ -297,7 +323,7 @@ export function flowDecls(
       const step = asRecord(r, here);
       only(step, ["when", "to", "lane", "params", "do", "max", "plugins"], here);
       if (step.to === undefined) throw bad(`${here}.to`, "is required");
-      const to = flowTo(step.to, `${here}.to`);
+      const to = flowTo(step.to, `${here}.to`, adapters);
       let when: FlowWhen | null = null;
       if (step.when !== undefined && step.when !== null) {
         const w = asRecord(step.when, `${here}.when`);

@@ -16,6 +16,7 @@ import type { History } from "../observe/history.js";
 import type { Limits } from "../access/limits.js";
 import type { Logger, LogRing } from "../observe/log.js";
 import type { PeerRegistry } from "../peers/peers.js";
+import type { Adapters } from "../routing/adapters.js";
 import type { Plugins } from "../plugins/plugins.js";
 import type { BackendPool } from "../queue/pool.js";
 import type { RequestLog } from "../observe/requestlog.js";
@@ -52,6 +53,8 @@ export interface RouteContext {
   pool: BackendPool;
   peers: PeerRegistry;
   plugins: Plugins;
+  /** `adapters:`: the sandboxed code a line's `adapt:` names, compiled from the live config. */
+  adapters: Adapters;
   controls: Controls;
   config: ConfigFile;
   canary: ReturnType<typeof createCanary>;
