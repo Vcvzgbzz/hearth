@@ -587,6 +587,8 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const to = (name: string) => { const r = resolve(name, world); return r.unlisted ? `no: ${r.reason}` : r.model; };
   assert.deepEqual([to("LLM"), to("LLM:fast"), to("LLM:tiny"), to("LLM:sharp")], ["big", "small", "small", "eyes"]);
   assert.deepEqual(variantsOf(cfg.flows, "LLM"), ["fast", "tiny", "sharp", "deep"], "a rule handed on to adds the variants it tests");
+  const ghost = parseConfig(base({ ...flows, ghost: { inputs: ["LLM"], off: true, steps: [{ when: { variant: "ghost" }, to: "small" }, { to: "big" }] } }));
+  assert.ok(!variantsOf(ghost.flows, "LLM").includes("ghost"), "a rule that is switched off offers none of its variants");
   assert.equal(to("LLM:deep"), "big", "a variant only a later rule tests is still a variant, decided by the lines it reaches");
   assert.equal(to("LLM:nope"), 'no: "LLM:nope" is not offered here: LLM comes as LLM:fast, LLM:tiny, LLM:sharp, LLM:deep');
   assert.equal(to("odd:name"), "small", "a name a flow takes as written is itself, colon and all");
