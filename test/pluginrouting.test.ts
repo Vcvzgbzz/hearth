@@ -159,6 +159,9 @@ try {
   assert.deepEqual(await call("/plugins/web-get/page", "k-picky"), { status: 200, body: { at: "/crawl/page" } }, "a router's own name for a plugin reaches it");
   assert.deepEqual(await call("/plugins/web-put/page", "k-picky"), { status: 403, body: { error: "only the tools are open to you" } }, "a name no step gives is refused in the router's words");
   assert.equal((await call("/plugins/web-put/page", "k-app")).status, 404, "on rules that run names as asked, a name no plugin has is not found");
+  const split = await call("/plugins/web-put%2Fpage/x", "k-app");
+  assert.equal(split.status, 404);
+  assert.match(split.body.error!, /one path segment/, "a name that decodes to two path segments is refused before any rule is asked");
 
   // Several rules take one type, tried in order. A rule with no Otherwise passes what it does not take on.
   assert.deepEqual(await call("/plugins/tools/mcp", "k-split"), { status: 200, body: { at: "/tools/mcp" } }, "the first rule takes its own variant");
