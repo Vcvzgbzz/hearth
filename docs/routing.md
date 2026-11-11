@@ -271,9 +271,9 @@ A caller is listed its own router's names on `/v1/models`. Each router needs its
 own flow for `*`, as `flows:` does, and none may be called `default`.
 
 `strict: true` switches off every way a request can end up somewhere else for
-a router's callers: a flow's next line after a failure, on chat and on paths,
-and a backend route's `fallback`. A request runs on the model its line names or
-fails. That is the
+a router's callers: a flow's next line after a failure, on chat, on paths and
+on a plugin's API, and a backend route's `fallback`. A request runs on the model
+or plugin its line names, or fails. That is the
 setting for testing a model without wondering whether something else answered.
 
 A step's `max`, a flow's `sticky` and the line counts are kept by flow name, so
@@ -352,10 +352,103 @@ routers:
 - `{ asked: true }` lets it through to the plugin it names, and `{ plugin: name }` sends it to another;
   `refuse` turns it away (403, with the step's words). A step that sends to a model or a peer is passed over.
 - A model request passes over a step that names a plugin, so such a step cannot be a flow's last.
+- **A failed line hands the request to the next one.** When the plugin a line names cannot answer, or
+  the line's `adapt:` code finds no counterpart for the request, the router is asked again with that
+  plugin passed over: the next line that matches, as a chat request moves on after a failed model.
+  Every line is the router's own decision, so a line it would refuse is never taken, and
+  `strict: true` switches the next line off. A plugin's own `fallback` is still one hop, with the
+  same request, before the line counts as failed.
+- **`adapt:` names an adapter** in front of that line's target: see
+  [Adapters on a line](#adapters-on-a-line).
 - Every condition a step can test applies: the caller, a header, the time of day.
 - With no flow for `MCP` or `API`, a router's flow for every other name decides, as it does for a name no
   rule takes: one that runs it as itself lets every plugin through, and one that refuses refuses every plugin
   until a flow for `MCP` or `API` is added.
+
+### Adapters on a line
+
+An adapter is a named block of code that sits on a line between a plugin target and what that
+target is sent: it reshapes the request on the way in, and the answer on the way out. The code is
+kept in `hearth.yaml`, under `adapters:`, and a plugin target names one with `adapt:`. A change to
+it applies without a restart, like a flow.
+
+"Fall back from one API to another" then needs no feature of its own: it is two lines.
+
+```yaml
+adapters:
+  searxng-to-degoog:
+    timeoutMs: 2000          # each of request() and response(); 1000 by default, 10000 at most
+    code: |
+      export function request(req) {
+        if (req.method !== "GET" || req.path !== "/search") return null;   // no counterpart here
+        return { path: "/api/search", query: { q: req.query.q, format: "json" } };
+      }
+      export function response(res, req) {
+        const d = JSON.parse(res.body);
+        return { body: JSON.stringify({ query: req.query.q, results: d.results }) };
+      }
+
+routers:
+  partners:
+    flows:
+      tools:
+        inputs: [API]
+        steps:
+          - when: { variant: [web-search] }
+            to: { plugin: searxng }
+          - when: { variant: [web-search] }
+            to: { plugin: degoog, adapt: searxng-to-degoog }   # taken when the first line fails
+          - to: { refuse: "only web-search is open" }
+```
+
+The code is an ES module that exports `request`, `response`, or both. A side it does not export is
+passed through unchanged, so an adapter can reshape only the answer.
+
+```ts
+type Req = { method: string; path: string; query: Record<string, string>; contentType: string | null; body: string | null };
+type Res = { status: number; contentType: string | null; body: string };
+
+request(req: Req): Partial<Req> | null                     // fields left out keep their value
+response(res: Res, req: Req): Partial<Res>                 // only on a 2xx; req is the caller's request
+```
+
+Both sides are synchronous: the code returns a value, and there is no `await`.
+
+- **Only a plugin target carries one.** `{ plugin: name, adapt: … }` for a plugin the router names,
+  and `{ asked: true, adapt: … }` for the plugin a `/plugins/<name>/*` request asks for. A model
+  target cannot: that answer is a stream. Naming an adapter that is not under `adapters:` is a
+  config error, and so is `adapt:` beside a model.
+- **`request()` decides whether this line can serve the request.** `null` means it has no
+  counterpart on that plugin's API, so the line fails and the next one is tried, as when the target
+  itself fails. `path` is relative to the target plugin's root.
+- **No secrets go in.** The code never sees the caller's credentials or any header but the content
+  type, and it is handed the body as text only when it is text: a binary body is `null`, and left
+  as it was unless the code sets `body`. Hearth adds the target plugin's own `key` and `headers`
+  after `request()` returns, as it does on a line with no adapter.
+- **The target's answer is never rewritten unless it is a 2xx.** A 4xx goes back to the caller as it
+  came and is not a failed line. A 5xx or 429 is a failed line, so the next one is tried; when there
+  is no next line (or the router is strict) and the plugin has no `fallback`, its answer is relayed
+  as it is rather than turned into an error here.
+- **Failures.** A `request()` that throws or runs out of time counts as the line failing. A
+  `response()` that throws or runs out of time is a 502 naming the adapter, since the target did
+  answer and there is nowhere else to go. Either way the log says `flow.adapter_failed` with the
+  adapter, the side and why.
+- **The answer is buffered.** A line with an adapter holds the whole answer in memory
+  (`maxBodyBytes` at most) rather than streaming it, because the code returns it rewritten.
+- **It runs in hearth's own interpreter.** The code is a small subset of JavaScript with no network,
+  disk, timers, `require` or `process`: the request goes in as plain data and the answer comes out as
+  plain data, and every run is held to a deadline and a memory budget from inside the interpreter's
+  own loop. A loop or an allocation that never ends is stopped; regex is refused, because a
+  pathological pattern cannot be stopped once it starts. The language, its builtins, its limits and
+  the error formats are in [The adapter language](adapter-language.md). `timeoutMs` is the deadline
+  for each of `request()` and `response()`, and the heap is 16 MiB. Code that does not compile, or a
+  module that exports neither side, stops the config from loading with a line naming the adapter and
+  where it broke; `hearth serve --check` reports it too.
+- An adapter the router never reaches never runs at all, and one the config refused never gets that
+  far: the line naming it is refused with the rest of the file.
+
+A plugin's own `fallback` is still one hop with the same request ([A fallback](plugins.md#a-fallback)).
+To fall back to a plugin that speaks another API, put it on the next line with `adapt:` instead.
 
 ### Actions
 
