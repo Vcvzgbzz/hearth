@@ -6,16 +6,17 @@
 import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, list, nodeOf, ordered, orderOf, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, selectMany } from "./editStore.js";
 import { contextMenu } from "./editor.js";
 import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
+import { asTried } from "./trace.js";
 
 /** What the draft adds to the picture: what a rule may name, the request being tried, and what is known about each model. */
-type Editing = { /** The router whose rules these are; null for the default one. */ router: string | null; /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
+type Editing = { /** The router whose rules these are; null for the default one. */ router: string | null; /** What becomes of a name no rule takes. */ rest: Hub["rest"]; models: string[]; lanes: string[]; tried: Tried | null; asked: string | null; pending: string[]; facts: Facts; /** Why the file would refuse where a line of a rule sends work. */ trouble: (rule: string, line: number) => string | null; /** Rules the draft has changed: what was counted on their lines no longer lines up. */ changed: (rule: string) => boolean };
 
 /** Widths and heights the layout steps by. A node drawn beside a rule is `SIDE` tall, plus a row per place for a fastest-of. */
 const RULE = { width: 640, head: 36, row: 32 };
@@ -43,7 +44,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   // Where a tried request went: the line that decided in each rule, and the model or peer it reached.
   const tried = edit?.tried && !edit.tried.error ? edit.tried : null;
   const decided = new Map((tried?.path ?? []).map((p) => [p.flow, p.step]));
-  const reaches = (e: End) => tried !== null && (e.kind === "peer" ? tried.target === "peer" && tried.peer === e.peer : tried.target === "local" && tried.model === e.model);
+  const reaches = (e: End) => tried !== null && (e.kind === "peer" ? tried.target === "peer" && tried.peer === e.peer && (e.model === null || e.model === tried.model) : tried.target === "local" && tried.model === e.model);
 
   // A flow that only says "this name runs there" is a line from the name; the rest are rules, drawn as nodes.
   const direct = new Map<string, End>();
@@ -109,11 +110,16 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     });
     y += 56;
   }
-  for (const name of new Set(used.flatMap((e) => (e.kind === "peer" ? [e.peer] : [])))) {
-    const p = peers.find((n) => n.name === name);
+  // A box for each model of a peer that a line uses, so two lines to one peer show which model each runs as.
+  for (const [id, e] of new Map(used.flatMap((e) => (e.kind === "peer" ? [[peerNode(e.peer, e.model), e] as const] : [])))) {
+    const p = peers.find((n) => n.name === e.peer);
+    const theirs = e.model === null ? undefined : p?.map?.[e.model];
     nodes.push({
-      id: `peer:${name}`, type: "dest", position: { x: endX, y },
-      data: { title: name, kind: "peer", on: tried?.target === "peer" && tried.peer === name, down: !p?.up, sub: p?.up ? `a peer · lends you ${Object.keys(p.map ?? {}).length}` : "a peer · cannot be reached" } satisfies Dest,
+      id, type: "dest", position: { x: endX, y },
+      data: {
+        title: e.model ?? e.peer, kind: "peer", on: reaches(e), down: !p?.up,
+        sub: !p?.up ? `on ${e.peer}, a peer · cannot be reached` : e.model === null ? `a peer · whatever was asked for` : `on ${e.peer}, a peer${theirs !== undefined && theirs !== e.model ? ` · ${theirs} there` : ""}`,
+      } satisfies Dest,
     });
     y += 56;
   }
@@ -163,7 +169,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   const wire = (id: string, lit: boolean, kind: string, look: Partial<Line> = {}) => ({ id, type: "flow", selectable: false, ...(lit ? { zIndex: 1001 } : {}), data: { jobs: [], pulses: [], wire: true, lit, color: (HUE[kind] ?? HUE.unset!).stroke, ...look } satisfies Line });
   /** A line from an outlet to the model or the peer it ends at. */
   const to = (line: ReturnType<typeof wire>, source: string, handle: string, end: End): void => {
-    edges.push({ ...line, source, sourceHandle: handle, target: end.kind === "peer" ? `peer:${end.peer}` : `model:${end.model}` });
+    edges.push({ ...line, source, sourceHandle: handle, target: end.kind === "peer" ? peerNode(end.peer, end.model) : `model:${end.model}` });
   };
   /** An order and the lines from it to each of its places. */
   const order = (name: string, at: { x: number; y: number }, lit: boolean, unused = false): Node => {
@@ -224,7 +230,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step, orders: Object.fromEntries(orders),
           cloud: [...away], models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined, takes: f.takes,
           ...(d.flowHits && !edit?.changed(name) ? { hits: f.steps.map((_, i) => d.flowHits![name]?.[i] ?? 0) } : {}),
-          ...(edit ? { marks: f.steps.map((s) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts, (f.takes ?? []).length > 0); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
+          ...(edit ? { marks: f.steps.map((s, i) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts, (f.takes ?? []).length > 0) ?? edit.trouble(name, i); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
           orphan: f.inputs.length === 0 && handsTo(name).length === 0,
         } satisfies SwitchBox,
       });
@@ -313,10 +319,11 @@ export function Routing() {
     const self = view.net.nodes.find((n) => n.self);
     const models = [...new Set([...(view.catalog ?? []), ...(self?.backends ?? []).flatMap((b) => b.serves ?? []), ...Object.keys((edit.draft.models ?? {}) as object)])].sort();
     const lanes = Object.keys(((edit.draft.scheduler as { lanes?: object } | undefined)?.lanes ?? {}) as object);
-    return layout(view, edit.sel, { router: edit.router, rest: restOf(edit.draft).mode, models, lanes, tried: edit.tried, asked: edit.trial?.model ?? null, pending: edit.pending, facts: factsOf(edit.draft, data),
+    return layout(view, edit.sel, { router: edit.router, rest: restOf(edit.draft).mode, models, lanes, // A replayed request is lit as a tried one while no trial is running.
+      tried: edit.trial ? edit.tried : edit.replay && asTried(edit.replay), asked: edit.trial?.model ?? edit.replay?.asked ?? null, pending: edit.pending, facts: factsOf(edit.draft, data), trouble: (rule, line) => lineTrouble(edit.draft!, rule, line),
       // What was counted is the default router's: on another router's map no line shows a count.
       changed: (rule) => edit.router !== null || JSON.stringify((edit.draft!.flows as Record<string, unknown> | undefined)?.[rule]) !== JSON.stringify((edit.file?.doc?.flows as Record<string, unknown> | undefined)?.[rule]) });
-  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
+  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.trial, edit.replay, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
   const dragging = useRef<string | null>(null);
@@ -327,12 +334,21 @@ export function Routing() {
     return laid.nodes.map((n) => (ys.has(n.id) && ys.get(n.id) !== n.position.y ? { ...n, position: { x: n.position.x, y: ys.get(n.id)! } } : n));
   }, [laid, sizes]);
   // Nodes picked out together stay picked out through a redraw, and where a drag has them while it lasts.
-  const many = useEdit((s) => s.many);
+  // A redraw carries over what the map has selected and never reads `many`: the map reports its selection a
+  // commit after it changes, and a redraw that applied the old report would undo the change it is about to hear of.
   useEffect(() => setNodes((now) => {
     const was = new Map(now.map((n) => [n.id, n]));
-    const picked = new Set(useEdit.getState().many.map((m) => m.node));
-    return held(fitted, now, dragging.current).map((n) => (picked.has(n.id) ? { ...n, selected: true, ...(dragging.current && was.get(n.id) ? { position: was.get(n.id)!.position } : {}) } : n));
-  }), [fitted, many]);
+    return held(fitted, now, dragging.current).map((n) => (was.get(n.id)?.selected ? { ...n, selected: true, ...(dragging.current ? { position: was.get(n.id)!.position } : {}) } : n));
+  }), [fitted]);
+  // What is picked out from outside the map (a paste, Escape) is given to it once and cleared. `many` is only
+  // ever the map's own report, so the map's selection is never set from it and the two cannot undo each other.
+  const toPick = useEdit((s) => s.toPick);
+  useEffect(() => {
+    if (!toPick) return;
+    const picked = new Set(toPick.map((m) => m.node));
+    setNodes((now) => (now.some((n) => Boolean(n.selected) !== picked.has(n.id)) ? now.map((n) => (Boolean(n.selected) === picked.has(n.id) ? n : { ...n, selected: picked.has(n.id) })) : now));
+    useEdit.setState({ toPick: null });
+  }, [toPick]);
   // The line under the pointer is drawn as strongly as one a tried request takes, so it can be followed through a
   // crossing. Only the lines are redrawn for it: touching the nodes would cut off a drag that is just starting.
   const edges = useMemo(() => (edit.hover === null ? laid.edges : laid.edges.map((e) => (e.id === edit.hover ? { ...e, zIndex: 1001, data: { ...e.data, lit: true } } : e))), [laid.edges, edit.hover]);
@@ -375,7 +391,7 @@ export function Routing() {
         const at = "changedTouches" in e ? e.changedTouches[0]! : e;
         const node = document.elementFromPoint(at.clientX, at.clientY)?.closest(".react-flow__node")?.getAttribute("data-id");
         const from = { node: c.fromNode.id, handle: c.fromHandle?.id ?? null };
-        if (node && node !== from.node) connect(from, node);
+        if (node && node !== from.node) connect(from, node, { x: at.clientX, y: at.clientY });
         else if (!node && takesWork(from.node)) pick({ x: at.clientX, y: at.clientY, from });
       }}
       onNodeClick={(_, n) => {

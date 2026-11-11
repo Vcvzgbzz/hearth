@@ -13,7 +13,7 @@ import { History } from "./pages.js";
 import { BackendInspector, BackendsTab, CallerInspector, CallersTab, jobOrder, JobInspector, JobsTab, ModelInspector, ModelsTab, PinInspector, PinsTab, same, sectionFacts, type Pick, type Sel } from "./Sections.js";
 import { boardOrder, boardSlots, changeWords, draftLanes, editedAt, knobOps, laneCeilings, laneNameError, lanePosition, laneRows, laneStatus, laneTags, laneTracks, lanesWithoutPriority, numberText, ORDER_KEYS, orderChip, PIN_WORDS, pinsOf, priorityGaps, removalBlock, reviewNotes, seeded, slotSummary, valueAt, waitingOn, type Doc, type LaneRow, type OrderKey, type Path, type SlotsOf, type Track } from "./knobs.js";
 import { changeDraft, discardDraft, dirty, dropDraft, markUnread, takeFile, takeSaved, useSched } from "./schedStore.js";
-import { request, toast, useStore } from "./store.js";
+import { request, toast, useLink, useStore } from "./store.js";
 import type { LaneDefaults } from "../observe/uidata.js";
 import { ago, Button, Card, cx, Empty, mono } from "./ui.js";
 
@@ -640,6 +640,13 @@ function Tabs({ sel, pick }: { sel: Sel | null; pick: Pick }) {
  */
 function Page({ knobs, err }: { knobs: Knobs | null; err: string | null }) {
   const [sel, setSel] = useState<Sel | null>(null);
+  // A lane or an order setting is linked as `<kind>:<name>`; the other picks are not kept in the address.
+  useLink(sel && (sel.kind === "lane" || sel.kind === "order") ? [`${sel.kind}:${sel.id}`] : [], knobs !== null || err !== null, ([at = ""]) => {
+    const [kind, ...rest] = at.split(":");
+    const id = rest.join(":");
+    const lane = useStore.getState().data!.scheduler.lanes.some((l) => l.name === id) || (knobs !== null && valueAt(knobs.draft, ["scheduler", "lanes", id]) !== undefined);
+    if (kind === "lane" ? lane : kind === "order" && (ORDER_KEYS as readonly string[]).includes(id)) setSel({ kind: kind as "lane" | "order", id });
+  });
   const insp = useRef<HTMLDivElement>(null);
   // Below the width where the inspector sits beside the board, a pick out of its sight brings it into view.
   useEffect(() => {

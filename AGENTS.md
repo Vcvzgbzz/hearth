@@ -40,7 +40,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
   timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
   (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)
-- `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `history.ts`,
+- `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `requests.ts` (the
+  recent finished requests, one record each, behind `/ui/requests`), `history.ts`,
   `usage.ts`, `canary.ts`, `views.ts` (builds the console's data), `uidata.ts` (the shape of
   that data: the one contract the server and the page are both compiled against), `report.ts` (`hearth report`, with
   secrets scrubbed), `updates.ts` (the daily npm check behind "newer hearth")
@@ -48,7 +49,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
 - `src/errors.ts`: every error a request can end with, and the status `refusalOf` answers it with;
   imports nothing, so any layer can throw one
 - `src/console/`: the React status page and config editor (built to `dist/`).
-  The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the recent-requests rail beside the
+  The Lending page is `Lending.tsx`; the Keys page is `Keys.tsx`; the Usage page is `Usage.tsx` and its arithmetic `tally.ts`; the recent-requests rail beside the
   Topology map is `Rail.tsx`; the Plugins page is
   `Plugins.tsx` and its Add plugin dialog `AddPlugin.tsx` (plugin blocks on the
   routing map are in `flowNodes.tsx`; plugins that serve an API are boxes under
@@ -60,7 +61,13 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   what the node's load does to its fire is `fire.ts`. The routing map is
   `Routing.tsx` (layout), `flowNodes.tsx` (one view per kind of node) and
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
-  file)
+  file). The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
+  boundary around each page and the whole console is `Boundary.tsx`; the Config
+  page's draft, which also outlives a walk away, is `configStore.ts`; the Logs page
+  is `logs.tsx`, and what it filters and keys rows by is `logfilter.ts`; the Requests page
+  and the replay strip over the routing map are `Requests.tsx`, and what a trace says is `trace.ts`; the Usage
+  page is `Usage.tsx`, and its sums are `tally.ts`; the Playground page is
+  `Playground.tsx`, and its stream parser, code-fence split and facts line are `chat.ts`
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

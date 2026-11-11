@@ -10,7 +10,7 @@ single response and still adds **nothing** to what `npm install` pulls down —
 the browser half is bundled from devDependencies and the package keeps its one
 runtime dependency.
 
-Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
+Eleven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
 
 - **Topology**: this node, its backends, the hardware they share, and its peers,
   with requests drawn as they flow, over a strip of the last ten minutes. Click
@@ -30,8 +30,11 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   **Recent requests** down the left lists what this node asked for, running
   ones first, then the last twelve that ended, each with who asked, where it
   ran and how long it took. Point at one and the backend or peer that ran it
-  lights up on the map; click it for that box's settings. The rail folds away
-  with its arrow, and the browser remembers.
+  lights up on the map; click a finished one for its trace on the Requests
+  page, or a running one for that box's settings. The rail folds away
+  with its arrow, and the browser remembers. In a window narrower than 1024px
+  the rail is hidden, and below 1280px a box's settings lie over the right of
+  the map instead of beside it, so the map keeps its width.
   A right-click on the empty part of the picture offers what the strip over it
   does, where the pointer is: a new backend, hardware, machine or provider, the
   published versions, and fitting the picture in view.
@@ -53,6 +56,7 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   anywhere, and whether you are lending it. `/network` is always one node's
   view; this is all of them at once. A model served here can be warmed or
   evicted from its row.
+- **Usage**: what the node has counted over 7 or 31 days (UTC), from `GET /usage`: tokens per day as a stacked bar chart, and a table of requests, failures, tokens, cached tokens, cost and share, by caller or by model; a row opens to its breakdown by the other.
 - **Keys**: every api key by label, the router it goes by, its limits and expiry,
   what it used today and over 31 days, and when it last spoke to this node. Mint one (shown once), revoke one by its label, or rotate one: a new key for the same label, shown once, with the old one refused from then on.
   A key opens to set its router, its lane and its limits, and to list what its
@@ -102,12 +106,53 @@ Nine pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
   the next restart. It is the page the former Queue page held, so an old `#queue`
   address opens it.
 - **Logs**: hearth's recent log lines as sentences, newest first, with a level
-  filter, a model filter, a search, and the raw fields a click away.
+  filter, a model filter, a search, and the raw fields a click away. A request
+  line has a **trace** link to that request on the Requests page.
+- **Requests**: the node's recent finished requests from `/ui/requests`, newest
+  first and refreshed every few seconds, each with when it ended, the model asked
+  for (and the one it ran as), the caller, where it ran (a backend, a peer, the
+  cache, or refused), a bar of its wait and run, and whether it failed; filter by
+  a search, a model, a caller, or failures only. Click one for its **trace**: what
+  became of it in one line; a bar of its wait, its time to first byte and the
+  rest of its run, with tokens in, out and cached and tokens per second; the rule
+  lines that decided it, each in the words the Routing map uses and read from the
+  rules as they are now (a rule or line that is gone says it has changed since);
+  then its reason, actions, plugins, the headers a rule tests, what it fell back
+  from, and its error. A request that fell back is shown as one step per attempt.
+  The node keeps the last 2,000; an older link says it is no longer kept.
+  **Show on the map** opens the Routing page on that request's router with its
+  path lit, as a tried request is, and the first rule that decided it in view,
+  under a strip naming the request with **open trace** and a close button.
+  Trying a request or closing the strip ends the replay.
 - **Config**: `hearth.yaml` by section, or as text. See below. Its **Lanes &
   queues** section is a pointer: everything in `scheduler:` is edited on the
   Scheduler page, and the section offers the button that opens it rather than a
   second form for the same keys. The section stays in place, so that an old habit
   lands somewhere.
+
+The address names the page and what is selected on it, so a link lands on the
+thing itself and Back returns to the page before. Each part after the page is
+URI-encoded:
+
+| address | opens |
+|---|---|
+| `#topology/self`, `#topology/backend:<name>` (also `peer:`, `resource:`, `machine:`) | that box's details on the Topology map |
+| `#plugins/<name>` | that plugin's panel |
+| `#keys/<label>` | that key, opened |
+| `#routing/<router>`, `#routing/<router>/rule:<name>` | that router's map (`default` for the rules everyone goes by), and that rule's dialog |
+| `#routing/<router>/req:<id>` | that router's map with a finished request's path lit |
+| `#requests/<id>` | that request's trace |
+| `#config/<tab>` | that section of the Config page, or `yaml` for the text |
+| `#scheduler/lane:<name>`, `#scheduler/order:<setting>` | that lane or order setting in the Scheduler's inspector |
+
+Selecting something rewrites the address without adding to the history;
+changing page adds an entry. A link to something that does not exist opens the
+page with nothing selected. The details on Topology and a plugin's panel have a
+link button that copies the address.
+
+A page that fails to draw shows the error in its place, with **try again** and
+**reload**; the sidebar and header keep working, and another page opens as
+usual. The error and where it happened go to the browser's console.
 
 Behind the Models, Keys, Lending and Scheduler pages a faint ASCII smoke rises,
 and beside the Topology and Routing maps it rises behind the sidebar instead,
@@ -124,9 +169,9 @@ corner stokes the whole hearth. None of that touches the node. The node's name
 seeds it, so every node burns its own way. With reduced motion it holds still,
 and without WebGL2 there is none.
 
-The live view is 120 samples taken every 5s. The day view and the Logs page are
-held in memory and lost on restart unless `historyFile` names a file to keep
-them in:
+The live view is 120 samples taken every 5s. The day view, the Logs page and the
+records of recent requests (`/ui/requests`) are held in memory and lost on
+restart unless `historyFile` names a file to keep them in:
 
 ```yaml
 historyFile: /var/lib/hearth/history.json
@@ -135,6 +180,29 @@ historyFile: /var/lib/hearth/history.json
 It is written every minute and at shutdown, and read once at startup. Under
 systemd, `StateDirectory=hearth` makes `/var/lib/hearth` writable. The full log
 is still whatever captures stdout, journald usually; the page shows the tail.
+
+### The Playground
+
+The Playground page talks to any name the node serves for chat: each type
+(types first, as in **Try a request**) and each model by its own name. A type
+whose rule `takes` other paths is not chat and is not offered. **compare** adds
+a second pane, side by side on a wide screen and stacked on a narrow one; the
+message box at the bottom sends the same message to every pane, each to the
+name it has picked. Enter sends, Shift+Enter starts a new line, and **stop**
+ends the answers still streaming. The system prompt, max tokens (1024 unless
+changed) and temperature (the backend's own when left empty) apply to both
+panes; **Clear** empties the conversations.
+
+Each request is a real streamed `POST /v1/chat/completions`, sent with the
+signed-in session or the stored key, the same as **send it**. Under each answer
+one line says the model it ran as, the backend or peer that ran it, the wait,
+the time to the first token, the total, the tokens and the rate, from the
+node's record of that request (`/ui/requests/<id>`), with a **trace** link to
+it; where that record is out of reach, the line is built from the response
+headers and the page's own clock. When both panes have finished, the quicker
+answer is marked **faster**. Conversations live in the browser tab only: a walk
+to another page keeps them, a reload clears them, and the node keeps nothing
+of them beyond its usual record of each request.
 
 ### Changing things from the page
 
@@ -177,7 +245,11 @@ is focused. **add setting** searches every setting the entry can take, including
 those inside a group (`stats.vision`), and goes to one that is already set.
 Click an entry's name to rename it; the rename changes only the key, so its
 comments and layout stay. Nothing is written until **review & save** has shown
-the diff and said whether it applies live or needs a restart.
+the diff and said whether it applies live or needs a restart. Unsaved edits stay
+when you walk to another page and back, and the header counts them with the
+Routing and Scheduler drafts; a click on that count opens the page holding them.
+If the file changes under unsaved edits, the edits stay on the file they were
+made on, the page says so, and saving them is refused until they are reverted.
 
 When a change is waiting for a restart, the header offers **restart**. hearth
 finishes what is in flight, then exits with status `75` so a supervisor that
@@ -262,6 +334,14 @@ line; **+ type** brings one onto the map.
   real request for that name and says where the node ran it, how long it took
   and what came back, with a note when that is not where the rules pointed. It
   is offered only for the rules the node runs now, with nothing pretended.
+- **what would change?** beside **review & publish**, on a draft with no
+  problems, decides the most recent requests (up to 500) again under the draft
+  and under the rules in force, and lists those that would go somewhere else:
+  the name asked for, where it goes now and where it would go, how many, and a
+  link to one of them on the Requests page. Each keeps what was recorded of it
+  (caller, lane, tested headers, prompt size, and for chat images and tools);
+  idle, queues, loaded models and the time of day are read as they are now.
+  The review before publishing carries the same count as a note.
 - **A model's box carries the hardware it runs on** as a small tag, and so does
   each model in the list of places to send a line, so two copies of one model
   (one on a card, one on the CPU) are told apart at a glance.
@@ -284,7 +364,15 @@ line; **+ type** brings one onto the map.
   a model and brings it into view. **Right-click** the map to add a rule or an
   action there, or a rule or an action to edit it, duplicate it, switch it off
   or delete it.
-- **Keys**: with a rule or an action selected, Delete or Backspace removes it,
+- **Peers**: a model a peer lends has a box of its own once a line uses it, so
+  two lines to one peer show which model each runs as. A line let go on a peer
+  that lends several models opens the list of them to choose from. A line the
+  file would refuse is marked `!` where it stands: one sent to a rule that is
+  gone, a last line that ends at a peer, or a peer sent an id it does not lend.
+- **Deleting a rule** leaves the types it took on the Router, marked, to be
+  sent somewhere else.
+- **Keys**: with a rule or an action selected, Delete or Backspace removes it
+  (not while a rule is open in its dialog),
   Ctrl/⌘+D makes a second one, and Ctrl/⌘+C then Ctrl/⌘+V pastes a copy. A
   copied rule takes no names until you give it some. Ctrl/⌘+Z undoes and
   Ctrl/⌘+Shift+Z redoes, across routers and both pages; Escape closes the panel. A rule

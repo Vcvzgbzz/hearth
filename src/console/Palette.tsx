@@ -30,7 +30,7 @@ export function Palette() {
     if (!d) return [];
     const self = d.net.nodes.find((n) => n.self)!;
     const page = (p: Page, label: string): Cmd => ({ id: `p:${p}`, label, hint: "page", run: () => go(p) });
-    const out: Cmd[] = [page("topology", "Topology"), page("routing", "Routing"), page("plugins", "Plugins"), page("models", "Models"), page("lending", "Lending"), page("keys", "Keys"), page("scheduler", "Scheduler"), page("logs", "Logs"), page("config", "Config")];
+    const out: Cmd[] = [page("topology", "Topology"), page("routing", "Routing"), page("playground", "Playground"), page("plugins", "Plugins"), page("models", "Models"), page("lending", "Lending"), page("keys", "Keys"), page("usage", "Usage"), page("scheduler", "Scheduler"), page("logs", "Logs"), page("requests", "Requests"), page("config", "Config")];
     for (const b of self.backends ?? []) out.push({ id: `b:${b.name}`, label: b.name, hint: "backend", run: () => { go("topology"); select({ kind: "backend", id: b.name }); } });
     for (const p of d.net.nodes.filter((n) => !n.self)) out.push({ id: `n:${p.name}`, label: p.name, hint: p.up ? "peer" : "peer · down", run: () => { go("topology"); select({ kind: "peer", id: p.name }); } });
     for (const r of d.net.resources ?? []) out.push({ id: `r:${r.name}`, label: r.name, hint: r.holder ? `hardware · ${r.holder}` : "hardware", run: () => { go("topology"); select({ kind: "resource", id: r.name }); } });
@@ -42,6 +42,8 @@ export function Palette() {
     }
     return out;
   }, [d]);
+
+  useEffect(() => { document.getElementById(`palette-${at}`)?.scrollIntoView({ block: "nearest" }); }, [at]);
 
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const hits = cmds.filter((c) => words.every((w) => `${c.label} ${c.hint}`.toLowerCase().includes(w))).slice(0, 12);
@@ -69,7 +71,7 @@ export function Palette() {
           </div>
           <div className="max-h-80 overflow-auto py-1">
             {hits.map((c, i) => (
-              <button key={c.id} onMouseEnter={() => setAt(i)} onClick={() => run(c)}
+              <button key={c.id} id={`palette-${i}`} onMouseEnter={() => setAt(i)} onClick={() => run(c)}
                       className={cx("flex w-full items-center px-3 py-2 text-left", i === at && "bg-muted")}>
                 <span>{c.label}</span>
                 <span className="ml-auto text-[11px] text-dim">{c.hint}</span>
