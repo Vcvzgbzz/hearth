@@ -8,8 +8,9 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 
 import { keyLines, lineDiff, opsBetween, type Op } from "./diff.js";
 import { FIELDS, fieldAt, humanMs, scopeOf, seedOf, type Field, type Ref, type Scope } from "../config/fields.js";
+import { addRename, dirty as configDirty, revertSection, setDraft, setText, takeFile, takeSaved, useConfig } from "./configStore.js";
 import { changed, choose, useEdit } from "./editStore.js";
-import { go, request, RequestError, toast, useStore } from "./store.js";
+import { go, request, RequestError, toast, useLink, useStore } from "./store.js";
 import { Button, Card, cx, Dialog, mono, Pill, Switch } from "./ui.js";
 
 import type { File } from "../observe/uidata.js";
@@ -639,22 +640,20 @@ export function Review({ plan, onClose }: { plan: Plan; onClose: () => void }) {
 export function Config({ versions }: { versions?: ReactNode } = {}) {
   const status = useStore((s) => s.data!.config);
   const pending = useEdit(changed);
-  const [file, setFile] = useState<File | null>(null);
+  const file = useConfig((s) => s.file);
   const [tab, setTab] = useState<string>(() => (useStore.getState().yamlAt ? "yaml" : "backends"));
+  useLink([tab], true, ([t]) => { if (t === "yaml" || SECTIONS.some((s) => s.key === t)) setTab(t!); });
   const yamlBox = useRef<HTMLTextAreaElement>(null);
-  const [drafts, setDrafts] = useState<Record<string, unknown>>({});
-  const [renames, setRenames] = useState<Record<string, Op[]>>({});
-  const [text, setText] = useState("");
+  const drafts = useConfig((s) => s.drafts);
+  const renames = useConfig((s) => s.renames);
+  const text = useConfig((s) => s.text);
   const [err, setErr] = useState<Err | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
 
-  const load = async () => {
+  const load = async (saved = false) => {
     try {
       const f = await request<File>("GET", "/config");
-      setFile(f);
-      setText(f.text);
-      setDrafts({});
-      setRenames({});
+      (saved ? takeSaved : takeFile)(f);
       setErr(null);
     } catch (e) {
       setErr({ message: e instanceof Error ? e.message : String(e), path: null });
@@ -676,9 +675,10 @@ export function Config({ versions }: { versions?: ReactNode } = {}) {
     box.setSelectionRange(start, end);
     box.scrollTop = Math.max(0, span.from * parseFloat(getComputedStyle(box).lineHeight) - 40);
   }, [file, tab]);
-  const dirty = Object.keys(drafts).length > 0 || (file !== null && text !== file.text);
-  // An edit made elsewhere moves the hash; follow it unless there is unsaved work here.
-  useEffect(() => { if (file && status.hash !== file.hash && !dirty) void load(); }, [status.hash]);
+  const dirty = useConfig(configDirty);
+  // An edit made elsewhere moves the hash; follow it unless there is unsaved work here, and once it is reverted.
+  useEffect(() => { if (file && status.hash !== file.hash && !dirty) void load(); }, [status.hash, dirty]);
+  const stale = file !== null && dirty && status.hash !== file.hash;
 
   const doc = file?.doc ?? {};
   const nodeOf = (d: Record<string, unknown>) => Object.fromEntries(Object.entries(d).filter(([k]) => !OWN.has(k)));
@@ -698,7 +698,7 @@ export function Config({ versions }: { versions?: ReactNode } = {}) {
             const out = await request<{ restartPending: string[] }>("PATCH", "/config", { baseHash: file.hash, ...body });
             toast("ok", out.restartPending.length ? `saved — restart to apply ${out.restartPending.join(", ")}` : "saved and applied");
             setPlan(null);
-            await load();
+            await load(true);
           } catch (e) {
             setPlan(null);
             setErr({ message: e instanceof Error ? e.message : String(e), path: e instanceof RequestError ? e.path : null });
@@ -766,7 +766,7 @@ export function Config({ versions }: { versions?: ReactNode } = {}) {
                 {versions}
                 {sec && ELSEWHERE[tab] ? null : sec ? (
                   <>
-                    <Button disabled={!(tab in drafts)} onClick={() => { const { [tab]: _, ...rest } = drafts; setDrafts(rest); const { [tab]: _r, ...rn } = renames; setRenames(rn); setErr(null); }}><RotateCcw size={13} />revert</Button>
+                    <Button disabled={!(tab in drafts)} onClick={() => { revertSection(tab); setErr(null); }}><RotateCcw size={13} />revert</Button>
                     <Button tone="primary" disabled={!(tab in drafts)} onClick={() => saveSection(tab)}><Save size={13} />review & save</Button>
                   </>
                 ) : (
@@ -777,6 +777,7 @@ export function Config({ versions }: { versions?: ReactNode } = {}) {
                 )}
               </div>
             </div>
+            {stale && <div className="border-b border-line bg-warn/10 px-4 py-2 text-warn">hearth.yaml changed since these edits were made, so saving them is refused: revert to load the new file.</div>}
             {err && !inline && <div className="border-b border-line bg-bad/10 px-4 py-2 text-bad">{err.message}</div>}
             {sec && ELSEWHERE[tab] ? (
               <div className="flex min-h-0 flex-1 items-center justify-center p-4">
@@ -789,12 +790,12 @@ export function Config({ versions }: { versions?: ReactNode } = {}) {
             ) : sec ? (
               <div className="min-h-0 flex-1 overflow-auto p-4">
                 <Refs.Provider value={refsOf(merged, catalog)}>
-                <Renamer.Provider value={(path, to) => setRenames((r) => ({ ...r, [tab]: [...(r[tab] ?? []), { path, rename: to }] }))}>
+                <Renamer.Provider value={(path, to) => addRename(tab, { path, rename: to })}>
                   {current(tab) === undefined ? (
-                    <Button onClick={() => setDrafts({ ...drafts, [tab]: sec.list ? [] : {} })}><Plus size={13} />add a {sec.label.toLowerCase()} section</Button>
+                    <Button onClick={() => setDraft(tab, sec.list ? [] : {})}><Plus size={13} />add a {sec.label.toLowerCase()} section</Button>
                   ) : (
                     <Value name={tab} v={current(tab)} path={tab === "node" ? [] : [tab]} err={err}
-                           onChange={(n) => setDrafts({ ...drafts, [tab]: n })} />
+                           onChange={(n) => setDraft(tab, n)} />
                   )}
                 </Renamer.Provider>
                 </Refs.Provider>

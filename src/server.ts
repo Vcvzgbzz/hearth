@@ -329,6 +329,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/config/draft", methods: ["GET", "PUT", "DELETE"], auth: "local", handler: adminArea.routeConfigDraft },
     { path: "/config/versions", methods: ["GET", "POST"], auth: "local", handler: adminArea.routeConfigVersions },
     { path: "/flows/try", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsTry },
+    { path: "/flows/replay", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsReplay },
     { path: "/queue", auth: "local", handler: consoleArea.routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: consoleArea.routeQueueEvents },
 
@@ -379,6 +380,20 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       handler: async (c) => json(c.res, 200, history.since(DAY_MS)) },
     { path: "/ui/logs", methods: ["GET"], auth: "loopback", envelope: "openai",
       handler: async (c) => json(c.res, 200, { entries: logs.all(), persisted: cfg.historyFile !== null }) },
+    // One record per finished request, newest first, and one by its id.
+    { path: "/ui/requests", methods: ["GET"], auth: "loopback", envelope: "openai", handler: async (c) => {
+      const q = c.url.searchParams;
+      const num = (k: string): number | undefined => (q.get(k) !== null && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : undefined);
+      json(c.res, 200, requests.traces.list({
+        after: num("after"), limit: num("limit"), model: q.get("model") || undefined, caller: q.get("caller") || undefined,
+        ok: q.get("ok") === "true" ? true : q.get("ok") === "false" ? false : undefined,
+      }));
+    } },
+    { path: "/ui/requests/*", methods: ["GET"], auth: "loopback", envelope: "openai", handler: async (c) => {
+      const found = requests.traces.get(decodeURIComponent(c.path.slice("/ui/requests/".length)));
+      if (found) json(c.res, 200, found);
+      else apiError(c.res, 404, "no such request among those kept", "invalid_request_error");
+    } },
     { path: "/ui/lending", methods: ["GET"], auth: "loopback", envelope: "openai", handler: consoleArea.routeLending },
 
     { path: "*", auth: "local", envelope: "openai", handler: passArea.routePassthrough },
@@ -431,7 +446,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   function loadHistory(): void {
     if (!cfg.historyFile || !existsSync(cfg.historyFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { v?: unknown; history?: unknown; logs?: unknown; lastUse?: unknown; usage?: unknown; borrowed?: unknown };
+      const saved = JSON.parse(readFileSync(cfg.historyFile, "utf8")) as { v?: unknown; history?: unknown; logs?: unknown; requests?: unknown; lastUse?: unknown; usage?: unknown; borrowed?: unknown };
       // A later hearth's file is set aside whole rather than half-read and then written over.
       if (typeof saved.v === "number" && saved.v > HISTORY_VERSION) {
         renameSync(cfg.historyFile, `${cfg.historyFile}.v${saved.v}`);
@@ -442,6 +457,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
       usage.restore(saved.usage);
       borrowed.restore(saved.borrowed);
       logs.restore(saved.logs);
+      requests.traces.restore(saved.requests);
       // When each model was last asked for, so a restart does not make everything look long idle.
       worlds.restoreLastUses(saved.lastUse);
     } catch (e) {
@@ -452,7 +468,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   function saveHistory(): void {
     if (!cfg.historyFile) return;
     try {
-      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: HISTORY_VERSION, history: history.snapshot(), logs: logs.all(), lastUse: worlds.lastUses(), usage: usage.snapshot(), borrowed: borrowed.snapshot() }));
+      writeFileAtomic(cfg.historyFile, JSON.stringify({ v: HISTORY_VERSION, history: history.snapshot(), logs: logs.all(), requests: requests.traces.all(), lastUse: worlds.lastUses(), usage: usage.snapshot(), borrowed: borrowed.snapshot() }));
       historyWarned = false;
     } catch (e) {
       // Once per failure streak: a read-only path must not fill the journal every minute.

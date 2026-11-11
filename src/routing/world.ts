@@ -58,18 +58,18 @@ export class Worlds {
   ) {}
 
   /** The router a caller goes by: the one `callers:` gives it by its key's label or `local`, else the one it gives everyone, else `default` for `flows:`. */
-  routerNameOf(caller: string): string {
-    return this.cfg.callers[caller.startsWith("key:") ? caller.slice(4) : caller] ?? this.cfg.callers["*"] ?? DEFAULT_ROUTER;
+  routerNameOf(caller: string, cfg: HearthConfig = this.cfg): string {
+    return cfg.callers[caller.startsWith("key:") ? caller.slice(4) : caller] ?? cfg.callers["*"] ?? DEFAULT_ROUTER;
   }
 
-  routerOf(caller: string): HearthConfig["routers"][string] | undefined {
-    return this.cfg.routers[this.routerNameOf(caller)];
+  routerOf(caller: string, cfg: HearthConfig = this.cfg): HearthConfig["routers"][string] | undefined {
+    return cfg.routers[this.routerNameOf(caller, cfg)];
   }
 
-  /** The config as a caller's requests see it: its router's rulebook in place of `flows:`. */
-  rulesFor(caller: string): HearthConfig {
-    const r = this.routerOf(caller);
-    return r ? { ...this.cfg, flows: r.flows } : this.cfg;
+  /** The config as a caller's requests see it, under `cfg` (the one in force unless a draft is given): its router's rulebook in place of `flows:`. */
+  rulesFor(caller: string, cfg: HearthConfig = this.cfg): HearthConfig {
+    const r = this.routerOf(caller, cfg);
+    return r ? { ...cfg, flows: r.flows } : cfg;
   }
 
   /** Count a request that asked for this model as use of it until `res` closes. */

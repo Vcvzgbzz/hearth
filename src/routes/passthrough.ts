@@ -8,7 +8,7 @@ import { backendAuth } from "../config/backends.js";
 import { KEY_REFUSED, fail, headersOf, jobId, pipeThrough, refusedKey } from "../wire/http.js";
 import { multipartField, replaceMultipartField } from "../wire/multipart.js";
 import type { BackendSlot } from "../queue/pool.js";
-import { type Timing, notRun } from "../observe/requestlog.js";
+import { type Traced, firstByte, notRun } from "../observe/requestlog.js";
 import { type World, resolve } from "../routing/route.js";
 import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
@@ -107,6 +107,8 @@ export function passthroughRoutes(ctx: RouteContext) {
     let again: ((failed: readonly string[]) => ReturnType<typeof resolve>) | null = null;
     let runOn: BackendSlot | undefined;
     let picked: string | undefined;
+    /** What routing decided, for the request's trace. */
+    let decided: Traced = c.peer === null ? { router: worlds.routerNameOf(who) } : {};
     /**
      * The backend that can run a model on this path: the one that declares the path, its route's
      * fallback, or another that serves the model and either declares the path too or declares none.
@@ -125,6 +127,7 @@ export function passthroughRoutes(ctx: RouteContext) {
       const name = held?.name ?? viaBody ?? taker?.inputs[0] ?? routed!.rule.model;
       const world: World = { ...worlds.worldFor(who, routed?.rule.lane ?? Object.keys(cfg.scheduler.lanes)[0]!, undefined, worlds.rulesFor(who), headersOf(req)), path: held?.path ?? pathname };
       const r = resolve(name, world);
+      decided = { asked: name, path: r.path, reason: r.reason, router: worlds.routerNameOf(who), actions: r.actions.map((a) => a.name) };
       const refuse = (status: number, why: string) => fail(res, new Refusal(status, why, status === 404 ? "invalid_request_error" : "server_error"));
       if (r.unlisted) return refuse(404, r.reason);
       // A type that says which paths it takes is not offered on any other.
@@ -245,7 +248,8 @@ export function passthroughRoutes(ctx: RouteContext) {
         const model = pool.models.routedModel(routed.slot, routed.rule, asked);
         // Queued on the backend that runs it, and recorded in history like any local use.
         const run = async (to: BackendSlot, as: string, sendBody: Buffer | undefined, orFail: boolean): Promise<void> => {
-          const t: Timing = notRun();
+          const t = firstByte(res, notRun());
+          const route: Traced = { ...decided, ...(failed.length > 0 && failed[0] !== as ? { fallbackFrom: failed[0] } : {}) };
           try {
             await to.scheduler.submit(
               { lane, model: as, caller: who, ...limits.keyLimitOf(who, as), maxPerCaller: limits.capOf(who, as), signal: ctrl.signal, ...(jobId(req) ? { id: jobId(req)! } : {}) },
@@ -255,10 +259,10 @@ export function passthroughRoutes(ctx: RouteContext) {
               },
             );
           } catch (e) {
-            requests.record(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, false, e);
+            requests.record(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, false, e, route);
             throw e;
           }
-          requests.record(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, true);
+          requests.record(t, { model: as, lane, caller: who, backend: to.name, target: "local", path }, true, undefined, route);
         };
         // A strict router's callers get the model its line names or its failure: no next line, no route fallback.
         const strict = worlds.routerOf(who)?.strict === true;
@@ -297,8 +301,10 @@ export function passthroughRoutes(ctx: RouteContext) {
               detail: e instanceof Error ? e.message : String(e),
             });
             failed.push(as);
-            if (more.line && flowed !== null) worlds.settle(more.line, flowed, who);
-            else fellBack = true;
+            if (more.line && flowed !== null) {
+              worlds.settle(more.line, flowed, who);
+              decided = { ...decided, path: more.line.path, reason: more.line.reason, actions: more.line.actions.map((a) => a.name) };
+            } else fellBack = true;
             if (held && more.line) outPath = held.as(more.model);
             [to, as, sendBody] = [more.slot, more.model, held && more.line ? sendBody : renamed(more.model)];
           }
