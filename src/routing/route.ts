@@ -125,7 +125,7 @@ export function variantsOf(flows: Readonly<Record<string, Flow>>, type: string):
       if ("flow" in s.to) walk(s.to.flow);
     }
   };
-  for (const name of Object.keys(flows)) if (flows[name]!.inputs.includes(type)) walk(name);
+  for (const name of Object.keys(flows)) if (!flows[name]!.off && flows[name]!.inputs.includes(type)) walk(name);
   return [...out];
 }
 
