@@ -99,14 +99,13 @@ export function AdapterPanel({ name, at }: { name: string; at?: { flow: string; 
   };
 
   return (
-    <aside className="w-[520px] shrink-0 overflow-auto border-l border-line bg-panel p-4 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-10 max-lg:max-w-full">
+    <Dialog title={name} label={`adapter ${name}`} size="lg" onClose={() => editSelect(null)}>
+    <div className="min-h-0 flex-1 overflow-auto p-4">
       <div className="mb-1 flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-[11px] uppercase tracking-wide text-dim">adapter · a plugin a line names</div>
-          <div className={cx("truncate text-base font-semibold", mono)}>{name}</div>
           <div className="mt-0.5 truncate text-[11px] text-dim" title={a.use}>{a.use}</div>
         </div>
-        <button className="mt-1 shrink-0 text-dim hover:text-fg" aria-label="close" onClick={() => editSelect(null)}><X size={16} /></button>
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
@@ -217,7 +216,8 @@ export function AdapterPanel({ name, at }: { name: string; at?: { flow: string; 
           )}
         </div>
       )}
-    </aside>
+    </div>
+    </Dialog>
   );
 }
 

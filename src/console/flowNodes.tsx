@@ -9,7 +9,7 @@ import { ArrowRightLeft, ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, M
 import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ACTIONS, ADAPTER_NOTE, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withAdapt, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
-import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
+import { addName, change, choose, dropName, hover, openAdapter, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { openPlugin, useStore } from "./store.js";
 import type { PluginView, PluginsView } from "../observe/uidata.js";
 import { cx } from "./ui.js";
@@ -895,9 +895,13 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
         )}
         {failed && <span className="shrink-0 rounded border border-bad px-1 text-[9px] font-medium text-bad">fails</span>}
         {data.editable && (
+          <button type="button" aria-label={`edit adapter ${data.name}`} title="open this adapter: its code, the lines that use it, and try it"
+                  className={cx(BIN, "ml-auto hover:!text-fg")} onClick={(e) => { e.stopPropagation(); openAdapter(data.name, { flow: data.flow, step: data.step }); }}><Pencil size={13} /></button>
+        )}
+        {data.editable && (
           // The line keeps its plugin: this only takes the adapter out from in front of it.
           <button type="button" aria-label={`take ${data.name} off this line`} title="take it off this line: the line sends straight to its plugin again"
-                  className="nodrag nopan ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-dim hover:bg-muted hover:text-bad"
+                  className={BIN}
                   onClick={(e) => { e.stopPropagation(); change((d) => withAdapt(d, data.flow, data.step, null) ?? d); }}><X size={11} /></button>
         )}
       </div>

@@ -876,7 +876,7 @@ function Gone() {
 export function EditRail() {
   const { draft, sel, err, pending, opened } = useEdit();
   const data = useStore((s) => s.data);
-  if (!draft || !sel || (sel.kind === "flow" && !opened)) return null;
+  if (!draft || !sel || ((sel.kind === "flow" || sel.kind === "adapter") && !opened)) return null;
   // An adapter's panel is its own: its code as the file holds it, the lines that use it, and a sample.
   if (sel.kind === "adapter") return <AdapterPanel name={sel.id} at={sel.at} />;
   const named: Named = { kind: sel.kind, id: sel.id };

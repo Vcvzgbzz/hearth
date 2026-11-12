@@ -181,6 +181,8 @@ export function redo(): void {
 export const editSelect = (sel: EditSel) => set((s) => ({ sel, opened: sel && s.sel?.kind === sel.kind && s.sel.id === sel.id ? s.opened : null }));
 /** Open a rule in its dialog, at one of its lines if given. */
 export const openRule = (id: string, line: number | null = null) => set({ sel: { kind: "flow", id }, opened: { line } });
+/** Open an adapter's dialog: its code, the lines that use it, and a sample, as a rule's pencil opens the rule. */
+export const openAdapter = (id: string, at?: { flow: string; step: number }) => set({ sel: { kind: "adapter", id, ...(at ? { at } : {}) }, opened: { line: null } });
 export const closeRule = () => set({ opened: null });
 export const pick = (picking: Picking) => set({ picking });
 export const hover = (id: string | null) => { if (useEdit.getState().hover !== id) set({ hover: id }); };
