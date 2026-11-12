@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 
 import { ADAPTER_NOTE, adapterLines, adaptLine, scoped, type Doc } from "./draft.js";
 import { editSelect, useEdit } from "./editStore.js";
+import { tidy, tint } from "./flowNodes.js";
 import { go, request, useStore } from "./store.js";
 import type { AdapterView } from "../observe/uidata.js";
 import { Button, Dialog, cx, mono } from "./ui.js";
@@ -38,7 +39,7 @@ function Whole({ a }: { a: AdapterView }) {
     <div className="mt-2">
       <div className="text-[10px] uppercase tracking-wide text-dim">the module</div>
       {a.note !== undefined && <div className="mt-0.5 text-[11px] text-warn">{a.note}</div>}
-      <pre className="mt-1 max-h-72 overflow-auto whitespace-pre rounded-md border border-line bg-bg p-2 font-mono text-[11px] leading-snug">{a.whole || "the file could not be read"}</pre>
+      <pre className="mt-1 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg p-3 font-mono text-[12.5px] leading-relaxed [scrollbar-width:thin]">{a.whole ? tint(a.whole) : "the file could not be read"}</pre>
     </div>
   );
 }
@@ -131,7 +132,7 @@ export function AdapterPanel({ name, at }: { name: string; at?: { flow: string; 
               <span className="truncate normal-case tracking-normal">request()</span>
               <span className="ml-auto shrink-0 text-[8px] normal-case tracking-normal">the request the plugin is sent</span>
             </div>
-            <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre rounded-md border border-line bg-bg p-2 font-mono text-[10.5px] leading-snug">{a.request}</pre>
+            <pre className="mt-0.5 max-h-[45vh] min-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg p-3 font-mono text-[12.5px] leading-relaxed [scrollbar-width:thin]">{tint(tidy(a.request ?? ""))}</pre>
           </div>
           <div className="mt-1">
             <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-dim">
@@ -139,7 +140,7 @@ export function AdapterPanel({ name, at }: { name: string; at?: { flow: string; 
               <span className="truncate normal-case tracking-normal">response()</span>
               <span className="ml-auto shrink-0 text-[8px] normal-case tracking-normal">the answer the caller gets</span>
             </div>
-            <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre rounded-md border border-line bg-bg p-2 font-mono text-[10.5px] leading-snug">{a.response}</pre>
+            <pre className="mt-0.5 max-h-[45vh] min-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg p-3 font-mono text-[12.5px] leading-relaxed [scrollbar-width:thin]">{tint(tidy(a.response ?? ""))}</pre>
           </div>
         </>
       ) : <Whole a={a} />}

@@ -818,7 +818,7 @@ export type AdapterBox = { /** The colour of what its OUT dot is wired to; grey 
 };
 
 /** The block's measurements: the layout puts one beside its plugin box and wires its two dots, so they must match what is drawn. */
-export const ADAPTER = { width: 360, head: 28, label: 16, pad: 6, area: 84, gap: 4, note: 20 };
+export const ADAPTER = { width: 440, head: 28, label: 16, pad: 6, area: 128, gap: 4, note: 20 };
 /** Where the input dot sits, level with the IN area, and the output dot, level with the OUT area. */
 export const ADAPTER_IN_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTER.area / 2;
 export const ADAPTER_OUT_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTER.area + ADAPTER.gap + ADAPTER.pad + ADAPTER.label + ADAPTER.area / 2;
@@ -826,7 +826,7 @@ export const ADAPTER_OUT_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTE
 export const ADAPTER_LIT_MS = 5_000;
 
 /** A side's source as it reads on its own: tabs as two spaces, and the indent it had inside the module taken off. */
-function tidy(code: string): string {
+export function tidy(code: string): string {
   const lines = code.replace(/\t/g, "  ").replace(/\s+$/, "").split("\n");
   const indents = lines.slice(1).filter((l) => l.trim() !== "").map((l) => l.length - l.trimStart().length);
   const cut = indents.length ? Math.min(...indents) : 0;
@@ -835,7 +835,7 @@ function tidy(code: string): string {
 
 const WORDS = new Set(["const", "let", "var", "return", "if", "else", "for", "of", "in", "while", "function", "export", "default", "async", "await", "throw", "new", "null", "undefined", "true", "false", "typeof", "try", "catch"]);
 /** Light colour for adapter source: keywords, strings, numbers and comments. Read-only text, so no parser is needed. */
-function tint(code: string): ReactNode[] {
+export function tint(code: string): ReactNode[] {
   const out: ReactNode[] = [];
   const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d[\d_.]*\b)|([A-Za-z_$][\w$]*)/g;
   let at = 0;
@@ -912,7 +912,7 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
             <span className="truncate font-mono">{side}()</span>
             <span className="ml-auto shrink-0">{side === "request" ? "→ the plugin" : "→ the caller"}</span>
           </div>
-          <pre className="nowheel m-0 w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-line bg-bg px-2 py-1 font-mono text-[10px] leading-[1.45] [scrollbar-width:thin]"
+          <pre className="nowheel m-0 w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-line bg-bg px-2 py-1 font-mono text-[11px] leading-[1.5] [scrollbar-width:thin]"
                style={{ height: ADAPTER.area }}
                aria-label={`${data.name} ${side}()`}>{body ? tint(tidy(body)) : <span className="italic text-dim">{split ? `no ${side}() in the file` : data.note ?? "the module could not be read"}</span>}</pre>
         </div>
