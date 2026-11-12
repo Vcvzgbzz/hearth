@@ -361,7 +361,7 @@ const BIN = "nodrag nopan grid h-6 w-6 shrink-0 place-items-center rounded-md te
 /** What is known about a line: `bad` is why it cannot work, `unsure` that its target has not said whether it can take what the line tests. */
 export type Mark = { bad: string } | { unsure: true } | null;
 
-export type SwitchBox = { /** The orders its lines hand to, by flow name, each as the places in it. */ orders?: Record<string, End[]>; marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** The models that run on a provider's server. */ cloud?: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean };
+export type SwitchBox = { /** The orders its lines hand to, by flow name, each as the places in it. */ orders?: Record<string, End[]>; marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** The models that run on a provider's server. */ cloud?: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean; /** Lines that reach their plugin through an adapter, whose own dot is not drawn. */ viaAdapter?: number[] };
 
 export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<SwitchBox>>) {
   const from = useWireFrom();
@@ -484,7 +484,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                 <MoreHorizontal size={13} />
               </button>
             )}
-            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : order ? hue("fastest").dot : to.kind === "asked" ? hue(to.kind).dot : worn(to).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
+            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : order ? hue("fastest").dot : to.kind === "asked" ? hue(to.kind).dot : worn(to).dot, !data.editable && "!pointer-events-none", data.viaAdapter?.includes(i) && "!opacity-0 !pointer-events-none")} style={{ right: -6 }} />
           </div>
           {group?.to === i && group.foot && (
             <div className="relative flex items-center px-3 text-[10px] italic text-dim" style={{ height: GROUP.foot }}>
@@ -740,7 +740,7 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
         <div key={`${l.flow}:${l.step}`} className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim">
           <span className="shrink-0 rounded border border-line px-1 uppercase">{l.label}</span>
           <span className="min-w-0 flex-1 truncate" title={`${l.flow} line ${l.step + 1} hands this plugin's request to an adapter`}>to an adapter</span>
-          <Handle type="source" id={`to:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-dim")} style={{ right: -6, top: "50%" }} />
+          <Handle type="source" id={`to:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-api", "!opacity-100")} style={{ right: -6, top: "50%" }} />
         </div>
       ))}
       {(data.adaptIn ?? []).map((l) => (

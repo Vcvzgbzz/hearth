@@ -259,7 +259,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         // Above the lines that pass behind it on their way to what they end at.
         id, type: "flow", position: { x: colX[col]!, y: fy }, zIndex: 1000,
         data: {
-          name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step, orders: Object.fromEntries(orders),
+          name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step,
+          // Lines that reach their plugin through an adapter: their own dot has no wire, so it is not drawn.
+          viaAdapter: adapts.filter((a) => a.flow === name && a.from !== null && a.from !== a.plugin).map((a) => a.step), orders: Object.fromEntries(orders),
           cloud: [...away], models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined, takes: f.takes,
           ...(d.flowHits && !edit?.changed(name) ? { hits: f.steps.map((_, i) => d.flowHits![name]?.[i] ?? 0) } : {}),
           ...(edit ? { marks: f.steps.map((s, i) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts, (f.takes ?? []).length > 0) ?? edit.trouble(name, i); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
