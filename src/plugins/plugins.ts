@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 
 import type { HearthConfig } from "../config/config.js";
 import { DEFAULT_ROUTER, type Flow } from "../config/flows.js";
-import { PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
+import { PLUGIN_STAGES, pluginAuth, pluginKind, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
 import type { Logger } from "../observe/log.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
@@ -489,11 +489,10 @@ export class Plugins {
     });
   }
 
-  /** How a router asks for a plugin that serves: `MCP` for one that speaks MCP, `API` otherwise; null for one that serves nothing. */
-  kindOf(name: string): "MCP" | "API" | null {
+  /** The type a router asks for a plugin that serves by: its own type, from `pluginKind`; null for one that serves nothing. */
+  kindOf(name: string): string | null {
     const l = this.loaded.find((x) => x.name === name);
-    if (!l || (l.decl.serves === null && l.decl.run === null)) return null;
-    return l.decl.mcp !== null ? "MCP" : "API";
+    return l ? pluginKind(l.decl) : null;
   }
 
   /** The plugin that answers `/plugins/<name>/*` when this one cannot; null when it has none. */
