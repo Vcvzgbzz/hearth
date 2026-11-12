@@ -372,6 +372,8 @@ back. It is a `trust: code` plugin whose module's `setup` returns `{ adapt: { re
 rather than stage hooks (its `kinds` is `{}`), and a plugin target names it with `adapt:`.
 
 "Fall back from one API to another" then needs no feature of its own: it is two lines.
+  The two-line way remains for when the rule should make the second attempt itself; the automatic
+  way is `fallback: { plugin, adapt }` and one line, described in [A fallback](plugins.md#a-fallback).
 
 ```yaml
 plugins:
@@ -416,6 +418,15 @@ type Res = { status: number; contentType: string | null; body: string };
 request(req: Req): Partial<Req> | null | Promise<Partial<Req> | null>   // fields left out keep their value
 response(res: Res, req: Req): Partial<Res> | Promise<Partial<Res>>      // only on a 2xx; req is the caller's request
 ```
+
+Adapters on a plugin's fallback: instead of adding a second routing line, configure the plugin's
+own `fallback` with `adapt` naming an adapter plugin. The adapter translates the request between
+APIs, and the fallback plugin answers with its own API. The adapter's `request()` builds the request
+the fallback is sent; `null` from it means no counterpart on the fallback's API, and the caller
+gets the plugin's own failure. The adapter's `response()` reshapes a 2xx answer; a throw from it is
+a 502 naming the adapter. Each side is held to the adapter plugin's `timeoutMs`; the caller's
+credentials are never handed to the adapter. The adapter's last call is recorded (so the console
+lights the block). This is the automatic way — no second line is needed.
 
 - **Only a plugin target carries one.** `{ plugin: name, adapt: … }` for a plugin the router names,
   and `{ asked: true, adapt: … }` for the plugin a `/plugins/<name>/*` request asks for. A model

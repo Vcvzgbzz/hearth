@@ -4,7 +4,7 @@
 import type { HearthConfig } from "./config.js";
 import { modelParams } from "./models.js";
 import type { PeerConfig } from "./peers.js";
-import { type PluginDecl, type RouterPlugin, routerPlugins, slotModels, type StepPlugin } from "./plugins.js";
+import { adaptOf, type PluginDecl, type RouterPlugin, routerPlugins, slotModels, type StepPlugin } from "./plugins.js";
 import { asRecord, atLeast, bad, bool, count, only, str, strList } from "./read.js";
 
 /** The shapes of flow a newly borrowed model can start as; see `routedFlow`. */
@@ -133,22 +133,6 @@ const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "p
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 type PluginDecls = Readonly<Record<string, PluginDecl>>;
-
-/**
- * An adapter a target names: a `trust: code` plugin whose `setup` hands back an `adapt`, loaded from
- * a file or a package the operator named. A service, or an MCP server hearth starts, has no `setup`
- * to return one from, so it is refused here rather than at the first request.
- */
-function adaptOf(raw: unknown, at: string, plugins: PluginDecls): string | undefined {
-  if (raw === undefined) return undefined;
-  const name = str(raw, at);
-  const p = plugins[name];
-  if (p === undefined) throw bad(at, `names ${name}, which is not a plugin under plugins:`);
-  if (p.trust !== "code" || p.use === null || !/^(file|npm):/.test(p.use)) {
-    throw bad(at, `names ${name}, which is not a trust: code plugin with a file: or npm: use`);
-  }
-  return name;
-}
 
 /** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, a refusal, or a plugin (with an adapter on the way). */
 function flowTo(raw: unknown, at: string, plugins: PluginDecls = {}): FlowTo {

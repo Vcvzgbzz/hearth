@@ -8,7 +8,7 @@ import { Fragment, useContext, useEffect, useState } from "react";
 
 import { AdapterPanel, NewAdapterDialog } from "./Adapters.js";
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withAdapt, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { ACTIONS, servingPlugins, setFallback, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withAdapt, withCaller, withDo, type Doc, type To } from "./draft.js";
 import { adaptOn, addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, pickOut, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Named, type Replayed } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
@@ -388,7 +388,9 @@ export function Picker() {
   const [q, setQ] = useState("");
   // "reuse adapter ▸": the adapter plugins the node has, in place of the places a wire can go.
   const [reuse, setReuse] = useState(false);
-  useEffect(() => { setQ(picking?.q ?? ""); setReuse(false); }, [picking]);
+  // From a plugin box's dot: the adapter chosen, waiting for the plugin it falls back to.
+  const [fbAdapt, setFbAdapt] = useState<string | null>(null);
+  useEffect(() => { setQ(picking?.q ?? ""); setReuse(false); setFbAdapt(null); }, [picking]);
   if (!picking || !draft) return null;
   const from = picking.from;
   const send = (to: To) => { if (from) wire(from, to); pick(null); };
@@ -423,8 +425,9 @@ export function Picker() {
   // says so. A plugin box's own dot stands for every line that sends there, and asks which one later.
   const pluginDot = from !== undefined && from !== null && from.node.startsWith("plugin:") && from.handle === "adapt";
   const canAdapt = out?.adapt !== undefined || pluginDot;
-  /** Put the adapter on the line this dot belongs to (or ask which line, for a plugin's own dot). */
-  const adaptTo = (name: string) => { if (from) adaptOn(from, name, { x: picking.x, y: picking.y }); pick(null); };
+  /** Put the adapter on the line this dot belongs to; from a plugin box's dot, ask what that plugin falls back to through it. */
+  const adaptTo = (name: string) => { if (pluginDot) { setFbAdapt(name); return; } if (from) adaptOn(from, name, { x: picking.x, y: picking.y }); pick(null); };
+  const dotPlugin = pluginDot && from ? from.node.slice("plugin:".length) : null;
   // What the list offers: an adapter's outlet offers plugins, as a plugin rule's does.
   const pluginPicks = forPlugins || out?.pluginOnly === true;
   const row = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-line/60";
@@ -447,7 +450,15 @@ export function Picker() {
                  className="h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         </div>
         <div className="max-h-72 overflow-auto p-1.5">
-          {canAdapt && (reuse ? (
+          {fbAdapt !== null && dotPlugin !== null ? (
+            <>
+              <button className={cx(row, "text-dim")} onClick={() => setFbAdapt(null)}>← back</button>
+              <div className={head}>{dotPlugin} falls back, through {fbAdapt}, to</div>
+              {servingPlugins(draft, dotPlugin).map((t) => (
+                <button key={t} className={cx(row, mono)} onClick={() => { change((d) => setFallback(d, dotPlugin, { plugin: t, adapt: fbAdapt }) ?? d); pick(null); }}>{t}</button>
+              ))}
+            </>
+          ) : canAdapt && (reuse ? (
             <>
               <button className={cx(row, "text-dim")} onClick={() => setReuse(false)}>← back to the places</button>
               <div className={head}>reuse an adapter</div>

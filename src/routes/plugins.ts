@@ -10,7 +10,7 @@ import { ConfigError, resolveSecret } from "../config/read.js";
 import { fail, forwardable, headersOf, json } from "../wire/http.js";
 import { checkHttp } from "../plugins/mcp.js";
 import { Plugins } from "../plugins/plugins.js";
-import type { AdapterAnswer, AdapterRequest } from "../routing/adapters.js";
+import type { AdapterAnswer, AdapterRequest, LineAdapter } from "../routing/adapters.js";
 import { resolve } from "../routing/route.js";
 import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
@@ -130,6 +130,33 @@ export function pluginRoutes(ctx: RouteContext) {
       | { answer: number; error: string };
 
     /**
+     * A target's 2xx answer through the adapter in front of it, written out as the caller's own; a 502 naming
+     * the adapter when its `response()` cannot read the answer. One path for a line's adapter and a fallback's.
+     */
+    async function adaptAnswer(adapter: LineAdapter, plugin: string, answer: AdapterAnswer, sent: { method: string; path: string }, t0: number, from: Record<string, string | string[]> = {}): Promise<Line> {
+      let read: Partial<AdapterAnswer>;
+      try {
+        read = await adapter.response(answer, original);
+        plugins.adapterCalled(adapter.name, { side: "response", ok: true, plugin });
+      } catch (e) {
+        plugins.adapterCalled(adapter.name, { side: "response", ok: false, error: said(e), plugin });
+        log.warn("flow.adapter_failed", { adapter: adapter.name, side: "response", plugin, status: answer.status, caller: c.caller, error: said(e) });
+        return { answer: 502, error: `adapter ${adapter.name} could not read ${plugin}'s answer: ${said(e)}` };
+      }
+      // The answer is the adapter's now: what described the target's bytes no longer does.
+      const headers: Record<string, string | string[]> = { ...from };
+      for (const h of Object.keys(headers)) if (["content-length", "content-encoding", "etag"].includes(h.toLowerCase())) delete headers[h];
+      const kind = read.contentType === undefined ? answer.contentType : read.contentType;
+      if (kind === null) delete headers["content-type"];
+      else headers["content-type"] = kind;
+      const out = read.body ?? answer.body;
+      headers["content-length"] = String(Buffer.byteLength(out));
+      res.writeHead(read.status ?? answer.status, headers).end(out);
+      log.info("plugin.served", { plugin, method: sent.method, path: sent.path, status: read.status ?? answer.status, adapt: adapter.name, caller: c.caller, ms: Date.now() - t0 });
+      return { answered: true };
+    }
+
+    /**
      * One line: the plugin it names, with the adapter in front of it when it has one. Falls back to the plugin's
      * own `fallback` — one hop, with the request as it stands — before the line counts as failed.
      */
@@ -164,7 +191,8 @@ export function pluginRoutes(ctx: RouteContext) {
           if ("done" in alt) alt.done(false);
           return { failed: `${why}, and neither could its fallback ${fb.plugin}${"why" in alt ? `: ${alt.why}` : ""}` };
         }
-        log.info("plugin.fallback", { plugin: name, to: fb.plugin, why, caller: c.caller });
+        log.info("plugin.fallback", { plugin: name, to: fb.plugin, why, ...(fb.adapt !== undefined ? { adapt: fb.adapt } : {}), caller: c.caller });
+        if (fb.adapt !== undefined) return fallbackAdapted(why, fb.plugin, fb.adapt, alt);
         try {
           const up = await call(alt, went.method, went.path, went.search, went.body, false, went.type);
           alt.done(up.status < 500);
@@ -177,6 +205,59 @@ export function pluginRoutes(ctx: RouteContext) {
           if (ctrl.signal.aborted) return { answered: true };
           log.warn("plugin.serve_failed", { plugin: fb.plugin, for: name, path: went.path, error: said(e) });
           if (!res.headersSent) return { failed: `${why}, and its fallback ${fb.plugin} failed: ${said(e)}` };
+          res.destroy();
+          return { answered: true };
+        }
+      }
+
+      /**
+       * The fallback through its adapter: the caller's request carried over to the fallback's API, and its 2xx
+       * answer carried back. `null` from request() means no counterpart there: the plugin's own failure stands.
+       */
+      async function fallbackAdapted(why: string, to: string, adaptName: string, alt: Exclude<ReturnType<typeof plugins.serve>, { why: string } | { stdio: unknown }>): Promise<Line> {
+        const a = plugins.adapterOf(adaptName);
+        if (a === null) {
+          alt.done(false);
+          log.warn("flow.adapter_missing", { adapter: adaptName, plugin: to, for: name, caller: c.caller });
+          return { failed: `${why}, and its fallback's adapter ${adaptName} is not running` };
+        }
+        let carried: Partial<AdapterRequest> | null;
+        try {
+          carried = await a.request(original);
+          plugins.adapterCalled(a.name, { side: "request", ok: true, plugin: to });
+        } catch (e) {
+          alt.done(false);
+          plugins.adapterCalled(a.name, { side: "request", ok: false, error: said(e), plugin: to });
+          log.warn("flow.adapter_failed", { adapter: a.name, side: "request", plugin: to, for: name, caller: c.caller, error: said(e) });
+          return { failed: `${why}, and adapter ${a.name} could not carry the request over to ${to}: ${said(e)}` };
+        }
+        if (carried === null) {
+          alt.done(false);
+          return { failed: `${why}, and adapter ${a.name} has no counterpart for it on ${to}'s API` };
+        }
+        const method = carried.method ?? original.method;
+        const at = carried.path ?? path;
+        const search = carried.query === undefined ? url.search : (() => { const qs = new URLSearchParams(carried.query).toString(); return qs === "" ? "" : `?${qs}`; })();
+        const sent = carried.body === undefined ? body : carried.body === null ? undefined : Buffer.from(carried.body, "utf8");
+        const type = carried.contentType !== undefined ? carried.contentType : contentType;
+        try {
+          const up = await call(alt, method, at, search, sent, true, type);
+          alt.done(up.status < 500);
+          // A non-2xx is the fallback's own answer: it is never given to the adapter.
+          if (up.status < 200 || up.status >= 300) {
+            res.writeHead(up.status, forwardable(up.headers));
+            await pipeline(up.body, res);
+            log.info("plugin.served", { plugin: to, for: name, method, path: at, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+            return { answered: true };
+          }
+          const ct = up.headers["content-type"];
+          const answer: AdapterAnswer = { status: up.status, contentType: typeof ct === "string" ? ct : null, body: await up.text(cfg.maxBodyBytes) };
+          return await adaptAnswer(a, to, answer, { method, path: at }, t0, forwardable(up.headers));
+        } catch (e) {
+          alt.done(false);
+          if (ctrl.signal.aborted) return { answered: true };
+          log.warn("plugin.serve_failed", { plugin: to, for: name, path: at, error: said(e) });
+          if (!res.headersSent) return { failed: `${why}, and its fallback ${to} failed: ${said(e)}` };
           res.destroy();
           return { answered: true };
         }
@@ -222,37 +303,13 @@ export function pluginRoutes(ctx: RouteContext) {
         if (carried.contentType !== undefined) type = carried.contentType;
       }
 
-      /** The target's 2xx answer through the line's adapter; a 502 naming it when the code cannot read the answer. */
-      async function adaptAnswer(answer: AdapterAnswer, from: Record<string, string | string[]> = {}): Promise<Line> {
-        let read: Partial<AdapterAnswer>;
-        try {
-          read = await adapter!.response(answer, original);
-          plugins.adapterCalled(adapter!.name, { side: "response", ok: true, plugin: name });
-        } catch (e) {
-          plugins.adapterCalled(adapter!.name, { side: "response", ok: false, error: said(e), plugin: name });
-          log.warn("flow.adapter_failed", { adapter: adapter!.name, side: "response", plugin: name, status: answer.status, caller: c.caller, error: said(e) });
-          return { answer: 502, error: `adapter ${adapter!.name} could not read ${name}'s answer: ${said(e)}` };
-        }
-        // The answer is the adapter's now: what described the target's bytes no longer does.
-        const headers: Record<string, string | string[]> = { ...from };
-        for (const h of Object.keys(headers)) if (["content-length", "content-encoding", "etag"].includes(h.toLowerCase())) delete headers[h];
-        const kind = read.contentType === undefined ? answer.contentType : read.contentType;
-        if (kind === null) delete headers["content-type"];
-        else headers["content-type"] = kind;
-        const out = read.body ?? answer.body;
-        headers["content-length"] = String(Buffer.byteLength(out));
-        res.writeHead(read.status ?? answer.status, headers).end(out);
-        log.info("plugin.served", { plugin: name, method, path: at, status: read.status ?? answer.status, adapt: adapter!.name, caller: c.caller, ms: Date.now() - t0 });
-        return { answered: true };
-      }
-
       // An MCP server hearth runs answers at its own /mcp, whatever comes after the name.
       if ("stdio" in to) {
         try {
           const a = await to.stdio.handle(method, sent);
           done(a.status < 500);
           if (adapter !== null && a.status >= 200 && a.status < 300) {
-            return await adaptAnswer({ status: a.status, contentType: a.type, body: a.body });
+            return await adaptAnswer(adapter, name, { status: a.status, contentType: a.type, body: a.body }, { method, path: at }, t0);
           }
           res.writeHead(a.status, { "content-type": a.type, ...(a.session ? { "mcp-session-id": a.session } : {}) }).end(a.body);
           log.info("plugin.served", { plugin: name, method, path: at, status: a.status, caller: c.caller, ms: Date.now() - t0 });
@@ -291,8 +348,9 @@ export function pluginRoutes(ctx: RouteContext) {
         done(true);
         const contentTypeOf = up.headers["content-type"];
         return await adaptAnswer(
+          adapter!, name,
           { status: up.status, contentType: typeof contentTypeOf === "string" ? contentTypeOf : null, body: await up.text(cfg.maxBodyBytes) },
-          forwardable(up.headers),
+          { method, path: at }, t0, forwardable(up.headers),
         );
       } catch (e) {
         done(false);

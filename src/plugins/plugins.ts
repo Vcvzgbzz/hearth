@@ -351,9 +351,10 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
   return out;
 }
 
-/** Every plugin some flow line names with `adapt:`, in the default rules and every router's. */
+/** Every plugin some flow line names with `adapt:`, or a plugin's fallback does, in the default rules and every router's. */
 export function adapterNames(cfg: HearthConfig): Set<string> {
   const out = new Set<string>();
+  for (const p of Object.values(cfg.plugins)) if (p.fallback?.adapt !== undefined) out.add(p.fallback.adapt);
   const walk = (flows: Record<string, Flow>) => {
     for (const f of Object.values(flows)) {
       for (const st of f.steps) {

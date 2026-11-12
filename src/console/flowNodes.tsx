@@ -8,7 +8,7 @@ import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyf
 import { ArrowRightLeft, ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, MoreHorizontal, Pencil, Plus, Puzzle, Split, Trash2, X, Zap } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { ACTIONS, ADAPTER_NOTE, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withAdapt, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
+import { ACTIONS, ADAPTER_NOTE, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withAdapt, withFallbackAdapt, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
 import { addName, change, choose, dropName, hover, openAdapter, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { openPlugin, useStore } from "./store.js";
 import type { PluginView, PluginsView } from "../observe/uidata.js";
@@ -717,7 +717,9 @@ export type Dest = { /** The hardware its backend runs on, to tell two copies of
   /** On a plugin's box with no adapter on any line: one dot to put an adapter in front of a line that sends here. */
   adaptAny?: boolean;
   /** On the plugin a line's adapter hands its translated request to: one right-hand dot for each such line. */
-  adaptIn?: { flow: string; step: number; label: string; on?: boolean }[] };
+  adaptIn?: { flow: string; step: number; label: string; on?: boolean }[];
+  /** On a plugin whose fallback names an adapter: the dot its fallback chain leaves from. */
+  fallbackAdapt?: { adapt: string } };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -752,6 +754,14 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
           <Handle type="target" id={`from:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-dim")} style={{ right: -6, top: "50%" }} />
         </div>
       ))}
+      {data.fallbackAdapt !== undefined && (
+        // Its fallback runs through an adapter: the chain leaves from this dot.
+        <div className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim" title={`when this plugin cannot answer, ${data.fallbackAdapt.adapt} carries the request to its fallback`}>
+          <span className="shrink-0 rounded border border-line px-1 uppercase">fallback</span>
+          <span className="min-w-0 flex-1 truncate">through an adapter</span>
+          <Handle type="source" id="fallback" position={Position.Right} className={cx(PORT, "!bg-adapt", "!opacity-100")} style={{ right: -6, top: "50%" }} />
+        </div>
+      )}
       {data.adaptAny === true && (
         <div className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim" title="put an adapter in front of a line that sends here">
           <span className="shrink-0 rounded border border-dashed border-line px-1 uppercase">adapt</span>
@@ -791,6 +801,8 @@ export const ActionNode = memo(function ActionNode({ data }: NodeProps<Node<Acti
 });
 
 export type AdapterBox = { /** The colour of what its OUT dot is wired to; grey with nothing there. */ outHue?: string;
+  /** On a plugin's fallback rather than a line: the plugin whose fallback it translates for. */
+  fallbackOf?: string;
   /** The adapter plugin's name, as a line's `adapt:` writes it. */
   name: string;
   /** The line it stands on, and the rule that holds it. */
@@ -896,13 +908,13 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
         {failed && <span className="shrink-0 rounded border border-bad px-1 text-[9px] font-medium text-bad">fails</span>}
         {data.editable && (
           <button type="button" aria-label={`edit adapter ${data.name}`} title="open this adapter: its code, the lines that use it, and try it"
-                  className={cx(BIN, "ml-auto hover:!text-fg")} onClick={(e) => { e.stopPropagation(); openAdapter(data.name, { flow: data.flow, step: data.step }); }}><Pencil size={13} /></button>
+                  className={cx(BIN, "ml-auto hover:!text-fg")} onClick={(e) => { e.stopPropagation(); openAdapter(data.name, data.fallbackOf !== undefined ? undefined : { flow: data.flow, step: data.step }); }}><Pencil size={13} /></button>
         )}
         {data.editable && (
           // The line keeps its plugin: this only takes the adapter out from in front of it.
           <button type="button" aria-label={`take ${data.name} off this line`} title="take it off this line: the line sends straight to its plugin again"
                   className={BIN}
-                  onClick={(e) => { e.stopPropagation(); change((d) => withAdapt(d, data.flow, data.step, null) ?? d); }}><X size={11} /></button>
+                  onClick={(e) => { e.stopPropagation(); change((d) => (data.fallbackOf !== undefined ? withFallbackAdapt(d, data.fallbackOf, null) : withAdapt(d, data.flow, data.step, null)) ?? d); }}><X size={11} /></button>
         )}
       </div>
       {areas.map(({ side, label, text: body, says }) => (

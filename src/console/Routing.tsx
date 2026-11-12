@@ -135,7 +135,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   /** A line of a rule the request was tried or replayed down: the blocks and dots on it light. */
   const wentDown = (flow: string, step: number) => tried !== null && tried.path.some((p) => p.flow === flow && p.step === step);
   /** Every adapter block to draw: the plugin its line sends to, and the plugin of the line it falls back from. */
-  const adapts: { plugin: string | null; from: string | null; flow: string; step: number; adapt: string; ruleY: number }[] = [];
+  const adapts: { plugin: string | null; from: string | null; flow: string; step: number; adapt: string; ruleY: number; chain?: true }[] = [];
   /** The plugin of the nearest earlier line of the same rule with the same condition: what a failed request was asked of. */
   const fellFrom = (flow: string, step: number): string | null => {
     const steps = flows.find(([n]) => n === flow)?.[1].steps ?? [];
@@ -148,11 +148,14 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   };
   const pluginNames = [...new Set(flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "plugin" ? [t.plugin] : []; })))];
   for (const name of pluginNames) for (const l of linesToPlugin(d.flows, name)) if (l.adapt !== undefined) adapts.push({ plugin: name, from: fellFrom(l.flow, l.step), flow: l.flow, step: l.step, adapt: l.adapt, ruleY: 0 });
+  // A plugin whose fallback names an adapter: the chain runs from its box, through the adapter, to the fallback.
+  for (const p of d.plugins?.plugins ?? []) if (p.fallback?.adapt !== undefined && pluginNames.includes(p.name)) adapts.push({ plugin: p.fallback.plugin, from: p.name, flow: "", step: -1, adapt: p.fallback.adapt, ruleY: 0, chain: true });
   for (const name of pluginNames) {
     const p = servingKind(name);
     const lines = linesToPlugin(d.flows, name);
     // A line's dot sits on the plugin it falls back from; with none before it, on the plugin it sends to.
-    const adapted = adapts.filter((a) => (a.from ?? a.plugin) === name);
+    const adapted = adapts.filter((a) => !a.chain && (a.from ?? a.plugin) === name);
+    const chained = adapts.find((a) => a.chain && a.from === name);
     const kind = p?.mcp ? "MCP" : "API";
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
@@ -161,7 +164,8 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         ...(adapted.length
           ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
           // One exit dot per box: its adapter's, or else one to put an adapter in front of a line.
-          : lines.length ? { adaptAny: true } : {}),
+          : chained !== undefined ? {} : lines.length ? { adaptAny: true } : {}),
+        ...(chained !== undefined ? { fallbackAdapt: { adapt: chained.adapt } } : {}),
       } satisfies Dest,
     });
     y += 56;
@@ -352,7 +356,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   const adapters = d.adapters?.adapters ?? [];
   adapts.sort((a, b) => ((a.plugin === null ? a.ruleY : where.get(`plugin:${a.plugin}`)?.y ?? a.ruleY) - (b.plugin === null ? b.ruleY : where.get(`plugin:${b.plugin}`)?.y ?? b.ruleY)) || a.flow.localeCompare(b.flow) || a.step - b.step);
   for (const a of adapts) {
-    const box = `adapt:${a.flow}:${a.step}:${a.adapt}`;
+    const box = a.chain ? `adapt:fallback:${a.from}:${a.adapt}` : `adapt:${a.flow}:${a.step}:${a.adapt}`;
     const running = adapters.find((x) => x.name === a.adapt);
     const beside = a.from ?? a.plugin;
     const position = placed(box) ?? { x: adaptX, y: beside === null ? a.ruleY : where.get(`plugin:${beside}`)?.y ?? a.ruleY };
@@ -360,7 +364,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     nodes.push({
       id: box, type: "adapt", position, zIndex: 1000, ...(edit ? { draggable: true } : {}),
       data: {
-        name: a.adapt, flow: a.flow, step: a.step, editable: Boolean(edit), on,
+        name: a.adapt, flow: a.flow, step: a.step, editable: Boolean(edit), on, ...(a.chain ? { fallbackOf: a.from! } : {}),
         ...(a.plugin !== null && a.from !== null && a.from !== a.plugin ? { outHue: pluginHue(d.plugins, a.plugin) } : {}),
         ...(running !== undefined
           ? {
@@ -375,9 +379,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     // The request comes from the dot on the plugin the line falls back from, and goes on, translated,
     // to the plugin the line sends to.
     const hue = "adapt";
-    edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.from ?? a.plugin}`, sourceHandle: `to:${a.flow}:${a.step}`, target: box });
+    edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.from ?? a.plugin}`, sourceHandle: a.chain ? "fallback" : `to:${a.flow}:${a.step}`, target: box });
     if (a.from === null || a.from === a.plugin) continue;
-    const to = `adaptTo:${a.flow}:${a.step}:${a.plugin}`;
+    const to = a.chain ? `adaptTo:fallback:${a.from}:${a.plugin}` : `adaptTo:${a.flow}:${a.step}:${a.plugin}`;
     const p = servingKind(a.plugin);
     nodes.push({
       id: to, type: "dest", position: placed(to) ?? { x: adaptToX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),

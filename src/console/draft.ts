@@ -7,7 +7,7 @@
  * place in Routing.tsx's layout.
  */
 import { opsBetween, type Op } from "./diff.js";
-import type { AdapterLine, AdaptersView, Backend, Flow, Node as NetNode, Resource, Routing, UiData } from "../observe/uidata.js";
+import type { AdapterLine, AdaptersView, Backend, Flow, Node as NetNode, PluginsView, Resource, Routing, UiData } from "../observe/uidata.js";
 
 export type Doc = Record<string, unknown>;
 
@@ -209,12 +209,20 @@ export function draftView(doc: Doc, live: UiData): UiData {
   const flows = flowsIn(doc);
   // The adapter plugins are the node's to run and the page's to read: what the draft changes is which
   // lines name them, so the lines are counted again here while the code and the last call stand.
-  const adapters: AdaptersView = {
-    adapters: (live.adapters?.adapters ?? []).map((a) => ({ ...a, used: adapterLines(doc, a.name) })),
+  const adapters: AdaptersView = { adapters: (live.adapters?.adapters ?? []).map((a) => ({ ...a, used: adapterLines(doc, a.name) })) };
+  // A plugin's fallback is the draft's to say too, so the map draws the chain the file would make, not the live one.
+  const livePlugins = live.plugins;
+  const plugins: PluginsView | undefined = livePlugins === undefined ? undefined : {
+    ...livePlugins,
+    plugins: livePlugins.plugins.map((p) => {
+      const f = fallbackOf(doc, p.name);
+      return f === null ? { ...p, fallback: null } : { ...p, fallback: f };
+    }),
   };
   return {
     ...live, net: { ...live.net, nodes: [{ ...self, backends }, ...peers], resources },
     routing: { ...live.routing, ...routing }, flows, layout: obj(doc.layout) as UiData["layout"], adapters,
+    ...(plugins !== undefined ? { plugins } : {}),
     actions: Object.fromEntries(Object.entries(obj(doc.actions)).map(([name, a]) => {
       const kind = ACTIONS.find((k) => k.key in obj(a))?.key ?? "";
       return [name, { kind, says: text(obj(a)[kind]) }];
@@ -651,13 +659,67 @@ export interface NodeKind {
 /** `<rule>:<line>`, the id of a node that belongs to one line of a rule. */
 const lineOf = (id: string) => ({ flow: id.slice(0, id.lastIndexOf(":")), step: Number(id.slice(id.lastIndexOf(":") + 1)) });
 
-/** The rule, line and adapter a drawn block names: `adapt:<rule>:<line>:<name>`, without its prefix. */
-export function drawnAdapter(id: string): { flow: string; step: number; name: string } {
+/** The rule, line and adapter a drawn block names: `adapt:<rule>:<line>:<name>`, without its prefix. A
+ *  fallback chain's block names no line: `adapt:fallback:<plugin>:<adapter>`. */
+export type DrawnAdapter = { kind: "line"; flow: string; step: number; name: string } | { kind: "fallback"; plugin: string; name: string };
+
+export function drawnAdapter(id: string): DrawnAdapter {
+  if (id.startsWith("fallback:")) {
+    const after = id.slice("fallback:".length);
+    const colon = after.indexOf(":");
+    return { kind: "fallback", plugin: colon < 0 ? after : after.slice(0, colon), name: colon < 0 ? "" : after.slice(colon + 1) };
+  }
   const cut = id.lastIndexOf(":");
   const name = id.slice(cut + 1);
   const line = id.slice(0, cut);
   const colon = line.lastIndexOf(":");
-  return { flow: line.slice(0, colon), step: Number(line.slice(colon + 1)), name };
+  return { kind: "line", flow: line.slice(0, colon), step: Number(line.slice(colon + 1)), name };
+}
+
+/** A plugin's fallback as the file writes it: the plugin that answers when it cannot, and the adapter between them. */
+export function fallbackOf(doc: Doc, name: string): { plugin: string; adapt?: string } | null {
+  const fallback = obj(obj(doc?.plugins)[name]).fallback;
+  if (typeof fallback === "string") return fallback === "" ? null : { plugin: fallback };
+  const to = text(obj(fallback).plugin);
+  if (to === "") return null;
+  const adapt = text(obj(fallback).adapt);
+  return adapt === "" ? { plugin: to } : { plugin: to, adapt };
+}
+
+/** The plugins a fallback could name: every one that serves an API, other than an MCP server or the one given. */
+export function servingPlugins(doc: Doc, except?: string): string[] {
+  // A fallback answers with the API a plugin serves, so only a plugin with one, other than an MCP server, can be one.
+  return Object.keys(obj(doc?.plugins)).filter((p) => { const v = obj(obj(doc?.plugins)[p]); return p !== except && typeof v.serves === "string" && v.mcp === undefined; });
+}
+
+/** Put `name` on a plugin's fallback as its adapter, or with null take it off; the plugin it falls back to stays. */
+export function withFallbackAdapt(doc: Doc, plugin: string, name: string | null): Doc | null {
+  const f = fallbackOf(doc, plugin);
+  if (f === null || (f.adapt ?? null) === name) return null;
+  return put(doc, "plugins", plugin, { ...obj(obj(doc.plugins)[plugin]), fallback: name === null ? { plugin: f.plugin } : { plugin: f.plugin, adapt: name } });
+}
+
+/** Point a plugin's fallback at another plugin, through an adapter when one is named; null takes it off. */
+export function setFallback(doc: Doc, plugin: string, to: { plugin: string; adapt?: string } | null): Doc | null {
+  const here = obj(obj(doc.plugins)[plugin]);
+  if (to === null) {
+    if (here.fallback === undefined) return null;
+    const next = { ...here };
+    delete next.fallback;
+    return put(doc, "plugins", plugin, next);
+  }
+  if (to.plugin === plugin) return null;
+  const now = fallbackOf(doc, plugin);
+  if (now !== null && now.plugin === to.plugin && (now.adapt ?? null) === (to.adapt ?? null)) return null;
+  return put(doc, "plugins", plugin, { ...here, fallback: to.adapt !== undefined ? { plugin: to.plugin, adapt: to.adapt } : { plugin: to.plugin } });
+}
+
+/** Every plugin whose fallback names an adapter: the chain the map draws from its box, through a block, to the fallback. */
+export function fallbackAdapts(doc: Doc): { plugin: string; to: string; adapt: string }[] {
+  return Object.keys(obj(doc.plugins)).flatMap((plugin) => {
+    const f = fallbackOf(doc, plugin);
+    return f !== null && f.adapt !== undefined ? [{ plugin, to: f.plugin, adapt: f.adapt }] : [];
+  });
 }
 
 /** Every kind of node on the routing map, by the start of its id (`flow:<name>`, `model:<id>` and so on). */
@@ -717,6 +779,16 @@ export const NODES: Record<string, NodeKind> = {
   plugin: {
     lands: (id) => ({ kind: "plugin", plugin: id }),
     outlet: (doc, id, handle) => {
+      // The dot for the plugin's fallback chain: the adapter there is the one that translates for it.
+      if (handle === "fallback") {
+        const f = fallbackOf(doc, id);
+        if (f === null) return null;
+        return {
+          when: null, pluginOnly: true,
+          send: (next) => (next.kind !== "plugin" ? null : setFallback(doc, id, { plugin: next.plugin, ...(f.adapt !== undefined ? { adapt: f.adapt } : {}) })),
+          adapt: (name: string | null) => withFallbackAdapt(doc, id, name),
+        };
+      }
       const m = /^to:([^:]+):(\d+)$/.exec(handle ?? "");
       if (!m) return null;
       const line = { flow: m[1]!, step: Number(m[2]) };
@@ -734,12 +806,28 @@ export const NODES: Record<string, NodeKind> = {
   action: { lands: (id) => ({ kind: "action", action: id }), opens: (id) => ({ kind: "action", id }) },
   // An adapter block is drawn as `adapt:<rule>:<line>:<name>`. A line's dot let go on it hands that
   // line's request to the adapter; its own outlet sends the line to another plugin, keeping it in front.
+  // `adapt:fallback:<plugin>:<adapter>` draws a fallback chain instead.
   adapt: {
-    lands: (id) => ({ kind: "adapt", adapt: drawnAdapter(id).name }),
-    opens: (id) => { const { flow, step, name } = drawnAdapter(id); return { kind: "adapter", id: name, at: { flow, step } }; },
+    lands: (id) => {
+      const drawn = drawnAdapter(id);
+      return { kind: "adapt", adapt: drawn.name };
+    },
+    opens: (id) => {
+      const drawn = drawnAdapter(id);
+      if (drawn.kind === "fallback") return { kind: "adapter", id: drawn.name };
+      const { flow, step, name } = drawn;
+      return { kind: "adapter", id: name, at: { flow, step } };
+    },
     outlet: (doc, id, handle) => {
       if (handle !== "out") return null;
-      const { flow, step, name } = drawnAdapter(id);
+      const drawn = drawnAdapter(id);
+      if (drawn.kind === "fallback") {
+        return {
+          when: null, pluginOnly: true,
+          send: (next) => (next.kind !== "plugin" ? null : setFallback(doc, drawn.plugin, { plugin: next.plugin, adapt: drawn.name })),
+        };
+      }
+      const { flow, step, name } = drawn;
       const line = stepsOf(doc, flow)?.[step];
       if (!line) return null;
       const adapt = adaptOf(toOf(line.to)) ?? name;

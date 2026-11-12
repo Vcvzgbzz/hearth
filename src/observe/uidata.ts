@@ -376,8 +376,8 @@ export interface PluginView {
   use: string;
   /** The service's own API, answered at /plugins/<name>/; null when it has none. */
   serves: string | null;
-  /** The plugin that answers when this one cannot, with the same request. */
-  fallback?: { plugin: string } | null;
+  /** The plugin that answers when this one cannot, and the adapter that translates for it when the two APIs differ. */
+  fallback?: { plugin: string; adapt?: string } | null;
   served: { calls: number; errors: number };
   /** Requests served now, or within the last moment, by id and caller: drawn as dots on the map, from the caller on. */
   live: { id: string; caller: string }[];

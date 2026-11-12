@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config/config.js";
-import { peerChoices, peerNode, peerLanding, lineTrouble, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, adaptOf, adapterLines, adaptLine, drawnAdapter, linesToPlugin, pluginLines, withAdapt, obj, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
+import { peerChoices, peerNode, peerLanding, lineTrouble, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, adaptOf, adapterLines, adaptLine, drawnAdapter, linesToPlugin, pluginLines, withAdapt, fallbackOf, withFallbackAdapt, setFallback, fallbackAdapts, servingPlugins, obj, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
 import type { UiData } from "../src/observe/uidata.js";
 
 const doc = (): Doc => ({
@@ -651,7 +651,7 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
 
   // A click on the block opens that adapter with the line it was drawn on; a line's dot let go on it
   // puts the adapter on that line; the block's own dot sends the line to another plugin, keeping it.
-  assert.deepEqual(drawnAdapter("r:0:gate"), { flow: "r", step: 0, name: "gate" });
+  assert.deepEqual(drawnAdapter("r:0:gate"), { kind: "line", flow: "r", step: 0, name: "gate" });
   assert.deepEqual(nodeOf("adapt:r:0:gate").kind.opens?.("r:0:gate"), { kind: "adapter", id: "gate", at: { flow: "r", step: 0 } });
   assert.deepEqual(nodeOf("adapt:r:0:gate").kind.lands?.("r:0:gate"), { kind: "adapt", adapt: "gate" });
   const block = nodeOf("adapt:r:0:gate").kind.outlet!(named, "r:0:gate", "out")!;
@@ -668,6 +668,42 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual(line(dot.adapt!("gate")!).to, { plugin: "a", adapt: "gate" });
   assert.deepEqual(line(dot.send({ kind: "plugin", plugin: "b" })!).to, { plugin: "b" }, "and re-targeting it keeps nothing else");
   assert.equal(nodeOf("plugin:a").kind.outlet!(base, "a", "to:r:2"), null, "a line that sends somewhere else is not a dot here");
+  // A plugin's fallback: the dot on its box carries the adapter, and the chain is drawn from the file.
+  const fb = (a: Doc["fallback"]) => (a === undefined
+    ? { ...base, plugins: { a: { serves: "http://127.0.0.1:2", trust: "http" }, b: { serves: "http://127.0.0.1:3", trust: "http" }, gate } }
+    : { ...base, plugins: { a: { serves: "http://127.0.0.1:2", trust: "http", fallback: a }, b: { serves: "http://127.0.0.1:3", trust: "http" }, gate } });
+  const chained: Doc = fb({ plugin: "b", adapt: "gate" });
+  assert.equal(fallbackOf(fb(undefined), "a"), null, "a plugin with no fallback has none");
+  assert.deepEqual(fallbackOf(fb("b"), "a"), { plugin: "b" }, "the bare string is the same fallback, with no adapter");
+  assert.deepEqual(fallbackOf(chained, "a"), { plugin: "b", adapt: "gate" }, "a fallback may name the adapter between the two");
+  assert.deepEqual(fallbackAdapts(chained), [{ plugin: "a", to: "b", adapt: "gate" }], "the map draws its chain from this");
+  assert.deepEqual(fallbackAdapts(fb("b")), [], "a fallback with no adapter is a word on the box, not a chain");
+  assert.deepEqual(servingPlugins(fb(undefined), "a"), ["b"], "only a plugin that serves an API is somewhere to fall back to");
+  // The plugin box's fallback dot: the adapter goes on the fallback, and the × takes only the adapter off.
+  const fbDot = nodeOf("plugin:a").kind.outlet!(chained, "a", "fallback")!;
+  assert.deepEqual(fallbackOf(fbDot.adapt!(null)!, "a"), { plugin: "b" }, "taking the adapter off keeps the plugin it falls back to");
+  const plainDot = nodeOf("plugin:a").kind.outlet!(fb("b"), "a", "fallback")!;
+  assert.deepEqual(fallbackOf(plainDot.adapt!("gate")!, "a"), { plugin: "b", adapt: "gate" }, "and putting one on sets it there");
+  assert.deepEqual(fallbackOf(withFallbackAdapt(chained, "a", null)!, "a"), { plugin: "b" });
+  assert.equal(withFallbackAdapt(fb(undefined), "a", "gate"), null, "a plugin with no fallback has nowhere to put an adapter");
+  // The chooser sets the whole fallback at once, through the adapter it was given.
+  assert.deepEqual(fallbackOf(setFallback(fb(undefined), "a", { plugin: "b", adapt: "gate" })!, "a"), { plugin: "b", adapt: "gate" });
+  assert.equal(withFallbackAdapt(chained, "a", "gate"), null, "setting the adapter it already has changes nothing");
+  assert.equal(setFallback(fb(undefined), "a", { plugin: "a" }), null, "a plugin does not fall back to itself");
+  assert.equal(setFallback(fb(undefined), "a", null), null, "and one with no fallback has nothing to take off");
+  assert.deepEqual(fallbackOf(setFallback(chained, "a", null)!, "a"), null, "a fallback is removed whole");
+  // The chain's block stands on no line: its pencil opens the adapter itself, and its OUT dot re-points the fallback.
+  assert.deepEqual(drawnAdapter("fallback:a:gate"), { kind: "fallback", plugin: "a", name: "gate" });
+  const fbBlock = nodeOf("adapt:fallback:a:gate");
+  assert.deepEqual(fbBlock.kind.opens?.("fallback:a:gate"), { kind: "adapter", id: "gate" });
+  assert.deepEqual(fbBlock.kind.lands?.("fallback:a:gate"), { kind: "adapt", adapt: "gate" });
+  assert.equal(fbBlock.kind.outlet!(chained, "fallback:a:gate", "out")!.send({ kind: "plugin", plugin: "b" }), null, "its OUT dot on the plugin it already reaches changes nothing");
+  const three: Doc = { ...chained, plugins: { ...(chained.plugins as object), c: { serves: "http://127.0.0.1:4", trust: "http" } } };
+  assert.deepEqual(fallbackOf(fbBlock.kind.outlet!(three, "fallback:a:gate", "out")!.send({ kind: "plugin", plugin: "c" })!, "a"), { plugin: "c", adapt: "gate" }, "and on another, falls back there through the same adapter");
+  // A fallback changed in the draft is what the map draws: the plugin view carries the draft's fallback.
+  const seenLive = { ...live, plugins: { plugins: [{ name: "a" }, { name: "b" }] } } as unknown as UiData;
+  assert.deepEqual(draftView(chained, seenLive).plugins?.plugins.map((p) => p.fallback), [{ plugin: "b", adapt: "gate" }, null]);
+  assert.deepEqual(draftView(fb("b"), seenLive).plugins?.plugins.map((p) => p.fallback), [{ plugin: "b" }, null]);
   // An adapter is a plugin, not an entry of the file: picking it up and pasting it is nothing.
   assert.deepEqual(wholes([{ node: "adapt:r:0:gate", x: 0, y: 0 }]), []);
 
