@@ -790,7 +790,7 @@ export const ActionNode = memo(function ActionNode({ data }: NodeProps<Node<Acti
   );
 });
 
-export type AdapterBox = {
+export type AdapterBox = { /** The colour of what its OUT dot is wired to; grey with nothing there. */ outHue?: string;
   /** The adapter plugin's name, as a line's `adapt:` writes it. */
   name: string;
   /** The line it stands on, and the rule that holds it. */
@@ -885,7 +885,7 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
         </div>
       ))}
       <div className="truncate px-2 py-0.5 text-[9px] text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
-      <Handle id="out" type="source" position={Position.Right} className={cx(PORT, dot)} style={{ right: -7, top: ADAPTER_OUT_Y }} />
+      <Handle id="out" type="source" position={Position.Right} className={cx(PORT, failed ? "!bg-bad" : lit ? "!bg-accent" : data.outHue !== undefined ? hue(data.outHue).dot : "!bg-dim", "!opacity-100")} style={{ right: -7, top: ADAPTER_OUT_Y }} />
     </div>
   );
 });

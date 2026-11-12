@@ -361,6 +361,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       id: box, type: "adapt", position, zIndex: 1000, ...(edit ? { draggable: true } : {}),
       data: {
         name: a.adapt, flow: a.flow, step: a.step, editable: Boolean(edit), on,
+        ...(a.plugin !== null && a.from !== null && a.from !== a.plugin ? { outHue: pluginHue(d.plugins, a.plugin) } : {}),
         ...(running !== undefined
           ? {
             use: running.use, timeoutMs: running.timeoutMs, state: running.state, error: running.error,
@@ -382,7 +383,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       id: to, type: "dest", position: placed(to) ?? { x: adaptToX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),
       data: { title: a.plugin, kind: pluginHue(d.plugins, a.plugin), on, down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${a.plugin}/ · from the adapter` } satisfies Dest,
     });
-    edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: to });
+    edges.push({ ...wire(`e:${box}:out`, on, pluginHue(d.plugins, a.plugin)), source: box, sourceHandle: "out", target: to });
   }
   return { nodes, edges, rides };
 }
