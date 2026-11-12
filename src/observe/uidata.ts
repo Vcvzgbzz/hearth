@@ -3,6 +3,8 @@
  * builds it in `views.ts`, and the page, which reads it. Both are compiled against this file.
  */
 
+import type { AdapterCall } from "../routing/adapters.js";
+
 /** A declared path on a backend that fronts something that is not OpenAI-shaped. */
 export interface Route {
   path: string;
@@ -411,6 +413,47 @@ export interface PluginsView {
   pending: { name: string; change: "added" | "changed" | "removed" }[];
 }
 
+/** One line that hands a request to an adapter: where it is in its rulebook, and which one it names. */
+export interface AdapterLine {
+  /** The router whose rulebook the line is in; null for the rules everyone else goes by. */
+  router: string | null;
+  flow: string;
+  step: number;
+}
+
+/**
+ * One adapter plugin, as the routing map draws it: the code each side runs, the lines that hand it
+ * a request, and how the last real call through it went. Read-only in the console: an adapter is a
+ * `trust: code` plugin, so the console never writes code into a file that hearth runs.
+ */
+export interface AdapterView {
+  /** The plugin's name, which is what a line's `adapt:` writes. */
+  name: string;
+  /** Where it comes from, as the config writes it: a `file:` path, or an `npm:` package pinned to a version. */
+  use: string;
+  /** Each side's deadline, from the plugin's own `timeoutMs`. */
+  timeoutMs: number;
+  /** Whether its plugin started. A line that names one that did not cannot run. */
+  state: "running" | "failed" | "off";
+  error: string | null;
+  /** IN: `request()`'s source, exactly as the file holds it; null when it could not be read out. */
+  request: string | null;
+  /** OUT: `response()`'s source; null when it could not be read out. */
+  response: string | null;
+  /** The whole module, which is what is shown when the two sides cannot be told apart. */
+  whole: string;
+  /** Why the two sides are not shown apart, when they are not. */
+  note?: string;
+  /** Every line, in every router, that hands a request to it. */
+  used: AdapterLine[];
+  /** How the last call through it went; absent when it has not been called since the node started. */
+  last?: AdapterCall;
+}
+
+export interface AdaptersView {
+  adapters: AdapterView[];
+}
+
 /** Where a request that names no lane lands. Repeated here because the page does not import server code. */
 export interface LaneDefaults {
   /** The first declared lane: what an empty flow step runs in. */
@@ -485,6 +528,8 @@ export interface UiData {
   recent?: { t: number; id?: string; model: string; caller: string; backend?: string; peer?: string; target?: "cache"; ms: number; ok: boolean }[];
   /** Plugins, for the Plugins page and the Routing map. Absent on an older server's payload. */
   plugins?: PluginsView;
+  /** The adapter plugins a line's `adapt:` can name, their code and how their last call went. */
+  adapters?: AdaptersView;
   /** The lanes, the order settings and the lane defaults, for the Scheduler page. */
   scheduler: SchedulerView;
 }

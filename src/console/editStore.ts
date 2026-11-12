@@ -5,14 +5,17 @@
 import { create } from "zustand";
 
 import type { Err, File, Plan } from "./config.js";
-import { added, ANY, BAYS, copiedRouter, followed, pastedAll, RANK, routeTyped, summary, factsOf, isObj, list, nodeOf, obj, opsOf, peerLanding, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, wholes, type Copied, type Doc, type Facts, type Landing, type Picked } from "./draft.js";
+import { added, ANY, BAYS, copiedRouter, followed, pastedAll, RANK, pluginLines, routeTyped, summary, factsOf, isObj, list, nodeOf, obj, opsOf, peerLanding, placed, problems, put, rebase, refusal, removed, renamed, retyped, routeId, scoped, TEMPLATES, unscoped, wholes, withAdapt, type Copied, type Doc, type Facts, type Landing, type Picked } from "./draft.js";
 import { request, RequestError, toast, useStore } from "./store.js";
 import { routerOf } from "./trace.js";
 import type { RequestTrace } from "../observe/uidata.js";
 
 /** A whole draft and the router it was shown by, to go back to. */
 export type Snap = { full: Doc; router: string | null };
-export type EditSel = { kind: "flow" | "action"; id: string } | null;
+/** A rule or an action, which are entries of the file and can be renamed, copied and deleted. */
+export type Named = { kind: "flow" | "action"; id: string };
+/** What the side panel shows: a rule, an action, or an adapter block (with the line it was drawn on). An adapter is a plugin, not an entry of the file. */
+export type EditSel = Named | { kind: "adapter"; id: string; at?: { flow: string; step: number } } | null;
 /** A request to try against the draft, and where it went. */
 export type Trial = { model: string; images: boolean; tools: boolean; long: boolean; caller?: string; lane?: string; /** State to pretend, as `<what>:<model>` (idle, used, busy, warm or held) or `now:<HH:MM>`. */ pretend?: string[] };
 export type Tried = { target: string; model: string; reason: string; backend?: string; peer?: string; path: { flow: string; step: number }[]; /** The actions it would set off. */ actions?: string[]; error?: string; /** Why the backend it reaches would turn this request down, when what is known says it would. */ unfit?: string };
@@ -53,6 +56,8 @@ interface EditState {
   unread: string | null;
   /** The dialog that names a new thing: `flows`, or `actions:<kind>`. */
   adding: string | null;
+  /** How to add an adapter, opened from a line's dot: an adapter is a plugin, so it is a file and an entry. */
+  newAdapter: boolean;
   /** The router whose rulebook `draft` shows as its `flows`; null for the rules everyone else goes by. */
   router: string | null;
   /** The whole draft that view was taken of: what `draft` leaves out while a router is being edited. */
@@ -62,7 +67,7 @@ interface EditState {
 }
 
 export const useEdit = create<EditState>(() => ({
-  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, replay: null, picking: null, choosing: null, pending: [], hover: null, many: [], toPick: null, past: [], future: [], unread: null, adding: null, focus: null, router: null, rest: null,
+  file: null, draft: null, sel: null, opened: null, err: null, plan: null, trial: null, tried: null, replay: null, picking: null, choosing: null, pending: [], hover: null, many: [], toPick: null, past: [], future: [], unread: null, adding: null, newAdapter: false, focus: null, router: null, rest: null,
 }));
 const set = useEdit.setState;
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -224,7 +229,7 @@ const strand = (types: string[]) => set((s) => ({ pending: [...new Set([...s.pen
 const stranded = (types: string[]): string => (types.length ? `: ${types.join(", ")} ${types.length === 1 ? "goes" : "go"} nowhere now` : "");
 
 /** Take a rule or an action out of the draft, saying what else that touched. */
-export function remove(sel: NonNullable<EditSel>): void {
+export function remove(sel: Named): void {
   const types = sel.kind === "flow" ? typesInto([sel.id]) : [];
   change((d) => removed(d, sel.kind === "flow" ? "flows" : "actions", sel.id));
   strand(types);
@@ -234,7 +239,7 @@ export function remove(sel: NonNullable<EditSel>): void {
 const SECTION = { flow: "flows", action: "actions" } as const;
 
 /** Give a rule or an action another name; says why when it cannot. */
-export function rename(sel: NonNullable<EditSel>, to: string): void {
+export function rename(sel: Named, to: string): void {
   const { draft } = useEdit.getState();
   const name = to.trim();
   if (!draft || !name || name === sel.id) return;
@@ -301,7 +306,7 @@ function pasteMany(): void {
 // What was last copied: a rule or an action as it stood, so it can be put in again after it has changed or gone.
 let copiedOne: { kind: "flow" | "action"; id: string; entry: Doc } | null = null;
 /** Remember a rule or an action to paste; false when there is none by that name. */
-export function copy(sel: EditSel): boolean {
+export function copy(sel: Named | null): boolean {
   const entry = sel && obj(useEdit.getState().draft?.[SECTION[sel.kind]])[sel.id];
   if (!sel || !isObj(entry)) return false;
   copiedOne = { ...sel, entry };
@@ -319,7 +324,7 @@ export function paste(): void {
   toast("ok", kind === "flow" ? `${name} added — give it the names it takes` : `${name} added`);
 }
 /** A second one of a rule or an action, beside the first. */
-export const duplicate = (sel: EditSel) => { if (copy(sel)) paste(); };
+export const duplicate = (sel: Named) => { if (copy(sel)) paste(); };
 
 export const change = (fn: (d: Doc) => Doc) => set((s) => ({ draft: s.draft ? fn(s.draft) : s.draft, err: null }));
 
@@ -343,6 +348,9 @@ export function wire(from: { node: string; handle: string | null }, to: Landing)
   if (to.kind === "action") {
     if (!out.also) { toast("bad", "An action runs from a line of a rule: put this through a rule first, then draw the line's dot to the action."); return; }
     next = out.also(to.action);
+  } else if (to.kind === "adapt") {
+    if (!out.adapt) { toast("bad", "An adapter stands in front of a plugin: give this line a plugin target first, then drop its dot on the block."); return; }
+    next = out.adapt(to.adapt);
   } else {
     const known = facts();
     // A name drawn straight to a model that is not chat becomes a type for the paths that model answers on.
@@ -355,6 +363,37 @@ export function wire(from: { node: string; handle: string | null }, to: Landing)
 }
 
 /**
+ * Put an adapter in front of a line: the one the dragged dot belongs to, or — a plugin's own dot,
+ * which stands for every line that sends there — the one a person picks when there are several.
+ */
+export function adaptOn(from: { node: string; handle: string | null }, name: string, at?: { x: number; y: number }): void {
+  const { draft } = useEdit.getState();
+  if (!draft) return;
+  const start = nodeOf(from.node);
+  const out = start.kind.outlet?.(draft, start.id, from.handle) ?? null;
+  const line = out?.line;
+  if (line !== undefined) {
+    change((d) => withAdapt(d, line.flow, line.step, name) ?? d);
+    return;
+  }
+  // A plugin box's own dot stands for every line that sends there: which line it goes on is a person's call.
+  const plugin = from.node.startsWith("plugin:") ? from.node.slice(7) : null;
+  const lines = plugin === null ? [] : pluginLines(draft, plugin);
+  if (lines.length === 1) { change((d) => withAdapt(d, lines[0]!.flow, lines[0]!.step, name) ?? d); return; }
+  if (lines.length > 1 && at !== undefined) {
+    chooseAt(at.x, at.y, [
+      { label: `which line of ${plugin}`, head: true },
+      ...lines.map((l) => ({ label: `${l.flow} line ${l.step + 1}`, value: `${l.flow}:${l.step}`, mono: true })),
+    ], (v) => {
+      const cut = v.lastIndexOf(":");
+      change((d) => withAdapt(d, v.slice(0, cut), Number(v.slice(cut + 1)), name) ?? d);
+    });
+    return;
+  }
+  toast("bad", "An adapter stands in front of a plugin: draw a line from a rule to the plugin first.");
+}
+
+/**
  * A line let go over a node, at a point on the page: whatever that node is as somewhere to end one.
  * A peer that lends several models is asked which, in the list of places opened on that peer.
  */
@@ -362,6 +401,8 @@ export function connect(from: { node: string; handle: string | null }, node: str
   const end = nodeOf(node);
   const to = end.kind.lands?.(end.id);
   if (!to) return;
+  // A line's dot let go on an adapter block hands that line's request to the adapter.
+  if (to.kind === "adapt") { adaptOn(from, to.adapt, at); return; }
   if (to.kind !== "peer" || to.model !== null) return wire(from, to);
   const { draft } = useEdit.getState();
   const one = draft && peerLanding(draft, to.peer);

@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 
 import { parseConfig } from "../src/config/config.js";
-import { peerChoices, peerNode, peerLanding, lineTrouble, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
+import { peerChoices, peerNode, peerLanding, lineTrouble, addPlace, applyOps, dropPlace, orderOf, raisePlace, thenTry, pastedAll, put, wholes, directTo, draftView, factsOf, nodeOf, opsOf, placed, pointStep, problems, rawTo, rebase, refusal, routeId, toOf, toText, unchecked, linesRunning, removed, renamed, scoped, unscoped, followed, summary, routeTyped, withCaller, callersIn, routerFor, usersOf, spread, beside, bayRoom, added, retyped, ordered, movedName, movedBay, movedHardware, BAYS, tidied, arranged, TEMPLATES, restOf, withDo, withRest, placedOn, withPlugin, movePlugin, wireSlot, adaptOf, adapterLines, adaptLine, drawnAdapter, linesToPlugin, pluginLines, withAdapt, obj, type Doc, type Landing, type To, callerChoices, paneChoices, copiedRouter, restacked, unstacked, STACK } from "../src/console/draft.js";
 import type { UiData } from "../src/observe/uidata.js";
 
 const doc = (): Doc => ({
@@ -601,6 +601,92 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   assert.deepEqual(peerChoices(doc, ""), [{ peer: "far", model: null }, { peer: "far", model: "chat" }, { peer: "far", model: "voice" }]);
   assert.deepEqual(peerChoices(doc, "voi"), [{ peer: "far", model: "voice" }], "a search for a model finds it on its peer");
   assert.deepEqual(rawTo({ kind: "peer", peer: "far", model: "voice" }), { peer: "far", model: "voice" }, "and the line names it");
+}
+
+// An adapter is a `trust: code` plugin a line names: the line's target carries `adapt:`, the map
+// draws a block on that line, and the only thing the draft changes is which line names which one.
+{
+  const live = { net: { nodes: [{ name: "me", self: true, up: true, free: 1, slots: 1, queued: 0 }] }, routing: {} } as unknown as UiData;
+  const gate = { use: "file:./adapters/gate.mjs", trust: "code" };
+  const base: Doc = {
+    version: 3, name: "t",
+    backends: { main: { url: "http://127.0.0.1:1", serves: ["m"] } },
+    models: { m: { backend: "main" } },
+    plugins: { a: { serves: "http://127.0.0.1:2", trust: "http" }, b: { serves: "http://127.0.0.1:3", trust: "http" }, gate },
+    flows: { r: { inputs: ["*"], steps: [{ to: { plugin: "a" } }, { when: { tools: true }, to: { asked: true } }, { to: "m" }] } },
+    routers: { other: { flows: { x: { inputs: ["*"], steps: [{ to: { plugin: "b" } }, { to: { refuse: "only plugin requests" } }] } } } },
+  };
+  const line = (d: Doc, flow = "r", i = 0) => ((obj(obj(d.flows)[flow]).steps as Doc[])[i]!);
+
+  // A line that sends to a plugin, or to the plugin a request asks for, may hand it to an adapter first.
+  const named = withAdapt(base, "r", 0, "gate")!;
+  assert.deepEqual(line(named).to, { plugin: "a", adapt: "gate" });
+  assert.equal(adaptOf(toOf(line(named).to)), "gate");
+  assert.deepEqual(line(withAdapt(base, "r", 1, "gate")!, "r", 1).to, { asked: true, adapt: "gate" });
+  assert.doesNotThrow(() => parseConfig(named), "a line that names an adapter loads");
+  assert.doesNotThrow(() => parseConfig(withAdapt(base, "r", 1, "gate")!));
+  assert.equal(withAdapt(named, "r", 0, "gate"), null, "it already hands it there");
+  assert.equal(withAdapt(base, "r", 2, "gate"), null, "a model line has no plugin to put an adapter in front of");
+  assert.equal(adaptOf({ kind: "model", model: "m" }), undefined, "and nothing else can carry one");
+  assert.deepEqual(line(withAdapt(named, "r", 0, null)!).to, { plugin: "a" }, "taking it off leaves the target as it was");
+
+  // Every line of every rulebook that names it, and a rename of the plugin would have to follow it in both.
+  assert.deepEqual(adapterLines(named, "gate"), [{ router: null, flow: "r", step: 0 }]);
+  const inRouter = adaptLine(base, { router: "other", flow: "x", step: 0 }, "gate")!;
+  assert.deepEqual(adapterLines(inRouter, "gate"), [{ router: "other", flow: "x", step: 0 }]);
+  assert.doesNotThrow(() => parseConfig(inRouter), "a router's line names it too");
+  assert.deepEqual(adapterLines(named, "nothing"), [], "an adapter no line names");
+  assert.equal(adaptLine(base, { router: "other", flow: "x", step: 0 }, null), base, "taking off one that is not there changes nothing");
+
+  // The lines that send to one plugin, and the ones that give one of them an adapter: what the dots count.
+  assert.deepEqual(linesToPlugin(base.flows, "a"), [{ flow: "r", step: 0 }]);
+  assert.deepEqual(linesToPlugin(named.flows, "a"), [{ flow: "r", step: 0, adapt: "gate" }]);
+  // Several lines may send to one plugin: which of them an adapter goes on is asked, then set on that one.
+  const two: Doc = { ...base, flows: { r: { inputs: ["*"], steps: [{ when: { header: { "x-tier": ["a"] } }, to: { plugin: "a" } }, { to: { plugin: "a" } }] } } };
+  assert.deepEqual(pluginLines(two, "a"), [{ flow: "r", step: 0 }, { flow: "r", step: 1 }], "both lines are dots to drag, and the chooser asks which");
+  assert.deepEqual(line(withAdapt(two, "r", 1, "gate")!, "r", 0).to, { plugin: "a" }, "the line that was chosen takes it, and the other does not");
+  assert.deepEqual(line(withAdapt(two, "r", 1, "gate")!, "r", 1).to, { plugin: "a", adapt: "gate" });
+  assert.deepEqual(pluginLines(base, "b"), [], "no line of these rules sends to it");
+  assert.deepEqual(pluginLines({ flows: { r: { inputs: [], steps: [{ to: { plugin: "b" } }, { to: { plugin: "a" } }] } } }, "b"), [{ flow: "r", step: 0 }], "the dots are drawn from the rules on the map");
+
+  // A click on the block opens that adapter with the line it was drawn on; a line's dot let go on it
+  // puts the adapter on that line; the block's own dot sends the line to another plugin, keeping it.
+  assert.deepEqual(drawnAdapter("r:0:gate"), { flow: "r", step: 0, name: "gate" });
+  assert.deepEqual(nodeOf("adapt:r:0:gate").kind.opens?.("r:0:gate"), { kind: "adapter", id: "gate", at: { flow: "r", step: 0 } });
+  assert.deepEqual(nodeOf("adapt:r:0:gate").kind.lands?.("r:0:gate"), { kind: "adapt", adapt: "gate" });
+  const block = nodeOf("adapt:r:0:gate").kind.outlet!(named, "r:0:gate", "out")!;
+  assert.deepEqual(line(block.send({ kind: "plugin", plugin: "b" })!).to, { plugin: "b", adapt: "gate" });
+  assert.equal(block.send({ kind: "model", model: "m" }), null, "an adapter stands in front of a plugin, not a model");
+  assert.equal(block.pluginOnly, true, "so its chooser offers plugins");
+  // A line's own dot can name an adapter only where it sends to a plugin.
+  assert.equal(typeof nodeOf("flow:r").kind.outlet!(base, "r", "step-0")!.adapt, "function");
+  assert.equal(nodeOf("flow:r").kind.outlet!(base, "r", "step-2")!.adapt, undefined, "a model line cannot name one");
+  assert.deepEqual(nodeOf("flow:r").kind.outlet!(base, "r", "step-0")!.line, { flow: "r", step: 0 });
+  // A plugin box's right-hand dot is one line: it hands that line's request to an adapter too.
+  const dot = nodeOf("plugin:a").kind.outlet!(base, "a", "to:r:0")!;
+  assert.deepEqual(dot.line, { flow: "r", step: 0 });
+  assert.deepEqual(line(dot.adapt!("gate")!).to, { plugin: "a", adapt: "gate" });
+  assert.deepEqual(line(dot.send({ kind: "plugin", plugin: "b" })!).to, { plugin: "b" }, "and re-targeting it keeps nothing else");
+  assert.equal(nodeOf("plugin:a").kind.outlet!(base, "a", "to:r:2"), null, "a line that sends somewhere else is not a dot here");
+  // An adapter is a plugin, not an entry of the file: picking it up and pasting it is nothing.
+  assert.deepEqual(wholes([{ node: "adapt:r:0:gate", x: 0, y: 0 }]), []);
+
+  // A line that names an adapter the file has not got, or one that is not code, is said before the file refuses it.
+  const gone = { ...named, plugins: { a: { serves: "http://127.0.0.1:2", trust: "http" } } };
+  assert.ok(problems(gone).some((p) => /hands the request to the adapter "gate", which is not a plugin under plugins:/.test(p)));
+  const wrong = { ...named, plugins: { ...named.plugins as object, gate: { serves: "http://127.0.0.1:4", trust: "http" } } };
+  assert.ok(problems(wrong).some((p) => /the adapter "gate" is not a trust: code plugin with a file: or npm: use/.test(p)));
+
+  // The page is drawn from the adapters the node reports, with the lines the draft gives them.
+  const seen = {
+    name: "gate", use: "file:./adapters/gate.mjs", timeoutMs: 250, state: "running" as const, error: null,
+    request: "request(req) { return req; }", response: "response(res) { return res; }", whole: "whole", used: [],
+    last: { t: 1, side: "request" as const, ok: false, error: "boom" },
+  };
+  assert.deepEqual(draftView(named, { ...live, adapters: { adapters: [seen] } } as UiData).adapters, {
+    adapters: [{ ...seen, used: [{ router: null, flow: "r", step: 0 }] }],
+  });
+  assert.deepEqual(draftView(named, live).adapters, { adapters: [] }, "and with an older node, no adapters are invented");
 }
 
 console.log("draft.test.ts ok");

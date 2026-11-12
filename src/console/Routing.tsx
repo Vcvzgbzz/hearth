@@ -6,10 +6,10 @@
 import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, adaptOf, beside as besideLines, directTo, draftView, factsOf, groupRows, linesToPlugin, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, selectMany } from "./editStore.js";
 import { contextMenu } from "./editor.js";
-import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
+import { ADAPTER, ADAPTER_OUT_Y, HUE, pluginHue, takesWork, VIEWS, type ActionBox, type AdapterBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type ServiceTag, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
@@ -24,7 +24,7 @@ const SIDE = { refuse: 66, fastest: 70, place: 28, action: 70 };
 const GAP = 24;
 
 /** What each kind of box is on the small map in the corner: the same theme colours the box itself wears. */
-const MINI: Record<string, string> = { hub: "var(--dim)", flow: "var(--info)", fastest: "var(--pick)", order: "var(--pick)", refuse: "var(--bad)", action: "var(--warn)" };
+const MINI: Record<string, string> = { hub: "var(--dim)", flow: "var(--info)", fastest: "var(--pick)", order: "var(--pick)", refuse: "var(--bad)", action: "var(--warn)", adapt: "var(--mcp)", tag: "var(--api)" };
 
 /** How tall the node a line's target is drawn as beside its rule; 0 for a model, a peer or another rule, which are not drawn there. */
 const sideOf = (to: To, order?: End[]): number => (to.kind === "refuse" ? SIDE.refuse : to.kind === "fastest" ? SIDE.fastest + to.of.length * SIDE.place
@@ -87,6 +87,10 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   let x = 330;
   for (let col = 0; col < columns; col++) { colX.push(x); x += RULE.width + (beside(col) ? 280 : 0) + 70; }
   const endX = columns ? x : 420;
+  // An adapter stands in a column to the right of the plugin boxes, and the service it ends at to the
+  // right of that: the picture reads rule → plugin box → adapter → service, every edge left to right.
+  const adaptX = endX + 200 + 44;
+  const tagX = adaptX + ADAPTER.width + 36;
 
   // Only what a line ends at is drawn: the models and peers the rules and the redirected names use.
   let y = 0;
@@ -123,13 +127,27 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     });
     y += 56;
   }
-  // A plugin a line sends to, for the requests made to /plugins/<name>/*.
+  // A plugin a line sends to, for the requests made to /plugins/<name>/*, and the right-hand dots its
+  // lines draw: one for each line that names an adapter, or one to put an adapter in front of a line.
   const servingKind = (p: string) => (d.plugins?.plugins ?? []).find((x) => x.name === p);
+  /** A line of a rule the request was tried or replayed down: the blocks and dots on it light. */
+  const wentDown = (flow: string, step: number) => tried !== null && tried.path.some((p) => p.flow === flow && p.step === step);
+  /** Every adapter block to draw, before the column is laid out: which plugin box it stands beside. */
+  const adapts: { plugin: string | null; flow: string; step: number; adapt: string; ruleY: number }[] = [];
   for (const name of new Set(flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "plugin" ? [t.plugin] : []; })))) {
     const p = servingKind(name);
+    const lines = linesToPlugin(d.flows, name);
+    const adapted = lines.flatMap((l) => (l.adapt === undefined ? [] : [{ ...l, adapt: l.adapt }]));
+    for (const l of adapted) adapts.push({ plugin: name, flow: l.flow, step: l.step, adapt: l.adapt, ruleY: 0 });
+    const kind = p?.mcp ? "MCP" : "API";
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
-      data: { title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }) } satisfies Dest,
+      data: {
+        title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }),
+        ...(adapted.length
+          ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
+          : lines.length ? { adaptAny: true } : {}),
+      } satisfies Dest,
     });
     y += 56;
   }
@@ -263,6 +281,10 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: end });
           mine.push(end);
         }
+        // A plugin's line was collected with its plugin box; one that runs the plugin a request asks
+        // for has no box to stand beside, so it stands level with its own line.
+        const adaptName = adaptOf(t);
+        if (adaptName !== undefined && t.kind === "asked") adapts.push({ plugin: null, flow: name, step: i, adapt: adaptName, ruleY: fy + RULE.head + i * RULE.row + groupRows(f.steps, i) + 4 });
         // What a line sets off is a dashed line of its own: it is beside where the request goes, not instead of it.
         for (const a of list(s.do)) if (d.actions?.[a]) edges.push({ ...wire(`e:${id}:${i}:do:${a}`, lit && tried !== null, "action", { ghost: true }), source: id, sourceHandle: `step-${i}`, target: `action:${a}` });
       });
@@ -304,6 +326,43 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   const room = new Map(free.map((n) => [n.id, (n.data as Dest).fallback ? 82 : 60]));
   const level = besideLines(free.map((n) => n.id), (id) => edges.filter((e) => e.target === id).map(leaves), (id) => room.get(id) ?? 60);
   for (const n of free) n.position = { x: n.position.x, y: level.get(n.id) ?? n.position.y };
+
+  // An adapter block stands in its column level with its plugin box (or with its line, where it runs
+  // the plugin a request asks for), and its right dot is wired to the service tag past it. The blocks
+  // are drawn in the order of the dots they come from, so the lines between them do not cross.
+  const where = new Map(nodes.map((n) => [n.id, n.position]));
+  const adapters = d.adapters?.adapters ?? [];
+  adapts.sort((a, b) => ((a.plugin === null ? a.ruleY : where.get(`plugin:${a.plugin}`)?.y ?? a.ruleY) - (b.plugin === null ? b.ruleY : where.get(`plugin:${b.plugin}`)?.y ?? b.ruleY)) || a.flow.localeCompare(b.flow) || a.step - b.step);
+  for (const a of adapts) {
+    const box = `adapt:${a.flow}:${a.step}:${a.adapt}`;
+    const running = adapters.find((x) => x.name === a.adapt);
+    const position = placed(box) ?? { x: adaptX, y: a.plugin === null ? a.ruleY : where.get(`plugin:${a.plugin}`)!.y };
+    const on = wentDown(a.flow, a.step);
+    nodes.push({
+      id: box, type: "adapt", position, zIndex: 1000, ...(edit ? { draggable: true } : {}),
+      data: {
+        name: a.adapt, flow: a.flow, step: a.step, editable: Boolean(edit), on,
+        ...(running !== undefined
+          ? {
+            use: running.use, timeoutMs: running.timeoutMs, state: running.state, error: running.error,
+            request: running.request, response: running.response, whole: running.whole, ...(running.note !== undefined ? { note: running.note } : {}),
+            ...(running.last !== undefined ? { last: running.last } : {}),
+          }
+          : { state: "failed" as const, error: "no adapter plugin of this name is reported by the node" }),
+      } satisfies AdapterBox,
+    });
+    if (a.plugin === null) continue;
+    // The line's request comes from the plugin box's dot, and the block's answer goes on to the service.
+    const hue = pluginHue(d.plugins, a.plugin);
+    edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.plugin}`, sourceHandle: `to:${a.flow}:${a.step}`, target: box });
+    const tag = `tag:${a.flow}:${a.step}:${a.plugin}`;
+    const p = servingKind(a.plugin);
+    nodes.push({
+      id: tag, type: "tag", position: { x: tagX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),
+      data: { title: a.plugin, sub: p === undefined ? "no plugin of this name" : p.serves ?? (p.state === "off" ? "off: hearth started with --no-plugins" : "a plugin with no API of its own"), on } satisfies ServiceTag,
+    });
+    edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: tag });
+  }
   return { nodes, edges, rides };
 }
 
@@ -323,7 +382,7 @@ export function Routing() {
       tried: edit.trial ? edit.tried : edit.replay && asTried(edit.replay), asked: edit.trial?.model ?? edit.replay?.asked ?? null, pending: edit.pending, facts: factsOf(edit.draft, data), trouble: (rule, line) => lineTrouble(edit.draft!, rule, line),
       // What was counted is the default router's: on another router's map no line shows a count.
       changed: (rule) => edit.router !== null || JSON.stringify((edit.draft!.flows as Record<string, unknown> | undefined)?.[rule]) !== JSON.stringify((edit.file?.doc?.flows as Record<string, unknown> | undefined)?.[rule]) });
-  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.trial, edit.replay, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
+  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.trial, edit.replay, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits, data.adapters]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
   const dragging = useRef<string | null>(null);

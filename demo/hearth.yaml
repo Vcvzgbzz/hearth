@@ -158,6 +158,18 @@ flows:
     takes: /sdapi/v1/txt2img
     steps:
       - to: image-model
+  # The requests made to a plugin's own API, /plugins/<name>/*: the first line that can answer wins,
+  # and the second carries the same request over to another API through an adapter (a trust: code
+  # plugin whose setup returns { adapt: { request, response } }). The Routing map draws it as a block.
+  plugins:
+    inputs: [API]
+    note: "SearXNG first; when its API cannot take the search, the same request goes to degoog through an adapter. Callers ask for /plugins/web-search/*: the name is what the lines test, each naming the plugin it goes to."
+    steps:
+      - when: { variant: [web-search] }
+        to: { plugin: searxng }
+      - when: { variant: [web-search] }
+        to: { plugin: degoog, adapt: searxng-to-degoog }
+      - to: { refuse: "only a web search is open here" }
   anything-else:
     inputs: ["*"]
     steps:
@@ -182,6 +194,13 @@ apiKeys:
   - { key: demo-guest, label: guest, models: [chat], expires: 2030-12-31, limits: { requestsPerMinute: 30, tokensPerDay: 200000 } }
   # Held to one model: it can ask for nothing else, on any route.
   - { key: demo-sensor, label: sensor, models: [classify] }
+
+# Plugins: what answers /plugins/<name>/* on their own APIs. `searxng-to-degoog` is no API: it is
+# the adapter a line names with `adapt:`, so the Routing map draws it as a block on that line.
+plugins:
+  searxng: { serves: http://127.0.0.1:42040, trust: http }
+  degoog: { serves: http://127.0.0.1:42041, trust: http }
+  searxng-to-degoog: { use: file:../examples/adapters/searxng-to-degoog.mjs, trust: code, timeoutMs: 1000 }
 
 # Things set off beside routing: a line in the log, and a call to a webhook.
 actions:

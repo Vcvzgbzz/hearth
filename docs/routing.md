@@ -459,6 +459,58 @@ An example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapter
 A plugin's own `fallback` is still one hop with the same request ([A fallback](plugins.md#a-fallback)).
 To fall back to a plugin that speaks another API, put it on the next line with `adapt:` instead.
 
+### Adapters on the map
+
+The Routing page draws an adapter as a block of its own on the line that names it, in a column to
+the right of the plugin boxes and level with the plugin box that line sends to. The line arrives at
+the block's input dot, on its left, and the block's output dot on its right is wired to a small tag
+naming the plugin and the address it `serves`: the picture reads rule → plugin box → adapter →
+service, left to right. Several blocks stack in that column, and the column exists only while some
+line names an adapter.
+
+The block shows the module as the two sides a line runs:
+
+- **IN** is `request()`: what the plugin is sent, or `null` when the request has no counterpart on
+  that plugin's API.
+- **OUT** is `response()`: what the caller is given back for a 2xx answer.
+
+Both are read from the plugin's module file by the node, and both are **read-only**: an adapter is
+`trust: code`, so hearth runs the operator's own file, and writing that file from the web page would
+be a way to run code on the node without reaching it. Edit the file, then restart. A module whose
+two declarations cannot be read out of it is shown whole instead, with a line saying why.
+
+The block's header carries the plugin's name, its `use:` file and its `timeoutMs`, and a button that
+takes the adapter off the line; the line then sends straight to its plugin again. The column keeps
+the plugin: deleting the plugin is done in `hearth.yaml`.
+
+It lights for a few seconds each time a real request goes through it, and while a tried or replayed
+request goes down that line; it turns red when the last call through it failed, saying which side
+did, and the reason is on the block when you hover it. Only the last call is kept, in memory, so a
+restart forgets it.
+
+Click the block for its panel beside the map:
+
+- **used on**: every line of every router that names it, each with a way to take it off that line.
+- **try it**: one side of the code run against a sample request (and, for `response()`, a sample
+  answer), and what it returned. Only the adapter runs: hearth sends nothing anywhere for it, and no
+  plugin is asked. The adapter plugin's own `timeoutMs` applies, as it does on a line. It is
+  operator-only, with the same auth as `/flows/try`.
+
+A line whose target sends to a plugin draws a dot at its row's right end, as a model line does. Let
+go on empty map and the list of places opens, which for such a line also offers **a new adapter…**
+(how to add one: a file path, a starter module, and the `plugins:` entry — an adapter is a plugin, so
+it is added to `hearth.yaml` and a restart reads it) and **reuse adapter ▸**, the adapter plugins the
+node has. Either one puts the adapter between the line and the plugin it already sends to, so the
+line keeps its target. The plugin box draws one right-hand dot for each line that names an adapter,
+labelled with the line (`API · 3`), and a dashed **adapt** dot when no line sending there names one;
+that dot asks which line when several send to the same plugin. Dropping any of those dots on a block
+puts that adapter on the line; dragging the block's own output dot onto another plugin box sends the
+line there through the same adapter. A line's ⋯ menu has **adapt it** as well: pick an adapter the
+node has, or take off the one it has.
+
+Everything here is part of the routing draft, so it is published with the rest of the map, from the
+same review. The draft changes which lines name an adapter, never the adapter's code.
+
 ### Actions
 
 An action is something a step sets off beside routing: a line in the log, or a

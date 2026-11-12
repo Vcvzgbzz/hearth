@@ -200,10 +200,13 @@ export function pluginRoutes(ctx: RouteContext) {
         try {
           carried = await adapter.request(original);
         } catch (e) {
+          plugins.adapterCalled(adapter.name, { side: "request", ok: false, error: said(e), plugin: name });
           done(false);
           log.warn("flow.adapter_failed", { adapter: adapter.name, side: "request", plugin: name, caller: c.caller, error: said(e) });
           return { failed: `adapter ${adapter.name} could not carry the request over: ${said(e)}` };
         }
+        // `null` is an answer too: this line has no counterpart for it, which is the next line's turn.
+        plugins.adapterCalled(adapter.name, { side: "request", ok: true, plugin: name });
         // No counterpart on the target's API: this line cannot serve the request, so the next one is asked.
         if (carried === null) {
           done(false);
@@ -224,7 +227,9 @@ export function pluginRoutes(ctx: RouteContext) {
         let read: Partial<AdapterAnswer>;
         try {
           read = await adapter!.response(answer, original);
+          plugins.adapterCalled(adapter!.name, { side: "response", ok: true, plugin: name });
         } catch (e) {
+          plugins.adapterCalled(adapter!.name, { side: "response", ok: false, error: said(e), plugin: name });
           log.warn("flow.adapter_failed", { adapter: adapter!.name, side: "response", plugin: name, status: answer.status, caller: c.caller, error: said(e) });
           return { answer: 502, error: `adapter ${adapter!.name} could not read ${name}'s answer: ${said(e)}` };
         }

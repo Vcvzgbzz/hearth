@@ -36,6 +36,23 @@ export interface LineAdapter {
   response(res: AdapterAnswer, req: AdapterRequest): Promise<Partial<AdapterAnswer>>;
 }
 
+/**
+ * How one call through an adapter went, as the console remembers it: only the last one, in memory,
+ * because that is what a map can light a block with.
+ */
+export interface AdapterCall {
+  /** When it ended, in ms since the epoch. */
+  t: number;
+  /** Which of the two sides ran. */
+  side: "request" | "response";
+  /** The code ran and gave an answer. A `null` from `request()` is an answer: this line has no counterpart. */
+  ok: boolean;
+  /** Why it failed, as the code or its deadline said. */
+  error?: string;
+  /** The plugin the line sent the request to. */
+  plugin?: string;
+}
+
 function objectOf(what: unknown, at: string): Record<string, unknown> {
   if (typeof what !== "object" || what === null || Array.isArray(what)) throw new Error(`${at} returned ${what === null ? "null" : typeof what}, not an object`);
   return what as Record<string, unknown>;

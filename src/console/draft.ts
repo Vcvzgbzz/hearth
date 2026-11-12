@@ -7,7 +7,7 @@
  * place in Routing.tsx's layout.
  */
 import { opsBetween, type Op } from "./diff.js";
-import type { Backend, Flow, Node as NetNode, Resource, Routing, UiData } from "../observe/uidata.js";
+import type { AdapterLine, AdaptersView, Backend, Flow, Node as NetNode, Resource, Routing, UiData } from "../observe/uidata.js";
 
 export type Doc = Record<string, unknown>;
 
@@ -101,6 +101,65 @@ export function toText(to: To): string {
   }
 }
 
+/** The one line every place an adapter is shown carries: it is a file, and a restart is what reads a change. */
+export const ADAPTER_NOTE = "trust: code: edit the file, then restart";
+
+/** The adapter a target hands its request to, where a target can name one at all: a plugin target, or the plugin a request asks for. */
+export const adaptOf = (to: To): string | undefined => (to.kind === "plugin" || to.kind === "asked" ? to.adapt : undefined);
+
+/** Every line of every rulebook in a draft that hands a request to the adapter `name`. */
+export function adapterLines(doc: Doc, name: string): AdapterLine[] {
+  const out: AdapterLine[] = [];
+  const rulebook = (flows: unknown, router: string | null): void => {
+    for (const [flow, f] of Object.entries(obj(flows))) {
+      const steps = Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : [];
+      steps.forEach((raw, step) => { if (adaptOf(toOf(obj(raw).to)) === name) out.push({ router, flow, step }); });
+    }
+  };
+  rulebook(doc.flows, null);
+  for (const [router, r] of Object.entries(obj(doc.routers))) {
+    // A draft shown as one router's rulebook carries that rulebook as its `flows` too: its lines count once.
+    if (obj(r).flows === doc.flows) continue;
+    rulebook(obj(r).flows, router);
+  }
+  return out;
+}
+
+/** Point a line at an adapter, or with null take it off; null when the line cannot name one or already does. */
+export function withAdapt(doc: Doc, flow: string, i: number, name: string | null): Doc | null {
+  const step = stepsOf(doc, flow)?.[i];
+  if (!step) return null;
+  const to = toOf(step.to);
+  if (to.kind !== "plugin" && to.kind !== "asked") return null;
+  if ((to.adapt ?? null) === name) return null;
+  const next: To = to.kind === "plugin"
+    ? { kind: "plugin", plugin: to.plugin, ...(name !== null ? { adapt: name } : {}) }
+    : { kind: "asked", ...(name !== null ? { adapt: name } : {}) };
+  return editStep(doc, flow, i, (s) => ({ ...s, to: rawTo(next) }));
+}
+
+/** Point one line at an adapter, or with null take it off: `at` says which rulebook, flow and line it is. */
+export function adaptLine(doc: Doc, at: AdapterLine, name: string | null): Doc {
+  if (at.router === null) return withAdapt(doc, at.flow, at.step, name) ?? doc;
+  const router = obj(obj(doc.routers)[at.router]);
+  const next = withAdapt({ ...doc, flows: obj(router.flows) }, at.flow, at.step, name);
+  return next === null ? doc : put(doc, "routers", at.router, { ...router, flows: obj(next.flows) });
+}
+
+/** Every line of `flows` that sends to the plugin `plugin`, in order, with the adapter it names if it names one. */
+export function linesToPlugin(flows: unknown, plugin: string): { flow: string; step: number; adapt?: string }[] {
+  return Object.entries(obj(flows)).flatMap(([flow, f]) => (Array.isArray(obj(f).steps) ? (obj(f).steps as unknown[]) : []).flatMap((raw, step) => {
+    const to = toOf(obj(raw).to);
+    if (to.kind !== "plugin" || to.plugin !== plugin) return [];
+    return [{ flow, step, ...(to.adapt !== undefined ? { adapt: to.adapt } : {}) }];
+  }));
+}
+
+/** Every line of the rules shown whose target is the plugin `plugin`, in order: one of them may name an adapter. */
+export function pluginLines(doc: Doc, plugin: string): { flow: string; step: number }[] {
+  return linesToPlugin(doc.flows, plugin);
+}
+
 /** The flows a draft declares, in the shape the graph draws. */
 const flowsIn = (doc: Doc): Record<string, Flow> =>
   Object.fromEntries(Object.entries(obj(doc.flows)).map(([name, f]) => [name, {
@@ -148,9 +207,14 @@ export function draftView(doc: Doc, live: UiData): UiData {
     routing[id] = { ...live.routing?.[id], ...(backend ? { backend } : {}) };
   }
   const flows = flowsIn(doc);
+  // The adapter plugins are the node's to run and the page's to read: what the draft changes is which
+  // lines name them, so the lines are counted again here while the code and the last call stand.
+  const adapters: AdaptersView = {
+    adapters: (live.adapters?.adapters ?? []).map((a) => ({ ...a, used: adapterLines(doc, a.name) })),
+  };
   return {
     ...live, net: { ...live.net, nodes: [{ ...self, backends }, ...peers], resources },
-    routing: { ...live.routing, ...routing }, flows, layout: obj(doc.layout) as UiData["layout"],
+    routing: { ...live.routing, ...routing }, flows, layout: obj(doc.layout) as UiData["layout"], adapters,
     actions: Object.fromEntries(Object.entries(obj(doc.actions)).map(([name, a]) => {
       const kind = ACTIONS.find((k) => k.key in obj(a))?.key ?? "";
       return [name, { kind, says: text(obj(a)[kind]) }];
@@ -547,8 +611,8 @@ export function wireSlot(doc: Doc, flow: string, i: number, plugin: string, slot
   return withPlaced(doc, flow, i, placed);
 }
 
-/** What a line can be let go on: somewhere to send work, or an action to run on the way. */
-export type Landing = To | { kind: "action"; action: string };
+/** What a line can be let go on: somewhere to send work, an action to run on the way, or an adapter to put in front of what the line already sends to. */
+export type Landing = To | { kind: "action"; action: string } | { kind: "adapt"; adapt: string };
 
 /** An outlet a line is drawn from, as what it stands for in the file. */
 export interface Outlet {
@@ -562,10 +626,16 @@ export interface Outlet {
   endsOnly?: boolean;
   /** Its rule takes requests that are not chat. */
   paths?: boolean;
+  /** The line it belongs to, where that is one line of a rule: what an adapter would sit in front of. */
+  line?: { flow: string; step: number };
+  /** Only a plugin will do: the outlet belongs to an adapter, which sits in front of one. */
+  pluginOnly?: boolean;
   /** The draft with this outlet sent to `to`; null when that changes nothing or cannot be. */
   send: (to: To) => Doc | null;
   /** The draft with `action` run from this outlet, where one can be. */
   also?: (action: string) => Doc | null;
+  /** The draft with the line this outlet belongs to handing its request to the adapter `name`; absent when the line sends to a model or a peer. */
+  adapt?: (name: string | null) => Doc | null;
 }
 
 /** How one kind of node on the routing map behaves. Every part is optional: a node that only shows something has none. */
@@ -574,12 +644,21 @@ export interface NodeKind {
   lands?: (id: string) => Landing;
   /** The outlet `handle` of it, for a line drawn from there. */
   outlet?: (doc: Doc, id: string, handle: string | null) => Outlet | null;
-  /** What a click on it opens in the side panel. */
-  opens?: (id: string) => { kind: "flow" | "action"; id: string };
+  /** What a click on it opens in the side panel; an adapter block also says which line it was drawn on. */
+  opens?: (id: string) => { kind: "flow" | "action" | "adapter"; id: string; at?: { flow: string; step: number } };
 }
 
 /** `<rule>:<line>`, the id of a node that belongs to one line of a rule. */
 const lineOf = (id: string) => ({ flow: id.slice(0, id.lastIndexOf(":")), step: Number(id.slice(id.lastIndexOf(":") + 1)) });
+
+/** The rule, line and adapter a drawn block names: `adapt:<rule>:<line>:<name>`, without its prefix. */
+export function drawnAdapter(id: string): { flow: string; step: number; name: string } {
+  const cut = id.lastIndexOf(":");
+  const name = id.slice(cut + 1);
+  const line = id.slice(0, cut);
+  const colon = line.lastIndexOf(":");
+  return { flow: line.slice(0, colon), step: Number(line.slice(colon + 1)), name };
+}
 
 /** Every kind of node on the routing map, by the start of its id (`flow:<name>`, `model:<id>` and so on). */
 export const NODES: Record<string, NodeKind> = {
@@ -599,7 +678,14 @@ export const NODES: Record<string, NodeKind> = {
       const step = stepsOf(doc, id)?.[i];
       // `step-<n>-then`: not where the line goes, but where it goes next when that fails.
       if (step && /^step-\d+-then$/.test(handle ?? "")) return { when: obj(step.when), endsOnly: true, paths: list(obj(obj(doc.flows)[id]).takes).length > 0, send: (to) => thenTry(doc, id, i, to) };
-      return step ? { when: obj(step.when), rule: id, paths: list(obj(obj(doc.flows)[id]).takes).length > 0, send: (to) => pointStep(doc, id, i, to), also: (a) => withDo(doc, id, i, a, true) } : null;
+      if (!step) return null;
+      // Only a line that sends to a plugin can hand its request to an adapter first.
+      const to = toOf(step.to);
+      return {
+        when: obj(step.when), rule: id, line: { flow: id, step: i }, paths: list(obj(obj(doc.flows)[id]).takes).length > 0,
+        send: (next) => pointStep(doc, id, i, next), also: (a) => withDo(doc, id, i, a, true),
+        ...(to.kind === "plugin" || to.kind === "asked" ? { adapt: (name: string | null) => withAdapt(doc, id, i, name) } : {}),
+      };
     },
   },
   // The fastest of several: an outlet per place, `end-<k>`, and any other handle adds a place.
@@ -626,8 +712,43 @@ export const NODES: Record<string, NodeKind> = {
   model: { lands: (id) => ({ kind: "model", model: id }) },
   // `peer:<name>` is the peer taking the id asked for; `peer:<name>/<model>` is one model it lends.
   peer: { lands: (id) => { const cut = id.indexOf("/"); return cut < 0 ? { kind: "peer", peer: id, model: null } : { kind: "peer", peer: id.slice(0, cut), model: id.slice(cut + 1) }; } },
-  plugin: { lands: (id) => ({ kind: "plugin", plugin: id }) },
+  // A plugin a line sends to. Its right-hand dots are one per line: `to:<rule>:<line>` hands that
+  // line's request to an adapter, and is what the block's input comes from.
+  plugin: {
+    lands: (id) => ({ kind: "plugin", plugin: id }),
+    outlet: (doc, id, handle) => {
+      const m = /^to:([^:]+):(\d+)$/.exec(handle ?? "");
+      if (!m) return null;
+      const line = { flow: m[1]!, step: Number(m[2]) };
+      const step = stepsOf(doc, line.flow)?.[line.step];
+      if (!step) return null;
+      const to = toOf(step.to);
+      if (to.kind !== "plugin" || to.plugin !== id) return null;
+      return {
+        when: obj(step.when), rule: line.flow, line, pluginOnly: true,
+        send: (next) => (next.kind !== "plugin" ? null : pointStep(doc, line.flow, line.step, next)),
+        adapt: (name: string | null) => withAdapt(doc, line.flow, line.step, name),
+      };
+    },
+  },
   action: { lands: (id) => ({ kind: "action", action: id }), opens: (id) => ({ kind: "action", id }) },
+  // An adapter block is drawn as `adapt:<rule>:<line>:<name>`. A line's dot let go on it hands that
+  // line's request to the adapter; its own outlet sends the line to another plugin, keeping it in front.
+  adapt: {
+    lands: (id) => ({ kind: "adapt", adapt: drawnAdapter(id).name }),
+    opens: (id) => { const { flow, step, name } = drawnAdapter(id); return { kind: "adapter", id: name, at: { flow, step } }; },
+    outlet: (doc, id, handle) => {
+      if (handle !== "out") return null;
+      const { flow, step, name } = drawnAdapter(id);
+      const line = stepsOf(doc, flow)?.[step];
+      if (!line) return null;
+      const adapt = adaptOf(toOf(line.to)) ?? name;
+      return {
+        when: obj(line.when), rule: flow, line: { flow, step }, pluginOnly: true, paths: list(obj(obj(doc.flows)[flow]).takes).length > 0,
+        send: (to) => (to.kind !== "plugin" ? null : pointStep(doc, flow, step, { kind: "plugin", plugin: to.plugin, adapt })),
+      };
+    },
+  },
 };
 
 /** A node on the routing map as its kind and the id within that kind. */
@@ -873,7 +994,9 @@ export function wholes(many: Picked[]): (Picked & { kind: "flow" | "action"; id:
   return many.flatMap((m) => {
     const at = nodeOf(m.node);
     const on = at.kind.opens?.(at.id);
-    return on && on.id === at.id ? [{ ...m, ...on }] : [];
+    // Only a rule or an action stands in the file by itself; an adapter is a plugin, drawn by a line of one.
+    if (on === undefined || on.id !== at.id || on.kind === "adapter") return [];
+    return [{ ...m, kind: on.kind, id: on.id }];
   });
 }
 
@@ -1064,6 +1187,14 @@ export function problems(doc: Doc, facts?: Facts): string[] {
       // In an order a line with nothing to test is the point: the next is where the request goes when it fails.
       else if (!last && to.kind !== "peer" && typeof s.max !== "number" && Object.keys(obj(s.when)).length === 0 && orderOf({ ...obj(obj(doc.flows)[f.name]), inputs: f.inputs, steps: f.steps }) === null) out.push(`Rule "${f.name}", line ${i + 1}: choose a condition, or the lines after it are never reached.`);
       for (const a of list(s.do)) if (!isObj(obj(doc.actions)[a])) out.push(`Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}: it runs the action "${a}", which is gone.`);
+      // An adapter is a `trust: code` plugin a line names: a line that names one the file has not got cannot run.
+      const adapt = adaptOf(to);
+      if (adapt !== undefined) {
+        const where = `Rule "${f.name}", ${last ? "the Otherwise line" : `line ${i + 1}`}`;
+        const p = isObj(obj(doc.plugins)[adapt]) ? obj(obj(doc.plugins)[adapt]) : null;
+        if (p === null) out.push(`${where}: it hands the request to the adapter "${adapt}", which is not a plugin under plugins:.`);
+        else if (text(p.trust) !== "code" || !/^(file|npm):/.test(text(p.use))) out.push(`${where}: the adapter "${adapt}" is not a trust: code plugin with a file: or npm: use.`);
+      }
     });
   }
   for (const [name, a] of Object.entries(obj(doc.actions))) {
