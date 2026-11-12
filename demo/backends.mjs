@@ -111,6 +111,29 @@ function hook(port) {
   createServer(async (req, res) => { await read(req); json(res, 200, { ok: true }); }).listen(port, "127.0.0.1");
 }
 
+/**
+ * A plugin service: what hearth fronts at `/plugins/<name>/*`. One speaks SearXNG's JSON and one
+ * degoog's, so the demo's adapter can carry a request from the first shape to the second.
+ */
+function pluginService(port, what) {
+  createServer(async (req, res) => {
+    const at = new URL(req.url, "http://here");
+    if (at.pathname === "/manifest") return json(res, 200, { apiVersion: 1, kinds: {}, needs: {} });
+    const q = (at.searchParams.get("q") ?? "").trim();
+    if (what === "searxng" ? at.pathname !== "/search" : at.pathname !== "/api/search") return json(res, 404, { error: "not here" });
+    // The first line fails on these, so the same request goes on to the other API through the
+    // adapter: only the SearXNG-shaped service is ever busy.
+    if (what === "searxng" && (q === "busy" || q === "broken")) return json(res, 503, { error: "the engines are busy" });
+    // An answer the adapter cannot read: the caller gets a 502 naming the adapter, and the block reddens.
+    if (what === "degoog" && q === "broken") return json(res, 200, { oops: true });
+    if (!q) return json(res, 400, { error: "a search needs a q" });
+    const one = [{ url: `https://example.test/${encodeURIComponent(q)}`, title: `${q} — ${what}`, snippet: `a result for ${q}, from ${what}`, source: what }];
+    return what === "searxng"
+      ? json(res, 200, { query: q, number_of_results: 1, results: one.map((r) => ({ url: r.url, title: r.title, content: r.snippet, engine: "demo", engines: ["demo"], category: "general" })), answers: [], corrections: [], infoboxes: [], suggestions: [], unresponsive_engines: [] })
+      : json(res, 200, { query: q, results: one, relatedSearches: ["another search"], engineTimings: [{ name: "demo", status: "ok" }] });
+  }).listen(port, "127.0.0.1");
+}
+
 // This node's own servers.
 swapper(42001, ["big-model", "code-model", "vision-model"], { perSec: 35, props: { "vision-model": { modalities: { vision: true } }, "big-model": { default_generation_settings: { n_ctx: 131072 } } } });
 steady(42002, ["small-model"], { perSec: 80, context: 16384 });
@@ -121,7 +144,10 @@ steady(42005, ["voice-model"], { perSec: 120 });
 provider(42010, "demo-key-a", ["hosted-large", "hosted-fast", "hosted-other"]);
 provider(42011, "demo-key-b", ["messages-large", "messages-fast"], { anthropic: true });
 hook(42020);
-// What the friend's node fronts.
+// Two plugin services, and what the friend's node fronts.
 swapper(42030, ["their-big-model"], { perSec: 45, props: { "their-big-model": { default_generation_settings: { n_ctx: 262144 } } } });
+// The two APIs an adapter carries a search request between.
+pluginService(42040, "searxng");
+pluginService(42041, "degoog");
 
-console.log("demo backends are up on 127.0.0.1:42001-42030");
+console.log("demo backends are up on 127.0.0.1:42001-42041");

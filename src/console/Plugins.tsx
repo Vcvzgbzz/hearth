@@ -303,9 +303,10 @@ export function Plugins() {
       model === null ? `empties ${name}'s ${slot} slot` : `wires ${model} into ${name}'s ${slot} slot, the default on every line it runs on`);
 
   /** Write the plugin that answers for this one when it cannot, through the usual review. */
-  const fallBack = (name: string, to: { plugin: string } | null) =>
+  const fallBack = (name: string, to: { plugin: string } | null) => {
     propose([{ path: ["plugins", name, "fallback"], ...(to === null ? { delete: true } : { value: to.plugin }) }], "save it",
       to === null ? `${name} gets no fallback: when it cannot answer, the caller is told so` : `when ${name} cannot answer, ${to.plugin} does, sent the same request`);
+  };
 
   /** Show a config change in the usual review, and write it if it is kept. */
   const propose = (ops: unknown[], verb: string, line: string) => void (async () => {

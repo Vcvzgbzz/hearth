@@ -18,7 +18,9 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   (`login.ts`), and the sliding-window rate limit (`window.ts`)
 - `src/routing/`: where a request goes: `route.ts` decides, from the live state in `world.ts`;
   `actions.ts` is what a step can set off; `stats.ts` is what a model can take against what a
-  request needs; `reach.ts` is who can reach what, for the console
+  request needs; `reach.ts` is who can reach what, for the console; `adapters.ts` is the adapter
+  contract a `trust: code` plugin's `setup` returns and a line's `adapt:` names, and
+  `adapterSource.ts` reads an adapter's module as the two sides the console shows
 - `src/queue/`: when it runs: `scheduler.ts` (admission per backend), `pool.ts` (the backends
   and their queues, and what they can take), `models.ts` (which backend serves a model, and what it is
   called on each side), `hardware.ts` (backends taking turns on shared hardware: evictions, residents, holds), `resources.ts` (whose turn each resource is), `backend.ts` (one backend's state),
@@ -38,7 +40,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   `configfile.ts` (live edits to hearth.yaml), `derived.ts` (a value derived from the live config, rebuilt when
   a key it reads is replaced), `migrate.ts`, `yamlq.ts`
 - `src/plugins/`: loading plugins and running their hooks (`plugins.ts`: the kind gate,
-  timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens), and MCP
+  timeouts, `onError` / `onFail`, the pause after repeated failures, internal tokens, and the
+  adapter plugins a line names, with their source and last call), and MCP
   (`mcp.ts`: checking a served endpoint, running a server over stdin and stdout)
 - `src/observe/`: what the node records and reports: `log.ts`, `requestlog.ts`, `requests.ts` (the
   recent finished requests, one record each, behind `/ui/requests`), `history.ts`,
@@ -61,13 +64,16 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   what the node's load does to its fire is `fire.ts`. The routing map is
   `Routing.tsx` (layout), `flowNodes.tsx` (one view per kind of node) and
   `draft.ts` (`NODES`: what drawing a line from or onto each kind changes in the
-  file). The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
+  file), and an adapter's block and panel are `Adapters.tsx` with
+  `flowNodes.tsx`. The address scheme (`#<page>/<what is selected>`) is `link.ts`; the error
   boundary around each page and the whole console is `Boundary.tsx`; the Config
   page's draft, which also outlives a walk away, is `configStore.ts`; the Logs page
   is `logs.tsx`, and what it filters and keys rows by is `logfilter.ts`; the Requests page
   and the replay strip over the routing map are `Requests.tsx`, and what a trace says is `trace.ts`; the Usage
   page is `Usage.tsx`, and its sums are `tally.ts`; the Playground page is
   `Playground.tsx`, and its stream parser, code-fence split and facts line are `chat.ts`
+- `examples/`: files people copy into their own setup, not loaded by hearth itself;
+  `examples/adapters/` holds an example adapter plugin, for a fallback between two APIs
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

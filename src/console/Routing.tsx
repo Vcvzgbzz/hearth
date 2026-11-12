@@ -6,10 +6,10 @@
 import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ANY, beside as besideLines, directTo, draftView, factsOf, groupRows, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
+import { ANY, adaptOf, beside as besideLines, directTo, draftView, factsOf, groupRows, linesToPlugin, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, selectMany } from "./editStore.js";
 import { contextMenu } from "./editor.js";
-import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
+import { ADAPTER, ADAPTER_OUT_Y, HUE, pluginHue, takesWork, VIEWS, type ActionBox, type AdapterBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
@@ -24,7 +24,7 @@ const SIDE = { refuse: 66, fastest: 70, place: 28, action: 70 };
 const GAP = 24;
 
 /** What each kind of box is on the small map in the corner: the same theme colours the box itself wears. */
-const MINI: Record<string, string> = { hub: "var(--dim)", flow: "var(--info)", fastest: "var(--pick)", order: "var(--pick)", refuse: "var(--bad)", action: "var(--warn)" };
+const MINI: Record<string, string> = { hub: "var(--dim)", flow: "var(--info)", fastest: "var(--pick)", order: "var(--pick)", refuse: "var(--bad)", action: "var(--warn)", adapt: "var(--mcp)", tag: "var(--api)" };
 
 /** How tall the node a line's target is drawn as beside its rule; 0 for a model, a peer or another rule, which are not drawn there. */
 const sideOf = (to: To, order?: End[]): number => (to.kind === "refuse" ? SIDE.refuse : to.kind === "fastest" ? SIDE.fastest + to.of.length * SIDE.place
@@ -87,6 +87,12 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   let x = 330;
   for (let col = 0; col < columns; col++) { colX.push(x); x += RULE.width + (beside(col) ? 280 : 0) + 70; }
   const endX = columns ? x : 420;
+  // An adapter stands in a column to the right of the plugin boxes: the plugin the line falls back from
+  // hands it the request, and it hands the translated request back to the plugin the line sends to.
+  const adaptX = endX + 200 + 44;
+  // The plugin an adapter hands the translated request to is drawn again past the block, so the
+  // picture reads left to right; its box in the plugin column stays for the lines that reach it directly.
+  const adaptToX = adaptX + ADAPTER.width + 48;
 
   // Only what a line ends at is drawn: the models and peers the rules and the redirected names use.
   let y = 0;
@@ -123,13 +129,44 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     });
     y += 56;
   }
-  // A plugin a line sends to, for the requests made to /plugins/<name>/*.
+  // A plugin a line sends to, for the requests made to /plugins/<name>/*, and the right-hand dots its
+  // lines draw: one for each line that names an adapter, or one to put an adapter in front of a line.
   const servingKind = (p: string) => (d.plugins?.plugins ?? []).find((x) => x.name === p);
-  for (const name of new Set(flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "plugin" ? [t.plugin] : []; })))) {
+  /** A line of a rule the request was tried or replayed down: the blocks and dots on it light. */
+  const wentDown = (flow: string, step: number) => tried !== null && tried.path.some((p) => p.flow === flow && p.step === step);
+  /** Every adapter block to draw: the plugin its line sends to, and the plugin of the line it falls back from. */
+  const adapts: { plugin: string | null; from: string | null; flow: string; step: number; adapt: string; ruleY: number; chain?: true }[] = [];
+  /** The plugin of the nearest earlier line of the same rule with the same condition: what a failed request was asked of. */
+  const fellFrom = (flow: string, step: number): string | null => {
+    const steps = flows.find(([n]) => n === flow)?.[1].steps ?? [];
+    const when = JSON.stringify(steps[step]?.when ?? null);
+    for (let k = step - 1; k >= 0; k--) {
+      const t = toOf(steps[k]!.to);
+      if (t.kind === "plugin" && JSON.stringify(steps[k]!.when ?? null) === when) return t.plugin;
+    }
+    return null;
+  };
+  const pluginNames = [...new Set(flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "plugin" ? [t.plugin] : []; })))];
+  for (const name of pluginNames) for (const l of linesToPlugin(d.flows, name)) if (l.adapt !== undefined) adapts.push({ plugin: name, from: fellFrom(l.flow, l.step), flow: l.flow, step: l.step, adapt: l.adapt, ruleY: 0 });
+  // A plugin whose fallback names an adapter: the chain runs from its box, through the adapter, to the fallback.
+  for (const p of d.plugins?.plugins ?? []) if (p.fallback?.adapt !== undefined && pluginNames.includes(p.name)) adapts.push({ plugin: p.fallback.plugin, from: p.name, flow: "", step: -1, adapt: p.fallback.adapt, ruleY: 0, chain: true });
+  for (const name of pluginNames) {
     const p = servingKind(name);
+    const lines = linesToPlugin(d.flows, name);
+    // A line's dot sits on the plugin it falls back from; with none before it, on the plugin it sends to.
+    const adapted = adapts.filter((a) => !a.chain && (a.from ?? a.plugin) === name);
+    const chained = adapts.find((a) => a.chain && a.from === name);
+    const kind = p?.mcp ? "MCP" : "API";
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
-      data: { title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }) } satisfies Dest,
+      data: {
+        title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }),
+        ...(adapted.length
+          ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
+          // One exit dot per box: its adapter's, or else one to put an adapter in front of a line.
+          : chained !== undefined ? {} : lines.length ? { adaptAny: true } : {}),
+        ...(chained !== undefined ? { fallbackAdapt: { adapt: chained.adapt } } : {}),
+      } satisfies Dest,
     });
     y += 56;
   }
@@ -227,7 +264,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         // Above the lines that pass behind it on their way to what they end at.
         id, type: "flow", position: { x: colX[col]!, y: fy }, zIndex: 1000,
         data: {
-          name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step, orders: Object.fromEntries(orders),
+          name, inputs: f.inputs, steps: f.steps as SwitchBox["steps"], selected: is("flow", name), editable, lit: step,
+          // Lines that reach their plugin through an adapter: their own dot has no wire, so it is not drawn.
+          viaAdapter: adapts.filter((a) => a.flow === name && a.from !== null && a.from !== a.plugin).map((a) => a.step), orders: Object.fromEntries(orders),
           cloud: [...away], models: edit?.models ?? [], lanes: edit?.lanes ?? [], actions: actions.map(([a]) => a), off: f.off, note: f.note, sticky: f.sticky !== undefined, takes: f.takes,
           ...(d.flowHits && !edit?.changed(name) ? { hits: f.steps.map((_, i) => d.flowHits![name]?.[i] ?? 0) } : {}),
           ...(edit ? { marks: f.steps.map((s, i) => { const t = toOf(s.to); const no = refusal(s.when, t, edit.facts, (f.takes ?? []).length > 0) ?? edit.trouble(name, i); return no ? { bad: no } : unchecked(s.when, t, edit.facts) ? { unsure: true as const } : null; }) } : {}),
@@ -249,7 +288,8 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: end });
         } else if (t.kind === "flow") edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `flow:${t.flow}` });
         else if (t.kind === "model" || t.kind === "peer") to(line, id, `step-${i}`, t);
-        else if (t.kind === "plugin") edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `plugin:${t.plugin}` });
+        // A line that falls back through an adapter reaches its plugin by the adapter's wires, not its own.
+        else if (t.kind === "plugin" && !adapts.some((a) => a.flow === name && a.step === i && a.from !== null && a.from !== a.plugin)) edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `plugin:${t.plugin}` });
         else if (t.kind === "fastest" || t.kind === "refuse") {
           // A line that ends in a choice or a refusal gets that as a node beside it.
           const end = `${t.kind}:${name}:${i}`;
@@ -263,6 +303,10 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: end });
           mine.push(end);
         }
+        // A plugin's line was collected with its plugin box; one that runs the plugin a request asks
+        // for has no box to stand beside, so it stands level with its own line.
+        const adaptName = adaptOf(t);
+        if (adaptName !== undefined && t.kind === "asked") adapts.push({ plugin: null, from: null, flow: name, step: i, adapt: adaptName, ruleY: fy + RULE.head + i * RULE.row + groupRows(f.steps, i) + 4 });
         // What a line sets off is a dashed line of its own: it is beside where the request goes, not instead of it.
         for (const a of list(s.do)) if (d.actions?.[a]) edges.push({ ...wire(`e:${id}:${i}:do:${a}`, lit && tried !== null, "action", { ghost: true }), source: id, sourceHandle: `step-${i}`, target: `action:${a}` });
       });
@@ -304,6 +348,47 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   const room = new Map(free.map((n) => [n.id, (n.data as Dest).fallback ? 82 : 60]));
   const level = besideLines(free.map((n) => n.id), (id) => edges.filter((e) => e.target === id).map(leaves), (id) => room.get(id) ?? 60);
   for (const n of free) n.position = { x: n.position.x, y: level.get(n.id) ?? n.position.y };
+
+  // An adapter block stands in its column level with its plugin box (or with its line, where it runs
+  // the plugin a request asks for), and its right dot is wired to the service tag past it. The blocks
+  // are drawn in the order of the dots they come from, so the lines between them do not cross.
+  const where = new Map(nodes.map((n) => [n.id, n.position]));
+  const adapters = d.adapters?.adapters ?? [];
+  adapts.sort((a, b) => ((a.plugin === null ? a.ruleY : where.get(`plugin:${a.plugin}`)?.y ?? a.ruleY) - (b.plugin === null ? b.ruleY : where.get(`plugin:${b.plugin}`)?.y ?? b.ruleY)) || a.flow.localeCompare(b.flow) || a.step - b.step);
+  for (const a of adapts) {
+    const box = a.chain ? `adapt:fallback:${a.from}:${a.adapt}` : `adapt:${a.flow}:${a.step}:${a.adapt}`;
+    const running = adapters.find((x) => x.name === a.adapt);
+    const beside = a.from ?? a.plugin;
+    const position = placed(box) ?? { x: adaptX, y: beside === null ? a.ruleY : where.get(`plugin:${beside}`)?.y ?? a.ruleY };
+    const on = wentDown(a.flow, a.step);
+    nodes.push({
+      id: box, type: "adapt", position, zIndex: 1000, ...(edit ? { draggable: true } : {}),
+      data: {
+        name: a.adapt, flow: a.flow, step: a.step, editable: Boolean(edit), on, ...(a.chain ? { fallbackOf: a.from! } : {}),
+        ...(a.plugin !== null && a.from !== null && a.from !== a.plugin ? { outHue: pluginHue(d.plugins, a.plugin) } : {}),
+        ...(running !== undefined
+          ? {
+            use: running.use, timeoutMs: running.timeoutMs, state: running.state, error: running.error,
+            request: running.request, response: running.response, whole: running.whole, ...(running.note !== undefined ? { note: running.note } : {}),
+            ...(running.last !== undefined ? { last: running.last } : {}),
+          }
+          : { state: "failed" as const, error: "no adapter plugin of this name is reported by the node" }),
+      } satisfies AdapterBox,
+    });
+    if (a.plugin === null) continue;
+    // The request comes from the dot on the plugin the line falls back from, and goes on, translated,
+    // to the plugin the line sends to.
+    const hue = "adapt";
+    edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.from ?? a.plugin}`, sourceHandle: a.chain ? "fallback" : `to:${a.flow}:${a.step}`, target: box });
+    if (a.from === null || a.from === a.plugin) continue;
+    const to = a.chain ? `adaptTo:fallback:${a.from}:${a.plugin}` : `adaptTo:${a.flow}:${a.step}:${a.plugin}`;
+    const p = servingKind(a.plugin);
+    nodes.push({
+      id: to, type: "dest", position: placed(to) ?? { x: adaptToX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),
+      data: { title: a.plugin, kind: pluginHue(d.plugins, a.plugin), on, down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${a.plugin}/ · from the adapter` } satisfies Dest,
+    });
+    edges.push({ ...wire(`e:${box}:out`, on, pluginHue(d.plugins, a.plugin)), source: box, sourceHandle: "out", target: to });
+  }
   return { nodes, edges, rides };
 }
 
@@ -323,7 +408,7 @@ export function Routing() {
       tried: edit.trial ? edit.tried : edit.replay && asTried(edit.replay), asked: edit.trial?.model ?? edit.replay?.asked ?? null, pending: edit.pending, facts: factsOf(edit.draft, data), trouble: (rule, line) => lineTrouble(edit.draft!, rule, line),
       // What was counted is the default router's: on another router's map no line shows a count.
       changed: (rule) => edit.router !== null || JSON.stringify((edit.draft!.flows as Record<string, unknown> | undefined)?.[rule]) !== JSON.stringify((edit.file?.doc?.flows as Record<string, unknown> | undefined)?.[rule]) });
-  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.trial, edit.replay, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits]);
+  }, [edit.draft, edit.file, edit.router, edit.sel, edit.tried, edit.trial, edit.replay, edit.pending, data.net, data.q.jobs, data.routing, data.layout, data.flows, data.actions, data.flowHits, data.adapters]);
   // A drag moves the node until it is let go; what the node reports meanwhile must not put it back.
   const [nodes, setNodes] = useState(laid.nodes);
   const dragging = useRef<string | null>(null);

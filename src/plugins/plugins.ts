@@ -14,6 +14,8 @@ import type { HearthConfig } from "../config/config.js";
 import { DEFAULT_ROUTER, type Flow } from "../config/flows.js";
 import { PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
 import type { Logger } from "../observe/log.js";
+import { answerOf, type Adapter, type AdapterAnswer, type AdapterCall, type AdapterRequest, type LineAdapter, requestOf } from "../routing/adapters.js";
+import { readAdapterSource, type AdapterSource } from "../routing/adapterSource.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */
@@ -72,13 +74,15 @@ export interface Decision {
   flag?: string;
 }
 
-/** What a code plugin's `setup` returns: one function per stage it hooks. */
+/** What a code plugin's `setup` returns: one function per stage it hooks, or an adapter a line names. */
 export interface Hooks {
   request?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   routed?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   log?: (x: HookExchange) => Promise<void> | void;
   error?: (x: HookExchange) => Promise<void> | void;
   stop?: () => Promise<void> | void;
+  /** For a plugin another flow line names with `adapt:`: it translates that line's request and answer. */
+  adapt?: Adapter;
 }
 
 /** What `setup` is given. */
@@ -126,7 +130,7 @@ export interface PluginStatus {
   use: string;
   /** The service's own API, answered at `/plugins/<name>/*`, shown as its origin and path; null when it has none. */
   serves: string | null;
-  /** The plugin that answers when this one cannot; null when it has none. */
+  /** The plugin that answers when this one cannot, with the same request; null when it has none. */
   fallback: { plugin: string } | null;
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
@@ -309,6 +313,23 @@ interface Loaded {
   recheck: NodeJS.Timeout | null;
   /** Requests served: who asked and when each ended, or null while it runs. */
   flying: Map<string, { caller: string; ended: number | null }>;
+  /** An adapter's module, read once at startup and split into its sides: a `trust: code` plugin is read then, not per request. */
+  source: AdapterSource | null;
+}
+
+/** An adapter plugin as the console draws it: its code, its deadline, and how its last call went. */
+export interface AdapterInfo {
+  name: string;
+  /** Where it comes from, as the config writes it: a `file:` path or a pinned `npm:` package. */
+  use: string;
+  /** Each side's deadline, from the plugin's `timeoutMs`. */
+  timeoutMs: number;
+  state: PluginStatus["state"];
+  error: string | null;
+  /** The module split into its two sides; null when it could not be read at all. */
+  source: AdapterSource | null;
+  /** How the last call through it went; absent when it has not been called since the node started. */
+  last?: AdapterCall;
 }
 
 /** One plugin as it applies to one request: its hooks, the settings its router gives it, its models and its line. */
@@ -330,18 +351,37 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
   return out;
 }
 
+/** Every plugin some flow line names with `adapt:`, or a plugin's fallback does, in the default rules and every router's. */
+export function adapterNames(cfg: HearthConfig): Set<string> {
+  const out = new Set<string>();
+  for (const p of Object.values(cfg.plugins)) if (p.fallback?.adapt !== undefined) out.add(p.fallback.adapt);
+  const walk = (flows: Record<string, Flow>) => {
+    for (const f of Object.values(flows)) {
+      for (const st of f.steps) {
+        const adapt = "adapt" in st.to ? st.to.adapt : undefined;
+        if (adapt !== undefined) out.add(adapt);
+      }
+    }
+  };
+  walk(cfg.flows);
+  for (const r of Object.values(cfg.routers)) walk(r.flows);
+  return out;
+}
+
 export class Plugins {
   private loaded: Loaded[] = [];
   private seq = 0;
   private tokens = new Map<string, string>();
   private retrying: ReturnType<typeof setTimeout> | null = null;
+  /** How the last call through each adapter went, by plugin name: kept in memory, so a restart forgets it. */
+  private adapterCalls = new Map<string, AdapterCall>();
 
   constructor(private cfg: HearthConfig, private log: Logger, private opts: { off: boolean; selfUrl: () => string }) {}
 
   /** Loads every plugin. One that fails is turned off and logged, unless it is `required`; a service is tried again until it answers. */
   async start(): Promise<void> {
     for (const [name, decl] of Object.entries(this.cfg.plugins)) {
-      const l: Loaded = { name, decl, token: randomBytes(24).toString("base64url"), declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {}, served: { calls: 0, errors: 0 }, flying: new Map(), stdio: null, mcp: null, recheck: null };
+      const l: Loaded = { name, decl, token: randomBytes(24).toString("base64url"), declared: {}, needs: {}, kinds: {}, hooks: {}, state: "off", error: null, fails: 0, pausedUntil: 0, failOpens: 0, paused: false, stats: {}, served: { calls: 0, errors: 0 }, flying: new Map(), stdio: null, mcp: null, recheck: null, source: null };
       this.loaded.push(l);
       if (this.opts.off) continue;
       this.tokens.set(l.token, name);
@@ -369,8 +409,11 @@ export class Plugins {
     try {
       const internal = { url: this.opts.selfUrl(), token: l.token };
       // A plugin that only serves an API hooks nothing, so it has no manifest to read.
-      const { declared, needs, hooks } = decl.use === null ? { declared: {}, needs: {}, hooks: {} }
-        : decl.trust === "code" ? await this.loadCode(name, decl, decl.use, internal) : await this.loadService(name, decl, decl.use, internal);
+      const read = decl.use === null ? { declared: {}, needs: {}, hooks: {}, path: null as string | null }
+        : decl.trust === "code" ? await this.loadCode(name, decl, decl.use, internal) : { ...(await this.loadService(name, decl, decl.use, internal)), path: null as string | null };
+      const { declared, needs, hooks } = read;
+      // An adapter's code is read once here, as the plugin is: a change to the file needs a restart.
+      l.source = read.path !== null && hooks.adapt !== undefined ? readAdapterSource(read.path) : null;
       const wider = widened(name, declared, decl.kinds);
       if (wider) throw new Error(wider);
       l.declared = declared;
@@ -378,13 +421,19 @@ export class Plugins {
       l.kinds = effectiveKinds(declared, decl.kinds);
       const misplaced = this.misplaced(name, l.kinds, needs);
       if (misplaced) throw new Error(misplaced);
+      // A line that names this plugin with `adapt:` calls both sides, so a setup without them cannot serve it.
+      const namedAsAdapter = adapterNames(this.cfg).has(name);
+      if (namedAsAdapter && (typeof hooks.adapt?.request !== "function" || typeof hooks.adapt.response !== "function")) {
+        throw new Error("it is named as an adapter (a line's `adapt:`) but its setup returns no adapt with request and response");
+      }
       l.hooks = hooks;
       l.state = "running";
       l.error = null;
       this.startMcp(l);
       const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
       this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
-      if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+      // An adapter runs where a line that names it does, so it is not a plugin that runs nowhere.
+      if (decl.use !== null && !decl.everyLine && !namedAsAdapter && !placements(this.cfg).some((x) => x.plugin.name === name)) {
         this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
       }
     } catch (e) {
@@ -499,6 +548,69 @@ export class Plugins {
   /** The plugin that answers `/plugins/<name>/*` when this one cannot; null when it has none. */
   fallbackOf(name: string): PluginDecl["fallback"] {
     return this.loaded.find((x) => x.name === name)?.decl.fallback ?? null;
+  }
+
+  /**
+   * The adapter a running plugin exposes to a line that names it with `adapt:`; null when there is
+   * none, or it did not start. Both sides are held to the adapter plugin's `timeoutMs`, as every
+   * hook is: one that never settles does not hold the caller open.
+   */
+  adapterOf(name: string): LineAdapter | null {
+    const l = this.loaded.find((x) => x.name === name);
+    const a = l?.state === "running" ? l.hooks.adapt : undefined;
+    if (!l || !a) return null;
+    const ms = l.decl.timeoutMs;
+    return {
+      name,
+      request: (req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.request(req)).then((v) => requestOf(v, `adapter ${name} request()`)), ms, `adapter ${name}`),
+      response: (res: AdapterAnswer, req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.response(res, req)).then((v) => answerOf(v, `adapter ${name} response()`)), ms, `adapter ${name}`),
+    };
+  }
+
+  /** Is there a plugin of this name at all, running or not? */
+  knows(name: string): boolean {
+    return this.loaded.some((l) => l.name === name);
+  }
+
+  /** Why this plugin cannot serve as an adapter, in a sentence, or null when it can. */
+  adapterProblem(name: string): string | null {
+    const l = this.loaded.find((x) => x.name === name);
+    if (!l) return `no plugin named ${name}`;
+    if (l.state !== "running") return `${name} is ${l.state === "off" ? "off: hearth started with --no-plugins" : `not running: ${l.error ?? "unknown"}`}`;
+    const a = l.hooks.adapt;
+    if (!a || typeof a.request !== "function" || typeof a.response !== "function") return `${name} is not an adapter: its setup returns no adapt with request and response`;
+    return null;
+  }
+
+  /** Remember how a call through an adapter went: the console lights its block from it, and reddens it on a failure. */
+  adapterCalled(name: string, call: Omit<AdapterCall, "t">): void {
+    this.adapterCalls.set(name, { t: Date.now(), ...call });
+  }
+
+  /**
+   * Every plugin that is an adapter, or that a line names as one: its file, its deadline, its code
+   * split into the two sides a line runs, and the last call through it. The console draws each as a
+   * block; a plugin that failed to start is here too, so the map can say why a line cannot work.
+   */
+  adapterPlugins(): AdapterInfo[] {
+    const named = adapterNames(this.cfg);
+    return this.loaded
+      .filter((l) => {
+        const a = l.hooks.adapt;
+        return named.has(l.name) || (typeof a?.request === "function" && typeof a.response === "function");
+      })
+      .map((l) => {
+        const last = this.adapterCalls.get(l.name);
+        return {
+          name: l.name,
+          use: l.decl.run ? runLine(l.decl.run) : shownUse(l.decl.use ?? l.decl.serves ?? ""),
+          timeoutMs: l.decl.timeoutMs,
+          state: l.state,
+          error: l.error,
+          source: l.source,
+          ...(last !== undefined ? { last } : {}),
+        };
+      });
   }
 
   /**
@@ -684,17 +796,16 @@ export class Plugins {
     }));
   }
 
-  private async loadCode(name: string, decl: PluginDecl, use: string, internal: PluginContext["internal"]): Promise<{ declared: Declared; needs: Needs; hooks: Hooks }> {
-    let url: string;
+  private async loadCode(name: string, decl: PluginDecl, use: string, internal: PluginContext["internal"]): Promise<{ declared: Declared; needs: Needs; hooks: Hooks; path: string }> {
+    let path: string;
     if (use.startsWith("file:")) {
       const rel = use.slice(5);
       const base = this.cfg.configPath ? dirname(this.cfg.configPath) : process.cwd();
-      const path = isAbsolute(rel) ? rel : resolvePath(base, rel);
+      path = isAbsolute(rel) ? rel : resolvePath(base, rel);
       if (decl.integrity !== null) {
         const got = "sha256-" + createHash("sha256").update(readFileSync(path)).digest("hex");
         if (got !== decl.integrity) throw new Error(`${path} is not the file its integrity names (it hashes to ${got})`);
       }
-      url = pathToFileURL(path).href;
     } else {
       // npm:<package>@<version>: installed beside hearth by the operator, and held to that exact version.
       const spec = use.slice(4);
@@ -704,9 +815,9 @@ export class Plugins {
       const manifest = req.resolve(`${pkg}/package.json`);
       const have = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version;
       if (have !== want) throw new Error(`${pkg} is installed at ${have ?? "no version"}, and the config pins ${want}`);
-      url = pathToFileURL(req.resolve(pkg)).href;
+      path = req.resolve(pkg);
     }
-    const mod = (await import(url)) as { default?: PluginModule };
+    const mod = (await import(pathToFileURL(path).href)) as { default?: PluginModule };
     const m = mod.default;
     if (!m || m.apiVersion !== 1 || typeof m.setup !== "function") throw new Error("its default export is not a plugin: it needs apiVersion 1 and a setup function");
     const declared = validDeclared(m.kinds);
@@ -714,7 +825,7 @@ export class Plugins {
     const needs = validNeeds(m.needs);
     if (!needs) throw new Error("its needs name a kind of model hearth does not know");
     const hooks = await withTimeout(Promise.resolve(m.setup({ name, config: decl.config, log: this.log, internal })), 10_000, `plugin ${name} setup`);
-    return { declared, needs, hooks };
+    return { declared, needs, hooks, path };
   }
 
   /** What a service says it handles, read the way startup reads it; for the console, before it is added. */

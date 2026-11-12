@@ -402,29 +402,84 @@ plugins:
 
 `fallback` names another plugin that answers when this one cannot, as a backend route's `fallback` does for a
 model. The fallback serves the same API and is sent the same request: the same method, path, query and body.
-It is set on the plugin, and the caller's router is asked about it as about the plugin itself (below).
+For a fallback that speaks a different API, configure it with `adapt` to name an adapter plugin that
+translates between APIs, or place the fallback on the next flow line with `adapt:` in front of it
+([Adapters on a line](routing.md#adapters-on-a-line)).
+
+The config shape is:
 
 ```yaml
 plugins:
   crawler:
     serves: http://crawler:8080
     trust: http
-    fallback: crawler-2                  # or { plugin: crawler-2 }
+    fallback: crawler-2                  # same API: the same request, one hop
   crawler-2:
     serves: http://crawler-2:8080
     trust: http
+  search:
+    serves: http://search:8080
+    trust: http
+    fallback: { plugin: other-search, adapt: search-to-other }   # a different API, through an adapter
+  other-search:
+    serves: http://other-search:4444
+    trust: http
+  search-to-other:
+    use: file:./adapters/search-to-other.mjs
+    trust: code
 ```
 
-- **It is asked when the plugin cannot answer**: it cannot be reached (within 3 seconds) or does not start answering in time, it
-  answers 5xx or 429, or it is paused or did not start. A 4xx is the plugin's answer and is passed on. A
-  plugin that has begun answering is not replaced partway.
-- **One hop.** The fallback answers with its own API; its own `fallback` is not followed.
+- The bare-string shorthand `fallback: degoog` still works and means the same as `{ plugin: degoog }`.
+- `adapt` is optional. With it the fallback may speak a different API; without it the fallback is sent
+  the same request, exactly as before.
+- `adapt` must name a `trust: code` adapter plugin loaded from a `file:` or `npm:` use (the same rule
+  a flow line's `adapt:` follows). A service (`trust: http`), an MCP server, an unknown name or a name
+  that is not a `trust: code` file/package plugin is refused when the file loads.
+- The fallback is one hop: the fallback plugin's own `fallback` is not followed.
+- The fallback plugin must still serve an API other than MCP (unchanged).
 - **The caller's router decides about the fallback too.** It is asked about the fallback as about any plugin
-  ([Plugins on the router](routing.md#plugins-on-the-router)); a caller it would not send to the fallback gets the
-  plugin's own failure (502), so a fallback is never a way past a refusal.
+  ([Plugins on the router](routing.md#plugins-on-the-router)); a caller it would not send to the fallback
+  gets the plugin's own failure (502), so a fallback is never a way past a refusal.
 - Only a plugin that serves an API other than MCP has a fallback, and only such a plugin is one.
 - The log says `plugin.fallback` with why; the Routing map draws "↳ falls back to" on the plugin's box, and
   the Plugins page sets it.
+
+#### What the adapter does on each side
+
+With `adapt` on a plugin's fallback:
+
+- **The adapter's `request()` builds the request the fallback is sent.** `null` from `request()` means
+  there is no counterpart on the fallback's API, and the caller gets the plugin's own failure (the fallback
+  is not tried).
+- **The adapter's `response()` reshapes a 2xx answer.** A throw from it is a 502 naming the adapter, and
+  a non-2xx answer passes through untouched.
+- **Each side is held to the adapter plugin's `timeoutMs`; the caller's credentials are never handed
+  to the adapter.**
+- **The adapter's last call is recorded** (so the console lights the block).
+
+The adapter's contract and failure rules are under [Adapter plugins](#adapter-plugins) below.
+
+### Adapter plugins
+
+An adapter reshapes what a routing line's plugin is sent, and the answer it gives back. It is a
+`trust: code` plugin whose `setup` returns `{ adapt: { request, response } }` and whose `kinds` is
+`{}`: it hooks no stage of its own, and a step names it with `adapt:`.
+
+```yaml
+plugins:
+  searxng: { serves: http://searxng:8080, trust: http }
+  degoog: { serves: http://degoog:4444, trust: http }
+  searxng-to-degoog: { use: file:./adapters/searxng-to-degoog.mjs, trust: code }
+```
+
+It is loaded with the same opt-in, `integrity` and `file:` / `npm:` rules as any code plugin; a
+plugin a line names as its adapter whose `setup` returns no `adapt` fails to start; and because it
+is never placed on a line of its own, it is not warned about as a plugin that runs nowhere.
+Adapters can sit on a flow line (see [Adapters on a line](routing.md#adapters-on-a-line)) or on a plugin's
+fallback (see [A fallback](#a-fallback)).
+
+[Adapters on a line](routing.md#adapters-on-a-line) has the contract and the failure rules. An
+example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
 
 ## A plugin that speaks MCP
 
