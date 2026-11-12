@@ -402,6 +402,8 @@ plugins:
 
 `fallback` names another plugin that answers when this one cannot, as a backend route's `fallback` does for a
 model. The fallback serves the same API and is sent the same request: the same method, path, query and body.
+For a fallback that speaks a different API, put it on the next line of the flow with an adapter in front of it
+([Adapters on a line](routing.md#adapters-on-a-line)).
 It is set on the plugin, and the caller's router is asked about it as about the plugin itself (below).
 
 ```yaml
@@ -417,7 +419,8 @@ plugins:
 
 - **It is asked when the plugin cannot answer**: it cannot be reached (within 3 seconds) or does not start answering in time, it
   answers 5xx or 429, or it is paused or did not start. A 4xx is the plugin's answer and is passed on. A
-  plugin that has begun answering is not replaced partway.
+  plugin that has begun answering is not replaced partway. When it has no `fallback`, a failure hands the
+  request to the next line of the flow instead, unless the caller's router is `strict`.
 - **One hop.** The fallback answers with its own API; its own `fallback` is not followed.
 - **The caller's router decides about the fallback too.** It is asked about the fallback as about any plugin
   ([Plugins on the router](routing.md#plugins-on-the-router)); a caller it would not send to the fallback gets the
@@ -425,6 +428,26 @@ plugins:
 - Only a plugin that serves an API other than MCP has a fallback, and only such a plugin is one.
 - The log says `plugin.fallback` with why; the Routing map draws "↳ falls back to" on the plugin's box, and
   the Plugins page sets it.
+
+### Adapter plugins
+
+An adapter reshapes what a routing line's plugin is sent, and the answer it gives back. It is a
+`trust: code` plugin whose `setup` returns `{ adapt: { request, response } }` and whose `kinds` is
+`{}`: it hooks no stage of its own, and a step names it with `adapt:`.
+
+```yaml
+plugins:
+  searxng: { serves: http://searxng:8080, trust: http }
+  degoog: { serves: http://degoog:4444, trust: http }
+  searxng-to-degoog: { use: file:./adapters/searxng-to-degoog.mjs, trust: code }
+```
+
+It is loaded with the same opt-in, `integrity` and `file:` / `npm:` rules as any code plugin; a
+plugin a line names as its adapter whose `setup` returns no `adapt` fails to start; and because it
+is never placed on a line of its own, it is not warned about as a plugin that runs nowhere.
+
+[Adapters on a line](routing.md#adapters-on-a-line) has the contract and the failure rules. An
+example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
 
 ## A plugin that speaks MCP
 

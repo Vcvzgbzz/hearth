@@ -47,7 +47,15 @@ export function peerLanding(doc: Doc, peer: string): End | null {
 /** Somewhere a request can run: a model here, or a peer's copy of one (null: the id asked for). */
 export type End = { kind: "model"; model: string } | { kind: "peer"; peer: string; model: string | null };
 /** A step's `to`, read the same way whether it came from the file or from the running node. */
-export type To = End | { kind: "flow"; flow: string } | { kind: "fastest"; of: End[] } | { kind: "refuse"; why: string } | { kind: "asked" } | { kind: "plugin"; plugin: string } | { kind: "unset" };
+export type To =
+  | End
+  | { kind: "flow"; flow: string }
+  | { kind: "fastest"; of: End[] }
+  | { kind: "refuse"; why: string }
+  /** `adapt` is the adapter the line hands the request to, kept as it is until the map edits it. */
+  | { kind: "asked"; adapt?: string }
+  | { kind: "plugin"; plugin: string; adapt?: string }
+  | { kind: "unset" };
 
 /** The input that stands for every name no other flow takes. */
 export const ANY = "*";
@@ -56,8 +64,9 @@ export function toOf(raw: unknown): To {
   if (typeof raw === "string") return raw === "" ? { kind: "unset" } : { kind: "model", model: raw };
   const o = obj(raw);
   if (typeof o.refuse === "string") return { kind: "refuse", why: o.refuse };
-  if (o.asked === true) return { kind: "asked" };
-  if (typeof o.plugin === "string") return { kind: "plugin", plugin: o.plugin };
+  const adapt = typeof o.adapt === "string" ? o.adapt : undefined;
+  if (o.asked === true) return { kind: "asked", ...(adapt !== undefined ? { adapt } : {}) };
+  if (typeof o.plugin === "string") return { kind: "plugin", plugin: o.plugin, ...(adapt !== undefined ? { adapt } : {}) };
   if (typeof o.flow === "string") return { kind: "flow", flow: o.flow };
   if (Array.isArray(o.fastest)) return { kind: "fastest", of: o.fastest.map(toOf).filter((e): e is End => e.kind === "model" || e.kind === "peer") };
   if (typeof o.peer === "string") return { kind: "peer", peer: o.peer, model: text(o.model) || null };
@@ -72,8 +81,8 @@ export function rawTo(to: To): unknown {
     case "flow": return { flow: to.flow };
     case "fastest": return { fastest: to.of.map(rawTo) };
     case "refuse": return { refuse: to.why };
-    case "asked": return { asked: true };
-    case "plugin": return { plugin: to.plugin };
+    case "asked": return { asked: true, ...(to.adapt !== undefined ? { adapt: to.adapt } : {}) };
+    case "plugin": return { plugin: to.plugin, ...(to.adapt !== undefined ? { adapt: to.adapt } : {}) };
     default: return "";
   }
 }

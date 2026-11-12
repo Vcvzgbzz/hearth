@@ -72,9 +72,16 @@ export type FlowEnd = { model: string } | { peer: string; model: string | null }
 
 /**
  * Where a step sends a request: to run, into another flow, to whichever of several would start
- * it soonest, nowhere, or here as the very id that was asked for.
+ * it soonest, nowhere, here as the very id that was asked for, or to a plugin (with an adapter in
+ * front of it when the two APIs differ).
  */
-export type FlowTo = FlowEnd | { flow: string } | { fastest: FlowEnd[] } | { refuse: string } | { asked: true } | { plugin: string };
+export type FlowTo =
+  | FlowEnd
+  | { flow: string }
+  | { fastest: FlowEnd[] }
+  | { refuse: string }
+  | { asked: true; adapt?: string }
+  | { plugin: string; adapt?: string };
 
 /** The input that stands for every name no other flow takes: the flow that has it decides what happens to those. */
 export const ANY = "*";
@@ -125,21 +132,48 @@ const WHEN_KEYS = ["images", "tools", "tokensOver", "tokensUnder", "variant", "p
 
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, or a refusal. */
-function flowTo(raw: unknown, at: string): FlowTo {
+type PluginDecls = Readonly<Record<string, PluginDecl>>;
+
+/**
+ * An adapter a target names: a `trust: code` plugin whose `setup` hands back an `adapt`, loaded from
+ * a file or a package the operator named. A service, or an MCP server hearth starts, has no `setup`
+ * to return one from, so it is refused here rather than at the first request.
+ */
+function adaptOf(raw: unknown, at: string, plugins: PluginDecls): string | undefined {
+  if (raw === undefined) return undefined;
+  const name = str(raw, at);
+  const p = plugins[name];
+  if (p === undefined) throw bad(at, `names ${name}, which is not a plugin under plugins:`);
+  if (p.trust !== "code" || p.use === null || !/^(file|npm):/.test(p.use)) {
+    throw bad(at, `names ${name}, which is not a trust: code plugin with a file: or npm: use`);
+  }
+  return name;
+}
+
+/** A step's `to`: a bare id runs it here; a map says a peer, another flow, the fastest of several, a refusal, or a plugin (with an adapter on the way). */
+function flowTo(raw: unknown, at: string, plugins: PluginDecls = {}): FlowTo {
   if (typeof raw === "string" && raw.trim() !== "") return { model: raw.trim() };
   const o = asRecord(raw, at);
-  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked", "plugin"], at);
+  only(o, ["model", "peer", "flow", "fastest", "refuse", "asked", "plugin", "adapt"], at);
   const said = ["peer", "flow", "fastest", "refuse", "asked", "plugin"].filter((k) => o[k] !== undefined);
   if (said.length > 1 || (said.length === 1 && said[0] !== "peer" && o.model !== undefined)) {
     throw bad(at, "must say one thing: a model, a peer, a flow, fastest, refuse, asked or a plugin");
   }
+  // An adapter reshapes what a plugin is sent and what it answers, so it sits on a plugin target
+  // and nowhere else: a model's answer is a stream, and a peer's is another node's to shape.
+  if (o.adapt !== undefined && o.plugin === undefined && o.asked === undefined) {
+    throw bad(`${at}.adapt`, "sits on a line that sends to a plugin: give the step a `plugin` target, or `asked: true` for the plugin a request asks for");
+  }
   if (o.asked !== undefined) {
     if (o.asked !== true) throw bad(`${at}.asked`, "must be true: run it here as the id that was asked for");
-    return { asked: true };
+    const adapt = adaptOf(o.adapt, `${at}.adapt`, plugins);
+    return { asked: true, ...(adapt !== undefined ? { adapt } : {}) };
   }
   if (o.refuse !== undefined) return { refuse: str(o.refuse, `${at}.refuse`) };
-  if (o.plugin !== undefined) return { plugin: str(o.plugin, `${at}.plugin`) };
+  if (o.plugin !== undefined) {
+    const adapt = adaptOf(o.adapt, `${at}.adapt`, plugins);
+    return { plugin: str(o.plugin, `${at}.plugin`), ...(adapt !== undefined ? { adapt } : {}) };
+  }
   if (o.flow !== undefined) return { flow: str(o.flow, `${at}.flow`) };
   if (o.fastest !== undefined) {
     if (!Array.isArray(o.fastest) || o.fastest.length < 2) throw bad(`${at}.fastest`, "must list at least two places to choose between");
@@ -297,7 +331,7 @@ export function flowDecls(
       const step = asRecord(r, here);
       only(step, ["when", "to", "lane", "params", "do", "max", "plugins"], here);
       if (step.to === undefined) throw bad(`${here}.to`, "is required");
-      const to = flowTo(step.to, `${here}.to`);
+      const to = flowTo(step.to, `${here}.to`, plugins);
       let when: FlowWhen | null = null;
       if (step.when !== undefined && step.when !== null) {
         const w = asRecord(step.when, `${here}.when`);

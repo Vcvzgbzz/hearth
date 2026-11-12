@@ -50,7 +50,7 @@ export interface PluginDecl {
   key: string | null;
   /** For a service: headers sent on every call beside (or instead of) its key, such as an API that reads its key from `X-Api-Key`. Values may be `env:NAME`. */
   headers: Record<string, string>;
-  /** Another plugin that answers `/plugins/<name>/*` when this one cannot; it serves the same API and is sent the same request. */
+  /** Another plugin that answers `/plugins/<name>/*` when this one cannot, with the same request: one hop, same API. */
   fallback: { plugin: string } | null;
   /** Narrows what the plugin itself declares; absent hooks all of it. */
   kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
@@ -178,6 +178,7 @@ export function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     let fallback: PluginDecl["fallback"] = null;
     if (r.fallback !== undefined) {
       const f = typeof r.fallback === "string" ? { plugin: r.fallback } : asRecord(r.fallback, `${at}.fallback`);
+      if (f.adapt !== undefined) throw bad(`${at}.fallback.adapt`, "was removed before it shipped: an adapter is a flow line's `adapt:` now, on a second line — see docs/routing.md");
       if (typeof r.fallback !== "string") only(f, ["plugin"], `${at}.fallback`);
       if (serves === null || mcp !== null) throw bad(`${at}.fallback`, "is for a plugin that serves an API other than MCP");
       fallback = { plugin: str(f.plugin, `${at}.fallback.plugin`) };
