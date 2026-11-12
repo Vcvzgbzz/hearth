@@ -313,6 +313,7 @@ export const HUE: Record<string, { dot: string; stroke: string; says: string }> 
   action: { dot: "!bg-warn", stroke: "var(--warn)", says: "an action" },
   mcp: { dot: "!bg-mcp", stroke: "var(--mcp)", says: "a plugin that is an MCP server" },
   api: { dot: "!bg-api", stroke: "var(--api)", says: "a plugin that serves an API" },
+  adapt: { dot: "!bg-adapt", stroke: "var(--adapt)", says: "an adapter between two plugins" },
   unset: { dot: "!bg-dim", stroke: "var(--dim)", says: "nowhere yet" },
 };
 const hue = (kind: string) => HUE[kind] ?? HUE.unset!;
@@ -740,7 +741,7 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
         <div key={`${l.flow}:${l.step}`} className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim">
           <span className="shrink-0 rounded border border-line px-1 uppercase">{l.label}</span>
           <span className="min-w-0 flex-1 truncate" title={`${l.flow} line ${l.step + 1} hands this plugin's request to an adapter`}>to an adapter</span>
-          <Handle type="source" id={`to:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-api", "!opacity-100")} style={{ right: -6, top: "50%" }} />
+          <Handle type="source" id={`to:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-adapt", "!opacity-100")} style={{ right: -6, top: "50%" }} />
         </div>
       ))}
       {(data.adaptIn ?? []).map((l) => (
@@ -755,7 +756,7 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
         <div className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim" title="put an adapter in front of a line that sends here">
           <span className="shrink-0 rounded border border-dashed border-line px-1 uppercase">adapt</span>
           <span className="min-w-0 flex-1 truncate">in front of a line</span>
-          <Handle type="source" id="adapt" position={Position.Right} className={cx(PORT, "!bg-dim")} style={{ right: -6, top: "50%" }} />
+          <Handle type="source" id="adapt" position={Position.Right} className={cx(PORT, "!bg-adapt", "!opacity-100")} style={{ right: -6, top: "50%" }} />
         </div>
       )}
       {data.fallback && (
@@ -844,7 +845,7 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
   // Lit by traffic that has just gone through it, or by a request tried or replayed down its line.
   const lit = data.on === true || (calledAt !== undefined && Date.now() - calledAt < ADAPTER_LIT_MS);
   const split = data.request !== null && data.request !== undefined && data.response !== null && data.response !== undefined;
-  const dot = cx(failed ? "!bg-bad" : lit ? "!bg-accent" : "!bg-api", "!opacity-100");
+  const dot = cx(failed ? "!bg-bad" : lit ? "!bg-accent" : "!bg-adapt", "!opacity-100");
   const said = failed ? `${data.last!.side}() failed: ${data.last!.error ?? "no message"}` : "an adapter: it reshapes what the plugin is sent, and the answer it gives — click for its code, the lines that use it, and try it";
   const areas: { side: "request" | "response"; label: string; text: string; says: string }[] = split
     ? [{ side: "request", label: "IN", text: data.request ?? "", says: "the request, as the plugin is about to be sent it" },
@@ -852,7 +853,7 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
     : [{ side: "request", label: "IN", text: data.whole ?? "", says: "the whole module: its two sides could not be told apart" },
        { side: "response", label: "OUT", text: "", says: "not shown apart" }];
   return (
-    <div className={cx("rounded-xl border bg-panel shadow-sm", failed ? "border-bad" : lit ? "border-accent bg-accent/10" : "border-line")} title={said}
+    <div className={cx("rounded-xl border bg-panel shadow-sm", failed ? "border-bad" : lit ? "border-accent bg-accent/10" : "border-adapt/70")} title={said}
          style={{ width: ADAPTER.width }}>
       <Handle type="target" position={Position.Left} className={cx(PORT, dot)} style={{ left: -7, top: ADAPTER_IN_Y }} />
       <div className="flex items-center gap-1.5 border-b border-line px-2" style={{ height: ADAPTER.head }}>

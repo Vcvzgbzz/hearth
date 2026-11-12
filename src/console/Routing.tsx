@@ -160,7 +160,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }),
         ...(adapted.length
           ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
-          : lines.length ? { adaptAny: true } : {}),
+          : {}),
+        // Every plugin a line sends to keeps a dot to put an adapter in front of one of its lines.
+        ...(lines.length ? { adaptAny: true } : {}),
       } satisfies Dest,
     });
     y += 56;
@@ -372,14 +374,14 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     if (a.plugin === null) continue;
     // The request comes from the dot on the plugin the line falls back from, and goes on, translated,
     // to the plugin the line sends to.
-    const hue = pluginHue(d.plugins, a.plugin);
+    const hue = "adapt";
     edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.from ?? a.plugin}`, sourceHandle: `to:${a.flow}:${a.step}`, target: box });
     if (a.from === null || a.from === a.plugin) continue;
     const to = `adaptTo:${a.flow}:${a.step}:${a.plugin}`;
     const p = servingKind(a.plugin);
     nodes.push({
       id: to, type: "dest", position: placed(to) ?? { x: adaptToX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),
-      data: { title: a.plugin, kind: hue, on, down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${a.plugin}/ · from the adapter` } satisfies Dest,
+      data: { title: a.plugin, kind: pluginHue(d.plugins, a.plugin), on, down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${a.plugin}/ · from the adapter` } satisfies Dest,
     });
     edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: to });
   }
