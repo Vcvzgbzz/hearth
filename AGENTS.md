@@ -18,16 +18,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   (`login.ts`), and the sliding-window rate limit (`window.ts`)
 - `src/routing/`: where a request goes: `route.ts` decides, from the live state in `world.ts`;
   `actions.ts` is what a step can set off; `stats.ts` is what a model can take against what a
-  request needs; `reach.ts` is who can reach what, for the console; `adapters.ts` is the adapters a
-  line's `adapt:` names, compiled once and recompiled when a name's code changes
-- `src/routing/adapter/`: the interpreter that code runs in. `lex.ts` turns source into tokens;
-  `parse.ts` turns tokens into a module, and refuses every construct the language does not have;
-  `ast.ts` is the node shapes, each with its line and column; `values.ts` is the value model, the
-  property-name guard and freezing; `machine.ts` is the budgets (`LIMITS`, `LOAD_MS`) and the JSON
-  boundary; `run-expr.ts` evaluates expressions, `run-stmt.ts` statements and control flow, and
-  `run-call.ts` every call, so the depth cap and step counter hold for callbacks too; `builtins.ts`
-  is the whitelist and the string and array methods; `errors.ts` is what a run throws; `index.ts` is
-  `compile`/`call` and the message a failure is reported with
+  request needs; `reach.ts` is who can reach what, for the console; `adapters.ts` is the adapter
+  contract a `trust: code` plugin's `setup` returns and a line's `adapt:` names
 - `src/queue/`: when it runs: `scheduler.ts` (admission per backend), `pool.ts` (the backends
   and their queues, and what they can take), `models.ts` (which backend serves a model, and what it is
   called on each side), `hardware.ts` (backends taking turns on shared hardware: evictions, residents, holds), `resources.ts` (whose turn each resource is), `backend.ts` (one backend's state),
@@ -42,7 +34,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   answer cache (`answers.ts`)
 - `src/config/`: `config.ts` (`HearthConfig`, `parseConfig`, `loadConfig`), and beside it one
   file per section, each with its types and the code that reads them (`backends.ts`, `flows.ts`,
-  `models.ts`, `plugins.ts`, `adapters.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`; `read.ts` is the field readers
+  `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`; `read.ts` is the field readers
   and `ConfigError` they share); `fields.ts` (the settings table the parser and the console both read),
   `configfile.ts` (live edits to hearth.yaml), `derived.ts` (a value derived from the live config, rebuilt when
   a key it reads is replaced), `migrate.ts`, `yamlq.ts`
@@ -78,7 +70,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   page is `Usage.tsx`, and its sums are `tally.ts`; the Playground page is
   `Playground.tsx`, and its stream parser, code-fence split and facts line are `chat.ts`
 - `examples/`: files people copy into their own setup, not loaded by hearth itself;
-  `examples/adapters/` holds adapter code as example `adapters.<name>.code:` contents
+  `examples/adapters/` holds an example adapter plugin, for a fallback between two APIs
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

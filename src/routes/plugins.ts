@@ -21,7 +21,7 @@ import type { Call, RouteContext } from "./context.js";
  */
 const PLUGIN_CONNECT_MS = 3_000;
 
-/** Media types whose body an adapter may see as text; anything else is bytes, and stays out of the sandbox. */
+/** Media types whose body an adapter may see as text; anything else is bytes, and is left as it was. */
 const TEXT_TYPES = /^(text\/|application\/(json|xml|x-www-form-urlencoded)|[^/;]+\/[^;]*\+(json|xml))/i;
 
 /** Is this a body an adapter can be given as UTF-8? A request with no content type is read as text. */
@@ -31,7 +31,7 @@ function isText(contentType: string | null): boolean {
 }
 
 export function pluginRoutes(ctx: RouteContext) {
-  const { cfg, log, plugins, adapters, callers, worlds, readJson, readBody } = ctx;
+  const { cfg, log, plugins, callers, worlds, readJson, readBody } = ctx;
 
   /** GET: every plugin's state and numbers. POST `{name, paused}`: pause or resume one until the next restart. */
   async function routePlugins(c: Call): Promise<void> {
@@ -137,10 +137,11 @@ export function pluginRoutes(ctx: RouteContext) {
       /** What one attempt at a target is sent. */
       type Outgoing = { method: string; path: string; search: string; body: Buffer | undefined; type: string | null };
       const t0 = Date.now();
-      const adapter = adaptName === undefined ? null : adapters.get(adaptName);
+      // An adapter is a trust: code plugin a line names: it runs where that line sends the request.
+      const adapter = adaptName === undefined ? null : plugins.adapterOf(adaptName);
       if (adaptName !== undefined && adapter === null) {
         log.warn("flow.adapter_missing", { adapter: adaptName, plugin: name, caller: c.caller });
-        return { failed: `adapter ${adaptName} is not under adapters:` };
+        return { failed: `adapter ${adaptName} is not running` };
       }
 
       /** Is there nothing left that could take this request? Then the line's own failure is the caller's answer. */
@@ -158,7 +159,7 @@ export function pluginRoutes(ctx: RouteContext) {
           log.info("plugin.fallback_refused", { plugin: name, to: fb.plugin, why, caller: c.caller });
           return { failed: `${why}, and its fallback ${fb.plugin} is not open to this caller` };
         }
-        const alt = plugins.serve(fb.plugin);
+        const alt = plugins.serve(fb.plugin, c.caller);
         if ("why" in alt || "stdio" in alt) {
           if ("done" in alt) alt.done(false);
           return { failed: `${why}, and neither could its fallback ${fb.plugin}${"why" in alt ? `: ${alt.why}` : ""}` };
@@ -182,7 +183,7 @@ export function pluginRoutes(ctx: RouteContext) {
       }
 
       // The target first: a plugin that cannot answer at all is the line failing, and its adapter is never run.
-      const to = plugins.serve(name);
+      const to = plugins.serve(name, c.caller);
       // With nowhere else to go, the plugin's own status and words are the answer: paused is 503, unknown 404.
       if ("why" in to) return nothingElse() ? { answer: to.status, error: to.why } : fallback(to.why, { method: original.method, path, search: url.search, body, type: contentType });
       const done = to.done;

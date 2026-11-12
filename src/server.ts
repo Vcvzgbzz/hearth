@@ -21,7 +21,6 @@ import { apiError, bearer, fail, json, readBody, readJson, refuse, type Envelope
 import { Limits } from "./access/limits.js";
 import { LogRing, type Logger } from "./observe/log.js";
 import { PeerRegistry } from "./peers/peers.js";
-import { Adapters } from "./routing/adapters.js";
 import { Plugins } from "./plugins/plugins.js";
 import { BackendPool } from "./queue/pool.js";
 import { RequestLog } from "./observe/requestlog.js";
@@ -131,11 +130,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
   /** Responses that are open but are not work — the event stream. */
   const parked = new WeakSet<ServerResponse>();
 
-  // The adapters the live config names, compiled on first use and dropped when their code changes.
-  const adapters = new Adapters(() => cfg);
-
   const ctx: RouteContext = {
-    cfg, log, logs, pool, peers, plugins, adapters, controls, config, canary, usage, borrowed, history,
+    cfg, log, logs, pool, peers, plugins, controls, config, canary, usage, borrowed, history,
     answers: new Answers(),
     callers, limits, worlds, requests,
     whois: tailscaleWhois(cfg.tailscaleSocket),
@@ -510,7 +506,6 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     },
     close: async (graceMs = 0) => {
       canary?.stop();
-      adapters.close();
       void plugins.stop();
       if (historyTimer) clearInterval(historyTimer);
       clearInterval(sessionSweep);

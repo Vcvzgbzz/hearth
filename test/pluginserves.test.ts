@@ -109,6 +109,7 @@ try {
   // A request just served stays in `live` long enough for the map to draw it, then is let go.
   const live = () => node.plugins.status().find((p) => p.name === "crawl")!.live;
   assert.equal(live().length, 1, "the map sees even a quick request");
+  assert.equal(live()[0]!.caller, "key:app", "with who asked, so its dot runs from that caller (the forged header does not count)");
   await new Promise((r) => setTimeout(r, 1_700));
   assert.deepEqual(live(), [], "and it is gone once it has been seen");
 

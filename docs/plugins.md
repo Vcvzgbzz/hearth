@@ -429,35 +429,25 @@ plugins:
 - The log says `plugin.fallback` with why; the Routing map draws "↳ falls back to" on the plugin's box, and
   the Plugins page sets it.
 
-### An adapter between two APIs
+### Adapter plugins
 
-An adapter is not a plugin: it is code on a route's line, named under the top-level `adapters:` and
-carried by a plugin target's `adapt:`. Two lines are all a fallback between two APIs needs, and the
-adapter reshapes the request for the plugin it sends to, and that plugin's answer for the caller.
+An adapter reshapes what a routing line's plugin is sent, and the answer it gives back. It is a
+`trust: code` plugin whose `setup` returns `{ adapt: { request, response } }` and whose `kinds` is
+`{}`: it hooks no stage of its own, and a step names it with `adapt:`.
 
 ```yaml
-adapters:
-  searxng-to-degoog:
-    code: |
-      export function request(req) { … }
-      export function response(res, req) { … }
-
-routers:
-  partners:
-    flows:
-      tools:
-        inputs: [API]
-        steps:
-          - when: { variant: [search] }
-            to: { plugin: searxng }
-          - when: { variant: [search] }
-            to: { plugin: degoog, adapt: searxng-to-degoog }
-          - to: { refuse: "only search is open to partners" }
+plugins:
+  searxng: { serves: http://searxng:8080, trust: http }
+  degoog: { serves: http://degoog:4444, trust: http }
+  searxng-to-degoog: { use: file:./adapters/searxng-to-degoog.mjs, trust: code }
 ```
 
-[Adapters on a line](routing.md#adapters-on-a-line) has the contract and the failure rules;
-[The adapter language](adapter-language.md) has the language, its builtins and its limits.
-An example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
+It is loaded with the same opt-in, `integrity` and `file:` / `npm:` rules as any code plugin; a
+plugin a line names as its adapter whose `setup` returns no `adapt` fails to start; and because it
+is never placed on a line of its own, it is not warned about as a plugin that runs nowhere.
+
+[Adapters on a line](routing.md#adapters-on-a-line) has the contract and the failure rules. An
+example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
 
 ## A plugin that speaks MCP
 

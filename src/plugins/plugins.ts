@@ -14,6 +14,7 @@ import type { HearthConfig } from "../config/config.js";
 import { DEFAULT_ROUTER, type Flow } from "../config/flows.js";
 import { PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
 import type { Logger } from "../observe/log.js";
+import { answerOf, type Adapter, type AdapterAnswer, type AdapterRequest, type LineAdapter, requestOf } from "../routing/adapters.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */
@@ -72,13 +73,15 @@ export interface Decision {
   flag?: string;
 }
 
-/** What a code plugin's `setup` returns: one function per stage it hooks. */
+/** What a code plugin's `setup` returns: one function per stage it hooks, or an adapter a line names. */
 export interface Hooks {
   request?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   routed?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   log?: (x: HookExchange) => Promise<void> | void;
   error?: (x: HookExchange) => Promise<void> | void;
   stop?: () => Promise<void> | void;
+  /** For a plugin another flow line names with `adapt:`: it translates that line's request and answer. */
+  adapt?: Adapter;
 }
 
 /** What `setup` is given. */
@@ -131,7 +134,7 @@ export interface PluginStatus {
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
   /** Requests at /plugins/<name>/* in flight, and those that ended within SEEN_MS, by id: what the map draws as dots. */
-  live: string[];
+  live: { id: string; caller: string }[];
   /** For a plugin that speaks MCP: whether its server answers, its name, how many tools it has, and its path under /plugins/<name>. */
   mcp: (McpState & { path: string }) | null;
   /** The program a plugin that runs an MCP server starts, as its command line; never its env. */
@@ -307,8 +310,8 @@ interface Loaded {
   stdio: StdioMcp | null;
   mcp: McpState | null;
   recheck: NodeJS.Timeout | null;
-  /** Requests served: when each ended, or null while it runs. */
-  flying: Map<string, number | null>;
+  /** Requests served: who asked and when each ended, or null while it runs. */
+  flying: Map<string, { caller: string; ended: number | null }>;
 }
 
 /** One plugin as it applies to one request: its hooks, the settings its router gives it, its models and its line. */
@@ -327,6 +330,22 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
   };
   walk(DEFAULT_ROUTER, cfg.flows);
   for (const [name, r] of Object.entries(cfg.routers)) if (name !== DEFAULT_ROUTER) walk(name, r.flows);
+  return out;
+}
+
+/** Every plugin some flow line names with `adapt:`, in the default rules and every router's. */
+export function adapterNames(cfg: HearthConfig): Set<string> {
+  const out = new Set<string>();
+  const walk = (flows: Record<string, Flow>) => {
+    for (const f of Object.values(flows)) {
+      for (const st of f.steps) {
+        const adapt = "adapt" in st.to ? st.to.adapt : undefined;
+        if (adapt !== undefined) out.add(adapt);
+      }
+    }
+  };
+  walk(cfg.flows);
+  for (const r of Object.values(cfg.routers)) walk(r.flows);
   return out;
 }
 
@@ -378,13 +397,19 @@ export class Plugins {
       l.kinds = effectiveKinds(declared, decl.kinds);
       const misplaced = this.misplaced(name, l.kinds, needs);
       if (misplaced) throw new Error(misplaced);
+      // A line that names this plugin with `adapt:` calls both sides, so a setup without them cannot serve it.
+      const namedAsAdapter = adapterNames(this.cfg).has(name);
+      if (namedAsAdapter && (typeof hooks.adapt?.request !== "function" || typeof hooks.adapt.response !== "function")) {
+        throw new Error("it is named as an adapter (a line's `adapt:`) but its setup returns no adapt with request and response");
+      }
       l.hooks = hooks;
       l.state = "running";
       l.error = null;
       this.startMcp(l);
       const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
       this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
-      if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+      // An adapter runs where a line that names it does, so it is not a plugin that runs nowhere.
+      if (decl.use !== null && !decl.everyLine && !namedAsAdapter && !placements(this.cfg).some((x) => x.plugin.name === name)) {
         this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
       }
     } catch (e) {
@@ -502,10 +527,27 @@ export class Plugins {
   }
 
   /**
+   * The adapter a running plugin exposes to a line that names it with `adapt:`; null when there is
+   * none, or it did not start. Both sides are held to the adapter plugin's `timeoutMs`, as every
+   * hook is: one that never settles does not hold the caller open.
+   */
+  adapterOf(name: string): LineAdapter | null {
+    const l = this.loaded.find((x) => x.name === name);
+    const a = l?.state === "running" ? l.hooks.adapt : undefined;
+    if (!l || !a) return null;
+    const ms = l.decl.timeoutMs;
+    return {
+      name,
+      request: (req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.request(req)).then((v) => requestOf(v, `adapter ${name} request()`)), ms, `adapter ${name}`),
+      response: (res: AdapterAnswer, req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.response(res, req)).then((v) => answerOf(v, `adapter ${name} response()`)), ms, `adapter ${name}`),
+    };
+  }
+
+  /**
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.
    */
-  serve(name: string): { url: string; auth: Record<string, string>; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
+  serve(name: string, caller: string): { url: string; auth: Record<string, string>; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
     const l = this.loaded.find((x) => x.name === name);
     if (!l || (l.decl.serves === null && l.stdio === null)) return { status: 404, why: `no plugin named ${name} serves an API here` };
     if (l.state !== "running") return { status: 503, why: `${name} is ${l.state === "off" ? "off" : `not running: ${l.error}`}` };
@@ -514,8 +556,8 @@ export class Plugins {
     // Let go of what has been seen out here too, so the record stays bounded whether or not anyone reads the status.
     this.live(l);
     const id = `${name}:${++this.seq}`;
-    l.flying.set(id, null);
-    const done = (ok: boolean) => { if (!ok) l.served.errors++; l.flying.set(id, Date.now()); };
+    l.flying.set(id, { caller, ended: null });
+    const done = (ok: boolean) => { if (!ok) l.served.errors++; const entry = l.flying.get(id); if (entry) entry.ended = Date.now(); };
     return l.stdio ? { stdio: l.stdio, done } : { url: l.decl.serves!, auth: pluginAuth(l.decl), done };
   }
 
@@ -660,10 +702,10 @@ export class Plugins {
   }
 
   /** The requests still in flight, and those that ended within SEEN_MS, which are let go after it. */
-  private live(l: Loaded): string[] {
+  private live(l: Loaded): { id: string; caller: string }[] {
     const now = Date.now();
-    for (const [id, ended] of l.flying) if (ended !== null && now - ended > SEEN_MS) l.flying.delete(id);
-    return [...l.flying.keys()];
+    for (const [id, entry] of l.flying) if (entry.ended !== null && now - entry.ended > SEEN_MS) l.flying.delete(id);
+    return [...l.flying.entries()].map(([id, entry]) => ({ id, caller: entry.caller }));
   }
 
   status(): PluginStatus[] {

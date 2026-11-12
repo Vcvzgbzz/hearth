@@ -1,17 +1,8 @@
 /**
- * The adapter sandbox: the code a flow line's `adapt:` names, run where it can do nothing but
- * reshape one request or one answer.
- *
- * The engine is hearth's own interpreter (`routing/adapter/`): the code runs in a language with no
- * way to reach the network, the disk, the environment or this process, and every call is held to a
- * deadline and to a memory budget from inside the interpreter's own loop. `Adapters` keeps the
- * compiled modules the live config names, recompiled when a name's code changes, so an edit takes
- * effect without a restart.
+ * The adapter contract: what a `trust: code` plugin's `setup` returns as `adapt`, and the check that
+ * what its `request()` and `response()` hand back is a shape a line can send and answer with. A
+ * routing line names the plugin with `adapt:`; the plugin itself loads like any other code plugin.
  */
-import type { AdapterDecl } from "../config/adapters.js";
-import type { HearthConfig } from "../config/config.js";
-import { type AdapterModule, type Side, call, compile } from "./adapter/index.js";
-import { LIMITS } from "./adapter/machine.js";
 
 /** A request as an adapter sees it: relative to the target plugin's root, and never with the caller's credentials. */
 export interface AdapterRequest {
@@ -30,8 +21,20 @@ export interface AdapterAnswer {
   body: string;
 }
 
-/** The heap one adapter call may use. */
-export const ADAPTER_MEMORY_BYTES = LIMITS.heap;
+/** What a plugin another line names with `adapt:` returns from its `setup`: the two sides of one translation. */
+export interface Adapter {
+  /** The request on the target's API, as only the fields it changes; null when this line has no counterpart for it. */
+  request(req: AdapterRequest): Partial<AdapterRequest> | null | Promise<Partial<AdapterRequest> | null>;
+  /** The target's 2xx answer, reshaped into the shape the caller asked for. */
+  response(res: AdapterAnswer, req: AdapterRequest): Partial<AdapterAnswer> | Promise<Partial<AdapterAnswer>>;
+}
+
+/** An adapter as one line uses it: named, so a failure can name it, and both sides held to its plugin's `timeoutMs`. */
+export interface LineAdapter {
+  readonly name: string;
+  request(req: AdapterRequest): Promise<Partial<AdapterRequest> | null>;
+  response(res: AdapterAnswer, req: AdapterRequest): Promise<Partial<AdapterAnswer>>;
+}
 
 function objectOf(what: unknown, at: string): Record<string, unknown> {
   if (typeof what !== "object" || what === null || Array.isArray(what)) throw new Error(`${at} returned ${what === null ? "null" : typeof what}, not an object`);
@@ -49,7 +52,7 @@ function queryOf(v: unknown, at: string): Record<string, string> {
 }
 
 /** What a `request()` returned, with only the fields it may set. */
-function requestOf(what: unknown, at: string): Partial<AdapterRequest> | null {
+export function requestOf(what: unknown, at: string): Partial<AdapterRequest> | null {
   if (what === null) return null;
   const o = objectOf(what, at);
   const out: Partial<AdapterRequest> = {};
@@ -62,7 +65,7 @@ function requestOf(what: unknown, at: string): Partial<AdapterRequest> | null {
 }
 
 /** What a `response()` returned, with only the fields it may set. */
-function answerOf(what: unknown, at: string): Partial<AdapterAnswer> {
+export function answerOf(what: unknown, at: string): Partial<AdapterAnswer> {
   const o = objectOf(what, at);
   const out: Partial<AdapterAnswer> = {};
   if (o.status !== undefined) {
@@ -73,104 +76,4 @@ function answerOf(what: unknown, at: string): Partial<AdapterAnswer> {
   if (o.contentType !== undefined) out.contentType = maybeText(o.contentType, `${at} contentType`);
   if (o.body !== undefined) out.body = text(o.body, `${at} body`);
   return out;
-}
-
-/** One adapter, as its config names it. Each side is held to `timeoutMs`. */
-export class Adapter {
-  private module: AdapterModule | null = null;
-  /** Calls run one at a time, so one adapter's deadline is its own and not the request's. */
-  private serial: Promise<unknown> = Promise.resolve();
-  /** Calls running now, so a module is not dropped under one. */
-  private busy = 0;
-  private retired = false;
-
-  constructor(
-    readonly name: string,
-    private readonly code: string,
-    readonly timeoutMs: number,
-  ) {}
-
-  /** The request as the target should get it, or null when this line has no counterpart for it. An unexported side passes it through. */
-  async request(req: AdapterRequest): Promise<Partial<AdapterRequest> | null> {
-    const out = await this.run("request", [req]).catch((e: unknown) => {
-      throw this.plain("request", e);
-    });
-    return out === undefined ? {} : requestOf(out, `adapter ${this.name} request()`);
-  }
-
-  /** The target's 2xx answer, reshaped into the shape the caller asked for. An unexported side passes it through. */
-  async response(res: AdapterAnswer, req: AdapterRequest): Promise<Partial<AdapterAnswer>> {
-    const out = await this.run("response", [res, req]).catch((e: unknown) => {
-      throw this.plain("response", e);
-    });
-    return out === undefined ? {} : answerOf(out, `adapter ${this.name} response()`);
-  }
-
-  /**
-   * The interpreter's message without its own `adapter <name> <side>(): ` prefix: the caller of an
-   * adapter already names the adapter and the side in the sentence it reports the failure with.
-   */
-  private plain(side: Side, e: unknown): Error {
-    if (!(e instanceof Error)) return new Error(String(e));
-    const prefix = `adapter ${this.name} ${side}(): `;
-    return e.message.startsWith(prefix) ? new Error(e.message.slice(prefix.length)) : e;
-  }
-
-  /** Let it be dropped: its module goes now when it has no call running, and when the last one ends otherwise. */
-  close(): void {
-    this.retired = true;
-    if (this.busy === 0) this.module = null;
-  }
-
-  private run(side: Side, args: readonly unknown[]): Promise<unknown> {
-    const done = this.serial.then(() => {
-      this.busy += 1;
-      try {
-        const module = this.module ?? (this.module = compile(this.name, this.code));
-        return call(module, side, args, this.timeoutMs);
-      } finally {
-        this.busy -= 1;
-        if (this.retired && this.busy === 0) this.module = null;
-      }
-    });
-    this.serial = done.then(() => undefined, () => undefined);
-    return done;
-  }
-}
-
-/** The adapters the live config names, compiled on first use and dropped when a name's code changes. */
-export class Adapters {
-  private from: Record<string, AdapterDecl> | null = null;
-  private readonly kept = new Map<string, { decl: AdapterDecl; adapter: Adapter }>();
-
-  constructor(private readonly cfg: () => HearthConfig) {}
-
-  /** The adapter `name` names, or null when there is none: the config refuses a line that names a missing one. */
-  get(name: string): Adapter | null {
-    const decls = this.cfg().adapters;
-    if (decls !== this.from) {
-      this.close();
-      this.from = decls;
-    }
-    const decl = decls[name];
-    if (decl === undefined) return null;
-    const held = this.kept.get(name);
-    if (held?.decl === decl) return held.adapter;
-    held?.adapter.close();
-    const adapter = new Adapter(name, decl.code, decl.timeoutMs);
-    this.kept.set(name, { decl, adapter });
-    return adapter;
-  }
-
-  /** Drop every module: what a live edit and a shutdown both need, without pulling a running call's module away. */
-  close(): void {
-    for (const { adapter } of this.kept.values()) adapter.close();
-    this.kept.clear();
-    this.from = null;
-  }
-}
-
-/** Compile `code` as an adapter module, throwing what the compiler says when it would never run. */
-export function checkAdapterCode(name: string, code: string): void {
-  compile(name, code);
 }

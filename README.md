@@ -88,7 +88,6 @@ Each of these is off until you ask for it in `hearth.yaml`.
 | [Endpoints](docs/endpoints.md) | every route besides `/v1/chat/completions`, and what `/healthz` checks |
 | [The console](docs/console.md) | the page at `/ui`, and changing the config from it |
 | [Routing](docs/routing.md) | flows, types and variants, routers per caller, actions |
-| [Adapters](docs/adapter-language.md) | the code on a plugin line: the language it is written in, its builtins and its limits |
 | [Backends](docs/backends.md) | several servers, shared cards, other machines, non-OpenAI paths |
 | [A provider's models](docs/providers.md) | cloud backends, their keys, and Anthropic's API |
 | [Models](docs/models.md) | ids and aliases, per-id defaults, kept answers, warm state, warming |

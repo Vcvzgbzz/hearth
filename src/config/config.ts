@@ -9,7 +9,6 @@ import { activityDecl, BACKEND_FORMATS, type BackendConfig, type BackendFormat, 
 import { type CanaryConfig, canaryDecl } from "./canary.js";
 import { FIELDS, SECTION_KEYS } from "./fields.js";
 import { KIND_SPECS } from "./kinds.js";
-import { type AdapterDecl, adapterDecls } from "./adapters.js";
 import { ANY, callerDecls, type Flow, flowDecls, MOVED_TO_FLOWS, type Router, routerDecls } from "./flows.js";
 import { apiKeyList, type KeyRule, typeNames } from "./keys.js";
 import { CONFIG_VERSION, v1Marker } from "./migrate.js";
@@ -39,8 +38,6 @@ export interface HearthConfig {
   callers: Record<string, string>;
   /** Plugins by name, in the order they run within a stage. */
   plugins: Record<string, PluginDecl>;
-  /** `adapters:`: code that sits on a line and reshapes what goes to its target, and the answer, by name. */
-  adapters: Record<string, AdapterDecl>;
   /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
   modelHeader: boolean;
   /** Ask the npm registry once a day whether a newer hearth is out, for the console to say so. */
@@ -607,9 +604,8 @@ export function parseConfig(raw: unknown): HearthConfig {
   const actions = actionDecls(root.actions);
   // A removed key is refused, not ignored: ignoring it would close the page's port with no word why.
   const plugins = pluginDecls(root.plugins);
-  const adapters = adapterDecls(root.adapters);
   const paths = backends.flatMap((b) => b.routes.map((r) => r.path));
-  const routers = routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, paths, plugins, adapters), plugins);
+  const routers = routerDecls(root.routers, (raw) => flowDecls(raw, lanes, peers, actions, paths, plugins), plugins);
   return {
     name: str(root.name, "name", "hearth"),
     // Set by loadConfig, which is the only caller that knows one.
@@ -619,11 +615,10 @@ export function parseConfig(raw: unknown): HearthConfig {
     layout: layoutDecl(root.layout),
     modelHeader: bool(root.modelHeader, "modelHeader", true),
     updateCheck: bool(root.updateCheck, "updateCheck", true),
-    flows: flowDecls(root.flows, lanes, peers, actions, paths, plugins, adapters),
+    flows: flowDecls(root.flows, lanes, peers, actions, paths, plugins),
     routers,
     callers: callerDecls(root.callers, routers),
     plugins,
-    adapters,
     actions,
     listen: mainListen,
     resources: resourceDecls,

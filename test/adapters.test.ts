@@ -1,22 +1,21 @@
 /**
- * Adapters: named code that sits on a line and reshapes what its plugin target is sent, and the
- * answer, in a sandbox that can reach nothing but the value it is given.
+ * Adapters: a `trust: code` plugin a flow line names with `adapt:`, which reshapes what that
+ * line's plugin is sent, and the answer that plugin gives back.
  *
- *   - config: an unknown adapter name, `adapt` on a model target, a syntax error naming the adapter
- *     and its line, a module exporting neither side, a timeoutMs out of range
- *   - a side a module does not export is passed through unchanged
- *   - null from request() means "no counterpart": the line fails and the next one is tried
- *   - a non-2xx answer is never adapted; a response() that throws is a 502 naming the adapter; one
- *     stuck in a loop is a 502 within timeoutMs
- *   - the sandbox cannot see process, require, fetch or any other host global; an endless loop and
- *     an array that grows without end are both cut off
+ *   - config: an unknown adapter, a plugin that does not run code, `adapt:` beside a model, and
+ *     `fallback.adapt` still refused with a pointer to `adapt:`
+ *   - `null` from request() means "no counterpart": the line fails and the next one is tried
+ *   - a line that answers is not adapted, and its adapter does not run
+ *   - a non-2xx answer is never adapted; a response() that throws is a 502 naming the adapter
+ *   - a hung async adapter is held to its plugin's timeoutMs, on either side
  *   - no credentials reach the adapter, and the target still gets its own headers
+ *   - an adapter plugin whose setup returns no adapt fails to start, and a plugin a line names as
+ *     its adapter is not warned about as one that runs nowhere
  *   - a failed line goes on to the next one, and `strict: true` turns that off
- *   - a live edit to `code` takes effect without a restart
  *   - the searxng-to-degoog example, against two stub servers
  */
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -24,117 +23,36 @@ import { join } from "node:path";
 
 import { loadConfig, parseConfig } from "../src/config/config.js";
 import { ConfigError } from "../src/config/read.js";
-import { silentLogger } from "../src/observe/log.js";
+import { silentLogger, type Logger } from "../src/observe/log.js";
 import { createNode } from "../src/server.js";
-import { Adapter, type AdapterRequest } from "../src/routing/adapters.js";
 
-const ask = (more: Partial<AdapterRequest> = {}): AdapterRequest => ({ method: "GET", path: "/search", query: {}, contentType: null, body: null, ...more });
 /** A config refusal whose sentence says this. */
 const refuses = (fn: () => unknown, re: RegExp, why?: string) => assert.throws(fn, (e: unknown) => e instanceof ConfigError && re.test(e.message), why);
 
 // --- config -----------------------------------------------------------------
 const base = { version: 3, name: "t", backends: { main: { url: "http://127.0.0.1:1", serves: ["m"] } }, models: { m: { backend: "main" } } };
-const withAdapters = (adapters: unknown) => parseConfig({ ...base, adapters });
-const plain = "export function request(req) { return { path: req.path }; }";
-assert.deepEqual(withAdapters({ a: { code: plain } }).adapters.a, { code: plain, timeoutMs: 1000 });
-assert.equal(withAdapters({ a: { code: plain, timeoutMs: 250 } }).adapters.a!.timeoutMs, 250);
-refuses(() => withAdapters({ a: { code: plain, timeoutMs: 0 } }), /timeoutMs/);
-refuses(() => withAdapters({ a: { code: plain, timeoutMs: 10_001 } }), /timeoutMs/);
-refuses(() => withAdapters({ a: {} }), /code/);
-refuses(() => withAdapters({ "not_allowed": { code: plain } }), /name/);
-refuses(() => withAdapters({ a: { code: plain, extra: 1 } }), /extra/);
-// A syntax error names the adapter and the line its module broke on.
-assert.throws(
-  () => withAdapters({ sx: { code: "export function request(req) {\n  return req.\n}" } }),
-  (e: unknown) => e instanceof ConfigError && e.path === "adapters.sx.code" && /line 3/.test(e.message),
-  "a syntax error names the adapter and the line",
-);
-// An adapter that exports neither side does nothing, so it is refused rather than silently doing it.
-refuses(() => withAdapters({ empty: { code: "export const unused = 1;" } }), /exports neither request nor response/);
-refuses(() => withAdapters({ wrong: { code: "export const request = 1;" } }), /request is not a function/);
-// The top level holds only consts and functions, so a loop written there is refused, not run.
-refuses(() => withAdapters({ loops: { code: "for (;;) {}" } }), /only for\.\.\.of loops/);
-// A const's initializer does run at load, and is held to a deadline like a call.
-refuses(() => withAdapters({ spin: { code: "const x = (() => { while (true) {} })();" } }), /step budget exceeded/);
-
-const flow = (to: unknown) => ({ ...base, adapters: { a: { code: plain } }, flows: { f: { inputs: ["*"], steps: [{ when: { variant: ["p"] }, to }, { to: { asked: true } }] } } });
-// A line that names an adapter must name one under adapters:.
-refuses(() => parseConfig(flow({ plugin: "x", adapt: "nope" })), /not under adapters/);
+const svc = (more: object = {}) => ({ serves: "http://127.0.0.1:2", trust: "http", ...more });
+const code = (more: object = {}) => ({ use: "file:./adapt.mjs", trust: "code", ...more });
+/** A config with one flow whose first step is `to`, and a last step that always answers. */
+const line = (to: unknown, plugins: unknown = { alt: svc(), gate: code() }) =>
+  parseConfig({ ...base, plugins, flows: { f: { inputs: ["*"], steps: [{ when: { variant: ["p"] }, to }, { to: { refuse: "no" } }] } } });
+// An adapter must be a plugin, and one that runs code from a file or a package.
+refuses(() => line({ plugin: "alt", adapt: "nope" }), /names nope, which is not a plugin under plugins:/);
+refuses(() => line({ plugin: "alt", adapt: "svc" }, { alt: svc(), svc: svc() }), /names svc, which is not a trust: code plugin/);
 // An adapter reshapes a plugin's request and answer, so a model target cannot carry one.
-refuses(() => parseConfig(flow({ model: "m", adapt: "a" })), /sends to a plugin/);
-assert.deepEqual(parseConfig(flow({ plugin: "x", adapt: "a" })).flows.f!.steps[0]!.to, { plugin: "x", adapt: "a" });
-assert.deepEqual(parseConfig(flow({ asked: true, adapt: "a" })).flows.f!.steps[0]!.to, { asked: true, adapt: "a" });
-assert.deepEqual(parseConfig(flow({ plugin: "x" })).flows.f!.steps[0]!.to, { plugin: "x" });
-
-// --- the sandbox ------------------------------------------------------------
-const unit = (code: string, timeoutMs = 1000) => new Adapter("a", code, timeoutMs);
-
-// A side the module does not export is passed through unchanged.
-const responseOnly = unit("export function response(res) { return { body: 'no' }; }");
-assert.deepEqual(await responseOnly.request(ask()), {}, "an unexported request() passes the request through");
-assert.deepEqual(await responseOnly.response({ status: 200, contentType: "text/plain", body: "x" }, ask()), { body: "no" });
-responseOnly.close();
-
-// request() reshapes what the target is sent; null is "no counterpart here".
-const reshape = unit("export function request(req) {\n  if (req.path === \"/none\") return null;\n  return { path: \"/api\" + req.path, query: { q: req.query.q ?? \"/\" } };\n}");
-assert.deepEqual(await reshape.request(ask({ path: "/search", query: { q: "hearth" } })), { path: "/api/search", query: { q: "hearth" } });
-assert.equal(await reshape.request(ask({ path: "/none" })), null, "null means this line has no counterpart");
-reshape.close();
-
-// Both sides see the caller's original request, and each may set only its own fields.
-const both = unit(`
-export function request(req) { return { method: "POST", body: req.body === null ? null : req.body.toUpperCase() }; }
-export function response(res, req) { return { body: res.body + " for " + req.path, status: 201 }; }
-`);
-assert.deepEqual(await both.request(ask({ method: "GET", body: "hello", contentType: "text/plain" })), { method: "POST", body: "HELLO" });
-assert.deepEqual(
-  await both.response({ status: 200, contentType: "text/plain", body: "answer" }, ask({ path: "/original" })),
-  { status: 201, body: "answer for /original" },
-  "response() is given the request the caller sent",
+refuses(() => line({ model: "m", adapt: "gate" }), /sends to a plugin/);
+// The accepted shapes keep the adapter on the line's target.
+assert.deepEqual(line({ plugin: "alt", adapt: "gate" }).flows.f!.steps[0]!.to, { plugin: "alt", adapt: "gate" });
+assert.deepEqual(line({ asked: true, adapt: "gate" }).flows.f!.steps[0]!.to, { asked: true, adapt: "gate" });
+assert.deepEqual(line({ plugin: "alt" }).flows.f!.steps[0]!.to, { plugin: "alt" });
+// `fallback.adapt` is gone: an adapter is a line's `adapt:` now, and a file that still carries it is told so.
+refuses(
+  () => parseConfig({ ...base, plugins: { a: svc({ fallback: { plugin: "b", adapt: "x" } }), b: svc() } }),
+  /fallback\.adapt[\s\S]*adapt:/,
+  "fallback.adapt points at adapt: on a flow line",
 );
-both.close();
 
-// A response() that throws says why; one stuck in a loop is cut off at its deadline.
-const throwing = unit("export function response(res) { throw new Error('cannot read ' + res.status); }");
-await assert.rejects(throwing.response({ status: 404, contentType: null, body: "" }, ask()), /cannot read 404/);
-throwing.close();
-const hanging = unit("export function response() { while (true) {} }", 150);
-const hungAt = Date.now();
-await assert.rejects(hanging.response({ status: 200, contentType: null, body: "" }, ask()), /step budget exceeded \(150 ms\)/);
-assert.ok(Date.now() - hungAt < 2_000, `a response() that never ends is cut off (took ${Date.now() - hungAt} ms)`);
-hanging.close();
-
-// The sandbox has nothing of the host in it, and nothing that can wait on anything.
-const probe = unit(`
-export function request() {
-  return { body: JSON.stringify({
-    process: typeof process, require: typeof require, fetch: typeof fetch, module: typeof module,
-    window: typeof window, document: typeof document, console: typeof console, Buffer: typeof Buffer,
-    globalThis: typeof globalThis, Promise: typeof Promise, setTimeout: typeof setTimeout,
-  }) };
-}`);
-const seen = JSON.parse(String((await probe.request(ask()))!.body));
-assert.deepEqual(
-  seen,
-  {
-    process: "undefined", require: "undefined", fetch: "undefined", module: "undefined",
-    window: "undefined", document: "undefined", console: "undefined", Buffer: "undefined",
-    globalThis: "undefined", Promise: "undefined", setTimeout: "undefined",
-  },
-  "no host globals reach the code",
-);
-probe.close();
-
-const spinning = unit("export function request() { while (true) {} }", 200);
-await assert.rejects(spinning.request(ask()), /step budget exceeded \(200 ms\)/, "a loop that never ends is cut off");
-spinning.close();
-const bloating = unit("export function request() { const a = []; while (true) { a.push(1); } }", 5000);
-const blewUpAt = Date.now();
-await assert.rejects(bloating.request(ask()), /array too long/, "an array that grows without end is cut off");
-assert.ok(Date.now() - blewUpAt < 5_000, `the array cap ends it before the deadline (took ${Date.now() - blewUpAt} ms)`);
-bloating.close();
-
-// --- a node with an adapter -------------------------------------------------
+// --- a node with an adapter plugin ------------------------------------------
 const seenAt: { path: string; query: Record<string, string>; authorization?: string | string[]; key?: string | string[] }[] = [];
 const api = createServer((rq, rs) => {
   const at = new URL(rq.url!, "http://here");
@@ -142,15 +60,14 @@ const api = createServer((rq, rs) => {
   seenAt.push({ path: at.pathname, query: Object.fromEntries(at.searchParams), authorization: rq.headers.authorization, key: rq.headers["x-api-key"] });
   if (at.pathname.startsWith("/search/")) {
     const q = at.searchParams.get("q") ?? "";
-    if (q === "gone") return say(404, { error: "nope" });
-    if (/^(fail|bad|hang|nocounterpart)/.test(q)) return say(503, { error: "busy" });
-    return say(200, { from: "primary" });
+    if (q === "ok") return say(200, { from: "primary" });
+    return say(503, { error: "busy" });
   }
-  if (at.pathname.startsWith("/alt2/")) return say(200, { results: [1] });
   if (at.pathname.startsWith("/alt/")) {
     const q = at.searchParams.get("q") ?? "";
     if (q === "bad") return say(200, { oops: true });
-    if (q === "hang") return say(200, { hang: true });
+    if (q === "gone") return say(404, { error: "nope" });
+    if (q === "slow-answer") return say(200, { hang: true });
     return say(200, { results: [{ url: "https://a.test" }] });
   }
   if (at.pathname.startsWith("/twin/")) return say(200, { from: "twin" });
@@ -160,21 +77,48 @@ await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
 const apiUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
 const port = () => new Promise<number>((r) => { const s = createServer().listen(0, "127.0.0.1", () => { const p = (s.address() as AddressInfo).port; s.close(() => r(p)); }); });
 
-const GATE = `export function request(req) {
-  if (req.query.q === "nocounterpart") return null;
-  return { path: "/alt" + req.path, query: { q: req.query.q, via: Object.keys(req).sort((a, b) => (a < b ? -1 : 1)).join(",") } };
-}
-export function response(res, req) {
-  if (res.body.includes("hang")) { while (true) {} }
-  const d = JSON.parse(res.body);
-  if (!Array.isArray(d.results)) throw new Error("no results list");
-  return { contentType: "application/json", body: JSON.stringify({ from: "adapted", q: req.query.q, n: d.results.length }) };
-}`;
-// The same adapter after a live edit: a new path, and an answer of its own.
-const GATE_LIVE = `export function request(req) { return { path: "/alt2" + req.path, query: { q: req.query.q } }; }
-export function response(res, req) { return { body: JSON.stringify({ from: "live", q: req.query.q }) }; }`;
+const GATE = `export default {
+  apiVersion: 1,
+  kinds: {},
+  setup() {
+    return {
+      adapt: {
+        request(req) {
+          // No counterpart on the target's API: this line cannot serve the request.
+          if (req.query.q === "nocounterpart") return null;
+          // A request that never settles: held to the plugin's timeoutMs.
+          if (req.query.q === "slow-request") return new Promise(() => {});
+          return { path: "/alt" + req.path, query: { q: req.query.q, via: Object.keys(req).sort().join(",") } };
+        },
+        response(res, req) {
+          // An answer that never settles: held to the plugin's timeoutMs too.
+          if (req.query.q === "slow-answer") return new Promise(() => {});
+          const d = JSON.parse(res.body);
+          if (!Array.isArray(d.results)) throw new Error("no results list");
+          return { contentType: "application/json", body: JSON.stringify({ from: "adapted", q: req.query.q, n: d.results.length }) };
+        },
+      },
+    };
+  },
+};
+`;
+/** A code plugin whose setup hooks nothing: an adapter a line names must not start like this. */
+const HOLLOW = "export default { apiVersion: 1, kinds: {}, setup() { return {}; } };\n";
 
-const block = (text: string, indent = "      ") => text.split("\n").map((line) => (line === "" ? "" : indent + line)).join("\n");
+const dir = mkdtempSync(join(tmpdir(), "hearth-adapters-"));
+const gatePath = join(dir, "gate.mjs");
+writeFileSync(gatePath, GATE);
+const hollowPath = join(dir, "hollow.mjs");
+writeFileSync(hollowPath, HOLLOW);
+
+const said: { msg: string; fields: Record<string, unknown> }[] = [];
+const kept: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: (msg, fields) => said.push({ msg, fields: fields ?? {} }),
+  error: (msg, fields) => said.push({ msg, fields: fields ?? {} }),
+};
+
 const tools = `      plugins:
         inputs: [API]
         steps:
@@ -184,11 +128,13 @@ const tools = `      plugins:
             to: {plugin: alt, adapt: gate}
           - when: {variant: [search]}
             to: {plugin: twin}
+          - when: {variant: [search]}
+            to: {plugin: alt, adapt: hollow}
           - to: {refuse: "only search"}
       rest: {inputs: ["*"], steps: [{to: {asked: true}}]}`;
 const free = await port();
-const dir = mkdtempSync(join(tmpdir(), "hearth-adapters-"));
-const cfgPath = join(dir, "hearth.yaml");
+const dir2 = mkdtempSync(join(tmpdir(), "hearth-adapters-cfg-"));
+const cfgPath = join(dir2, "hearth.yaml");
 writeFileSync(cfgPath, `version: 3
 name: t
 listen: {host: 127.0.0.1, port: ${free}}
@@ -196,11 +142,6 @@ backends:
   main: {url: http://127.0.0.1:1, serves: [m]}
 models:
   m: {backend: main}
-adapters:
-  gate:
-    timeoutMs: 200
-    code: |
-${block(GATE)}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 routers:
@@ -219,8 +160,11 @@ plugins:
   primary: {serves: "${apiUrl}/search", trust: http}
   alt: {serves: "${apiUrl}", trust: http, headers: {X-Api-Key: alt-key}}
   twin: {serves: "${apiUrl}/twin", trust: http}
+  gate: {use: 'file:${gatePath}', trust: code, timeoutMs: 200}
+  hollow: {use: 'file:${hollowPath}', trust: code}
+  lonely: {use: 'file:${hollowPath}', trust: code}
 `);
-const node = createNode(loadConfig(cfgPath), silentLogger);
+const node = createNode(loadConfig(cfgPath), kept);
 node.start();
 await node.startPlugins();
 await new Promise<void>((r) => node.server.listen(free, "127.0.0.1", r));
@@ -230,13 +174,24 @@ const call = async (path: string, key = "k-app") => {
 };
 
 try {
-  // A line that answers is not adapted, and its adapter does not run.
+  // A plugin a line names as an adapter must return an adapt with both sides, or it does not start.
+  const shown = node.plugins.status();
+  const hollow = shown.find((p) => p.name === "hollow");
+  assert.equal(hollow!.state, "failed");
+  assert.match(String(hollow!.error), /named as an adapter \(a line's `adapt:`\)/, "an adapter plugin without an adapt fails to start");
+  assert.equal(shown.find((p) => p.name === "gate")!.state, "running", "an adapter that hooks nothing runs");
+  // An adapter runs where a line that names it does, so it is not a plugin that runs nowhere: only a
+  // code plugin no line and no adapter naming reaches is warned about.
+  const warned = said.filter((s) => s.msg === "plugin.on_no_line").map((s) => s.fields["plugin"]);
+  assert.deepEqual(warned, ["lonely"], "the adapters are not warned about; a plugin on no line still is");
+  // With its adapter down, the line cannot serve the request: the next line is asked.
   assert.deepEqual(await call("/plugins/search/page?q=ok"), { status: 200, body: { from: "primary" } });
+
+  // A line that answers is not adapted, and its adapter does not run.
   assert.ok(!seenAt.some((r) => r.path.startsWith("/alt/")), "the adapter's target is not asked");
 
-  // The first line fails: the second sends the request to the next target, through the adapter.
-  const adapted = await call("/plugins/search/page?q=fail");
-  assert.deepEqual(adapted, { status: 200, body: { from: "adapted", q: "fail", n: 1 } });
+  // The first line fails: the second sends the request to the next target through the adapter.
+  assert.deepEqual(await call("/plugins/search/page?q=fail"), { status: 200, body: { from: "adapted", q: "fail", n: 1 } });
   const alt = seenAt.find((r) => r.path === "/alt/page");
   assert.ok(alt !== undefined, "the adapter chose the path on the target's API");
   assert.equal(alt!.query.via, "body,contentType,method,path,query", "the code sees the request's shape, never the caller's headers");
@@ -251,12 +206,17 @@ try {
   assert.equal(unreadable.status, 502);
   assert.match(String(unreadable.body.error), /adapter gate could not read alt's answer: no results list/);
 
-  // A response() stuck in a loop is a 502 within its timeoutMs.
-  const hungAt2 = Date.now();
-  const hung = await call("/plugins/search/page?q=hang");
+  // An async request() that never settles is a failed line, within the plugin's timeoutMs.
+  const hungRequestAt = Date.now();
+  assert.deepEqual(await call("/plugins/search/page?q=slow-request"), { status: 200, body: { from: "twin" } }, "a request() that never settles fails its line");
+  assert.ok(Date.now() - hungRequestAt < 2_000, `a hung request() is cut off at its deadline (took ${Date.now() - hungRequestAt} ms)`);
+
+  // An async response() that never settles is a 502 within the same deadline.
+  const hungAnswerAt = Date.now();
+  const hung = await call("/plugins/search/page?q=slow-answer");
   assert.equal(hung.status, 502);
-  assert.match(String(hung.body.error), /step budget exceeded \(200 ms\)/);
-  assert.ok(Date.now() - hungAt2 < 2_000, `a response() stuck in a loop is cut off at its deadline (took ${Date.now() - hungAt2} ms)`);
+  assert.match(String(hung.body.error), /adapter gate could not read alt's answer: adapter gate gave no answer in 200 ms/);
+  assert.ok(Date.now() - hungAnswerAt < 2_000, `a hung response() is cut off at its deadline (took ${Date.now() - hungAnswerAt} ms)`);
 
   // A non-2xx from the target is the caller's answer: it is never adapted.
   assert.deepEqual(await call("/plugins/search/page?q=gone"), { status: 404, body: { error: "nope" } });
@@ -267,19 +227,13 @@ try {
   const strict = await call("/plugins/search/page?q=fail", "k-strict");
   assert.deepEqual(strict, { status: 503, body: { error: "busy" } });
   assert.equal(seenAt.filter((r) => r.path.startsWith("/alt")).length, before, "a strict router tries no next line");
-
-  // A live edit to the code is used by the next request, with no restart.
-  writeFileSync(cfgPath, readFileSync(cfgPath, "utf8").replace(block(GATE), block(GATE_LIVE)));
-  await new Promise((r) => setTimeout(r, 900));
-  assert.deepEqual(await call("/plugins/search/page?q=fail2"), { status: 200, body: { from: "live", q: "fail2" } });
-  assert.ok(seenAt.some((r) => r.path === "/alt2/page"), "the edited code chose the new path");
 } finally {
   await node.close();
   api.close();
 }
 
 // --- the example, end to end -------------------------------------------------
-const example = readFileSync(join(import.meta.dirname, "../examples/adapters/searxng-to-degoog.mjs"), "utf8");
+const example = join(import.meta.dirname, "../examples/adapters/searxng-to-degoog.mjs");
 const search = createServer((rq, rs) => {
   const at = new URL(rq.url!, "http://here");
   const say = (status: number, body: unknown) => rs.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
@@ -297,8 +251,8 @@ const search = createServer((rq, rs) => {
 await new Promise<void>((r) => search.listen(0, "127.0.0.1", r));
 const searchUrl = `http://127.0.0.1:${(search.address() as AddressInfo).port}`;
 const free2 = await port();
-const dir2 = mkdtempSync(join(tmpdir(), "hearth-adapters-example-"));
-const cfg2 = join(dir2, "hearth.yaml");
+const dir3 = mkdtempSync(join(tmpdir(), "hearth-adapters-example-"));
+const cfg2 = join(dir3, "hearth.yaml");
 writeFileSync(cfg2, `version: 3
 name: t
 listen: {host: 127.0.0.1, port: ${free2}}
@@ -306,10 +260,6 @@ backends:
   main: {url: http://127.0.0.1:1, serves: [m]}
 models:
   m: {backend: main}
-adapters:
-  searxng-to-degoog:
-    code: |
-${block(example)}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 routers:
@@ -330,6 +280,7 @@ callers: {app: tools}
 plugins:
   searxng: {serves: "${searchUrl}/searxng", trust: http}
   degoog: {serves: "${searchUrl}/degoog", trust: http}
+  searxng-to-degoog: {use: 'file:${example}', trust: code}
 `);
 const node2 = createNode(loadConfig(cfg2), silentLogger);
 node2.start();
