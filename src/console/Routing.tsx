@@ -160,9 +160,8 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         title: name, kind: pluginHue(d.plugins, name), down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${name}${p.mcp ? p.mcp.path : "/"}`, ...(p?.fallback && { fallback: p.fallback.plugin }),
         ...(adapted.length
           ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
-          : {}),
-        // Every plugin a line sends to keeps a dot to put an adapter in front of one of its lines.
-        ...(lines.length ? { adaptAny: true } : {}),
+          // One exit dot per box: its adapter's, or else one to put an adapter in front of a line.
+          : lines.length ? { adaptAny: true } : {}),
       } satisfies Dest,
     });
     y += 56;
