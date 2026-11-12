@@ -844,7 +844,7 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
   // Lit by traffic that has just gone through it, or by a request tried or replayed down its line.
   const lit = data.on === true || (calledAt !== undefined && Date.now() - calledAt < ADAPTER_LIT_MS);
   const split = data.request !== null && data.request !== undefined && data.response !== null && data.response !== undefined;
-  const dot = failed ? "!bg-bad" : lit ? "!bg-accent" : "!bg-dim";
+  const dot = cx(failed ? "!bg-bad" : lit ? "!bg-accent" : "!bg-api", "!opacity-100");
   const said = failed ? `${data.last!.side}() failed: ${data.last!.error ?? "no message"}` : "an adapter: it reshapes what the plugin is sent, and the answer it gives — click for its code, the lines that use it, and try it";
   const areas: { side: "request" | "response"; label: string; text: string; says: string }[] = split
     ? [{ side: "request", label: "IN", text: data.request ?? "", says: "the request, as the plugin is about to be sent it" },
