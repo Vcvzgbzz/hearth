@@ -502,6 +502,26 @@ export class Plugins {
   }
 
   /**
+   * How many hops `/plugins/<name>/*` the request has already travelled, or why it may go no further. A missing
+   * or malformed header is no hops; a value at or above the limit is refused, since the next hop would be past it.
+   * The plugin is handed the count it is at plus one, so a plugin that passes it on is counted the same way.
+   */
+  hops(given: string | undefined): { hops: number } | { status: number; why: string } {
+    if (given === undefined || given.trim() === "") return { hops: 0 };
+    if (!/^\d+$/.test(given.trim())) {
+      return { status: 400, why: "X-Hearth-Hops must be a whole number of hops, zero or more" };
+    }
+    const hops = Number(given.trim());
+    if (hops >= this.cfg.pluginsMaxHops) {
+      return {
+        status: 508,
+        why: `this request has been through ${hops} plugin${hops === 1 ? "" : "s"} already, as many as pluginsMaxHops allows (${this.cfg.pluginsMaxHops}): it is probably looping between them`,
+      };
+    }
+    return { hops };
+  }
+
+  /**
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.
    */

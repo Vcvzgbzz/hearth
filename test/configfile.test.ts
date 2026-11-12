@@ -207,6 +207,9 @@ const settle = () => new Promise((r) => setTimeout(r, 700));
   r = await a.patch({ baseHash: out.hash, ops: [{ path: ["scheduler", "maxPerLane"], value: 7 }] });
   out = (await r.json()) as Status;
   assert.deepEqual(out.restartPending, [], "lanes and queues apply live");
+  r = await a.patch({ baseHash: out.hash, ops: [{ path: ["pluginsMaxHops"], value: 5 }] });
+  out = (await r.json()) as Status;
+  assert.deepEqual(out.restartPending, [], "the plugin hop limit is read per request");
 
   // Invalid: 422 with the field, and nothing written.
   const before = readFileSync(cfgPath, "utf8");
