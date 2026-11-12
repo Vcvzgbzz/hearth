@@ -131,7 +131,8 @@ export function pluginRoutes(ctx: RouteContext) {
 
     /**
      * One line: the plugin it names, with the adapter in front of it when it has one. Falls back to the plugin's
-     * own `fallback` — one hop, with the request as it stands — before the line counts as failed.
+     * own `fallback` — one hop, sent the request as the adapter carried it over — before the line counts as failed.
+     * The adapter wraps the fallback as it wraps the plugin: the fallback serves the plugin's API, not the caller's.
      */
     async function serveLine(name: string, adaptName: string | undefined): Promise<Line> {
       /** What one attempt at a target is sent. */
@@ -147,7 +148,54 @@ export function pluginRoutes(ctx: RouteContext) {
       /** Is there nothing left that could take this request? Then the line's own failure is the caller's answer. */
       const nothingElse = (): boolean => plugins.fallbackOf(name) === null && (strict || !hasNext(new Set([...tried, name])));
 
-      /** The plugin's own fallback, one hop, sent the request as it stands; or why the line failed. */
+      /** The request on the target's API: as the line's adapter carries it over, or unchanged without one. */
+      async function carry(): Promise<Outgoing | { failed: string }> {
+        // The query as it arrived, byte for byte, unless the adapter rewrites it.
+        const out: Outgoing = { method: original.method, path, search: url.search, body, type: contentType };
+        if (adapter === null) return out;
+        let carried: Partial<AdapterRequest> | null;
+        try {
+          carried = await adapter.request(original);
+        } catch (e) {
+          log.warn("flow.adapter_failed", { adapter: adapter.name, side: "request", plugin: name, caller: c.caller, error: said(e) });
+          return { failed: `adapter ${adapter.name} could not carry the request over: ${said(e)}` };
+        }
+        // No counterpart on the target's API: this line cannot serve the request, so the next one is asked.
+        if (carried === null) return { failed: `adapter ${adapter.name} has no counterpart for it on ${name}'s API` };
+        if (carried.method !== undefined) out.method = carried.method;
+        if (carried.path !== undefined) out.path = carried.path;
+        if (carried.query !== undefined) {
+          const qs = new URLSearchParams(carried.query).toString();
+          out.search = qs === "" ? "" : `?${qs}`;
+        }
+        if (carried.body !== undefined) out.body = carried.body === null ? undefined : Buffer.from(carried.body, "utf8");
+        if (carried.contentType !== undefined) out.type = carried.contentType;
+        return out;
+      }
+
+      /** A 2xx answer from `by` (the plugin or its fallback) through the line's adapter; a 502 naming it when the code cannot read it. */
+      async function adaptAnswer(answer: AdapterAnswer, from: Record<string, string | string[]>, went: Outgoing, by: string): Promise<Line> {
+        let read: Partial<AdapterAnswer>;
+        try {
+          read = await adapter!.response(answer, original);
+        } catch (e) {
+          log.warn("flow.adapter_failed", { adapter: adapter!.name, side: "response", plugin: by, status: answer.status, caller: c.caller, error: said(e) });
+          return { answer: 502, error: `adapter ${adapter!.name} could not read ${by}'s answer: ${said(e)}` };
+        }
+        // The answer is the adapter's now: what described the target's bytes no longer does.
+        const headers: Record<string, string | string[]> = { ...from };
+        for (const h of Object.keys(headers)) if (["content-length", "content-encoding", "etag"].includes(h.toLowerCase())) delete headers[h];
+        const kind = read.contentType === undefined ? answer.contentType : read.contentType;
+        if (kind === null) delete headers["content-type"];
+        else headers["content-type"] = kind;
+        const out = read.body ?? answer.body;
+        headers["content-length"] = String(Buffer.byteLength(out));
+        res.writeHead(read.status ?? answer.status, headers).end(out);
+        log.info("plugin.served", { plugin: by, ...(by !== name ? { for: name } : {}), method: went.method, path: went.path, status: read.status ?? answer.status, adapt: adapter!.name, caller: c.caller, ms: Date.now() - t0 });
+        return { answered: true };
+      }
+
+      /** The plugin's own fallback, one hop, sent the request as the adapter carried it over; or why the line failed. */
       async function fallback(why: string, went: Outgoing): Promise<Line> {
         const fb = plugins.fallbackOf(name);
         if (fb === null) return { failed: why };
@@ -166,12 +214,19 @@ export function pluginRoutes(ctx: RouteContext) {
         }
         log.info("plugin.fallback", { plugin: name, to: fb.plugin, why, caller: c.caller });
         try {
-          const up = await call(alt, went.method, went.path, went.search, went.body, false, went.type);
-          alt.done(up.status < 500);
-          res.writeHead(up.status, forwardable(up.headers));
-          await pipeline(up.body, res);
-          log.info("plugin.served", { plugin: fb.plugin, for: name, method: went.method, path: went.path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
-          return { answered: true };
+          const up = await call(alt, went.method, went.path, went.search, went.body, adapter !== null, went.type);
+          // A non-2xx is the fallback's answer to give; a 2xx goes back through the line's adapter, as the plugin's would.
+          if (adapter === null || up.status < 200 || up.status >= 300) {
+            alt.done(up.status < 500);
+            res.writeHead(up.status, forwardable(up.headers));
+            await pipeline(up.body, res);
+            log.info("plugin.served", { plugin: fb.plugin, for: name, method: went.method, path: went.path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+            return { answered: true };
+          }
+          const text = await up.text(cfg.maxBodyBytes);
+          alt.done(true);
+          const typeOf = up.headers["content-type"];
+          return await adaptAnswer({ status: up.status, contentType: typeof typeOf === "string" ? typeOf : null, body: text }, forwardable(up.headers), went, fb.plugin);
         } catch (e) {
           alt.done(false);
           if (ctrl.signal.aborted) return { answered: true };
@@ -182,86 +237,45 @@ export function pluginRoutes(ctx: RouteContext) {
         }
       }
 
-      // The target first: a plugin that cannot answer at all is the line failing, and its adapter is never run.
+      // The target first: a plugin that cannot answer at all is the line failing, and its adapter runs only when
+      // the plugin's own fallback is there to be sent what it carries over.
       const to = plugins.serve(name, c.caller);
-      // With nowhere else to go, the plugin's own status and words are the answer: paused is 503, unknown 404.
-      if ("why" in to) return nothingElse() ? { answer: to.status, error: to.why } : fallback(to.why, { method: original.method, path, search: url.search, body, type: contentType });
-      const done = to.done;
-
-      // The request the target is sent, as the line's adapter made it: unchanged without one.
-      let method = original.method;
-      let at = path;
-      // The query as it arrived, byte for byte, unless the adapter rewrites it.
-      let search = url.search;
-      let sent = body;
-      let type = contentType;
-      if (adapter !== null) {
-        let carried: Partial<AdapterRequest> | null;
-        try {
-          carried = await adapter.request(original);
-        } catch (e) {
-          done(false);
-          log.warn("flow.adapter_failed", { adapter: adapter.name, side: "request", plugin: name, caller: c.caller, error: said(e) });
-          return { failed: `adapter ${adapter.name} could not carry the request over: ${said(e)}` };
-        }
-        // No counterpart on the target's API: this line cannot serve the request, so the next one is asked.
-        if (carried === null) {
-          done(false);
-          return { failed: `adapter ${adapter.name} has no counterpart for it on ${name}'s API` };
-        }
-        method = carried.method ?? method;
-        at = carried.path ?? at;
-        if (carried.query !== undefined) {
-          const qs = new URLSearchParams(carried.query).toString();
-          search = qs === "" ? "" : `?${qs}`;
-        }
-        if (carried.body !== undefined) sent = carried.body === null ? undefined : Buffer.from(carried.body, "utf8");
-        if (carried.contentType !== undefined) type = carried.contentType;
+      if ("why" in to) {
+        // With nowhere else to go, the plugin's own status and words are the answer: paused is 503, unknown 404.
+        if (nothingElse()) return { answer: to.status, error: to.why };
+        if (plugins.fallbackOf(name) === null) return { failed: to.why };
+        const went = await carry();
+        if ("failed" in went) return { failed: `${to.why}, and ${went.failed}` };
+        return fallback(to.why, went);
       }
-
-      /** The target's 2xx answer through the line's adapter; a 502 naming it when the code cannot read the answer. */
-      async function adaptAnswer(answer: AdapterAnswer, from: Record<string, string | string[]> = {}): Promise<Line> {
-        let read: Partial<AdapterAnswer>;
-        try {
-          read = await adapter!.response(answer, original);
-        } catch (e) {
-          log.warn("flow.adapter_failed", { adapter: adapter!.name, side: "response", plugin: name, status: answer.status, caller: c.caller, error: said(e) });
-          return { answer: 502, error: `adapter ${adapter!.name} could not read ${name}'s answer: ${said(e)}` };
-        }
-        // The answer is the adapter's now: what described the target's bytes no longer does.
-        const headers: Record<string, string | string[]> = { ...from };
-        for (const h of Object.keys(headers)) if (["content-length", "content-encoding", "etag"].includes(h.toLowerCase())) delete headers[h];
-        const kind = read.contentType === undefined ? answer.contentType : read.contentType;
-        if (kind === null) delete headers["content-type"];
-        else headers["content-type"] = kind;
-        const out = read.body ?? answer.body;
-        headers["content-length"] = String(Buffer.byteLength(out));
-        res.writeHead(read.status ?? answer.status, headers).end(out);
-        log.info("plugin.served", { plugin: name, method, path: at, status: read.status ?? answer.status, adapt: adapter!.name, caller: c.caller, ms: Date.now() - t0 });
-        return { answered: true };
+      const done = to.done;
+      const went = await carry();
+      if ("failed" in went) {
+        done(false);
+        return went;
       }
 
       // An MCP server hearth runs answers at its own /mcp, whatever comes after the name.
       if ("stdio" in to) {
         try {
-          const a = await to.stdio.handle(method, sent);
+          const a = await to.stdio.handle(went.method, went.body);
           done(a.status < 500);
           if (adapter !== null && a.status >= 200 && a.status < 300) {
-            return await adaptAnswer({ status: a.status, contentType: a.type, body: a.body });
+            return await adaptAnswer({ status: a.status, contentType: a.type, body: a.body }, {}, went, name);
           }
           res.writeHead(a.status, { "content-type": a.type, ...(a.session ? { "mcp-session-id": a.session } : {}) }).end(a.body);
-          log.info("plugin.served", { plugin: name, method, path: at, status: a.status, caller: c.caller, ms: Date.now() - t0 });
+          log.info("plugin.served", { plugin: name, method: went.method, path: went.path, status: a.status, caller: c.caller, ms: Date.now() - t0 });
           return { answered: true };
         } catch (e) {
           done(false);
           if (ctrl.signal.aborted) return { answered: true };
-          log.warn("plugin.serve_failed", { plugin: name, path: at, error: said(e) });
+          log.warn("plugin.serve_failed", { plugin: name, path: went.path, error: said(e) });
           if (nothingElse()) return { answer: 502, error: `plugin ${name} could not be reached: ${said(e)}` };
-          return fallback(said(e), { method, path: at, search, body: sent, type });
+          return fallback(said(e), went);
         }
       }
       try {
-        const up = await call(to, method, at, search, sent, adapter !== null, type);
+        const up = await call(to, went.method, went.path, went.search, went.body, adapter !== null, went.type);
         // An overloaded or failing target is a failed line, and the next one is asked — unless there is none,
         // and no fallback either: then the target's own answer is the caller's, as it always was.
         if (up.status >= 500 || up.status === 429) {
@@ -269,35 +283,34 @@ export function pluginRoutes(ctx: RouteContext) {
           if (nothingElse()) {
             res.writeHead(up.status, forwardable(up.headers));
             await pipeline(up.body, res);
-            log.info("plugin.served", { plugin: name, method, path: at, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+            log.info("plugin.served", { plugin: name, method: went.method, path: went.path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
             return { answered: true };
           }
           up.body.resume();
-          return fallback(`it answered ${up.status}`, { method, path: at, search, body: sent, type });
+          return fallback(`it answered ${up.status}`, went);
         }
         // A non-2xx is the target's answer to give: it is never given to the adapter.
         if (adapter === null || up.status < 200 || up.status >= 300) {
           done(up.status < 500);
           res.writeHead(up.status, forwardable(up.headers));
           await pipeline(up.body, res);
-          log.info("plugin.served", { plugin: name, method, path: at, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+          log.info("plugin.served", { plugin: name, method: went.method, path: went.path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
           return { answered: true };
         }
+        // Counted once the answer has been read, so an answer that cannot be read is one failure, not a success and a failure.
+        const text = await up.text(cfg.maxBodyBytes);
         done(true);
-        const contentTypeOf = up.headers["content-type"];
-        return await adaptAnswer(
-          { status: up.status, contentType: typeof contentTypeOf === "string" ? contentTypeOf : null, body: await up.text(cfg.maxBodyBytes) },
-          forwardable(up.headers),
-        );
+        const typeOf = up.headers["content-type"];
+        return await adaptAnswer({ status: up.status, contentType: typeof typeOf === "string" ? typeOf : null, body: text }, forwardable(up.headers), went, name);
       } catch (e) {
         done(false);
         // A caller that hung up mid-stream is the end of the exchange, not a failure of the service.
         if (ctrl.signal.aborted) return { answered: true };
-        log.warn("plugin.serve_failed", { plugin: name, path: at, error: said(e) });
+        log.warn("plugin.serve_failed", { plugin: name, path: went.path, error: said(e) });
         // Once an answer has begun there is no taking it back, so only a plugin that never answered falls back.
         if (res.headersSent) { res.destroy(); return { answered: true }; }
         if (nothingElse()) return { answer: 502, error: `plugin ${name} could not be reached: ${said(e)}` };
-        return fallback(said(e), { method, path: at, search, body: sent, type });
+        return fallback(said(e), went);
       }
     }
 

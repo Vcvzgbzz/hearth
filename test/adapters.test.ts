@@ -232,6 +232,66 @@ try {
   api.close();
 }
 
+// --- an adapter in front of a plugin that has its own fallback ---------------
+// The fallback serves the plugin's API, not the caller's: it is sent the request as the adapter carried it
+// over, and its answer goes back through the adapter as the plugin's would.
+const fbSeen: string[] = [];
+const fbApi = createServer((rq, rs) => {
+  const at = new URL(rq.url!, "http://here");
+  fbSeen.push(at.pathname);
+  const say = (status: number, body: unknown) => rs.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
+  if (at.pathname.startsWith("/down/")) return say(503, { error: "busy" });
+  if (at.pathname.startsWith("/alt/")) return say(200, { results: [{ url: "https://a.test" }, { url: "https://b.test" }] });
+  return say(418, { error: "sent a request the adapter did not carry over" });
+});
+await new Promise<void>((r) => fbApi.listen(0, "127.0.0.1", r));
+const fbUrl = `http://127.0.0.1:${(fbApi.address() as AddressInfo).port}`;
+const free3 = await port();
+const dir4 = mkdtempSync(join(tmpdir(), "hearth-adapters-fallback-"));
+const cfg3 = join(dir4, "hearth.yaml");
+writeFileSync(cfg3, `version: 3
+name: t
+listen: {host: 127.0.0.1, port: ${free3}}
+backends:
+  main: {url: http://127.0.0.1:1, serves: [m]}
+models:
+  m: {backend: main}
+flows:
+  plugins:
+    inputs: [API]
+    steps:
+      - when: {variant: [search]}
+        to: {plugin: down, adapt: gate}
+      - to: {asked: true}
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+plugins:
+  down: {serves: "${fbUrl}/down", trust: http, fallback: spare}
+  spare: {serves: "${fbUrl}", trust: http}
+  gate: {use: 'file:${gatePath}', trust: code, timeoutMs: 200}
+`);
+const node3 = createNode(loadConfig(cfg3), silentLogger);
+node3.start();
+await node3.startPlugins();
+await new Promise<void>((r) => node3.server.listen(free3, "127.0.0.1", r));
+const call3 = async (path: string) => {
+  const r = await fetch(`http://127.0.0.1:${free3}${path}`);
+  return { status: r.status, body: await r.json() as Record<string, unknown> };
+};
+try {
+  // The plugin answers 503: its fallback is sent the carried-over request, and its answer is adapted.
+  assert.deepEqual(await call3("/plugins/search/page?q=fail"), { status: 200, body: { from: "adapted", q: "fail", n: 2 } }, "a fallback's answer goes through the line's adapter");
+  assert.deepEqual(fbSeen, ["/down/alt/page", "/alt/page"], "the plugin and its fallback are both sent the request on their own API");
+
+  // The plugin is paused: its adapter still carries the request over for the fallback.
+  fbSeen.length = 0;
+  assert.equal(node3.plugins.pause("down", true), null);
+  assert.deepEqual(await call3("/plugins/search/page?q=paused"), { status: 200, body: { from: "adapted", q: "paused", n: 2 } }, "a plugin that cannot answer still has its fallback sent the adapted request");
+  assert.deepEqual(fbSeen, ["/alt/page"], "the fallback alone is asked, on its own API");
+} finally {
+  await node3.close();
+  fbApi.close();
+}
+
 // --- the example, end to end -------------------------------------------------
 const example = join(import.meta.dirname, "../examples/adapters/searxng-to-degoog.mjs");
 const search = createServer((rq, rs) => {

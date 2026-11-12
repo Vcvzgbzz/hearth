@@ -357,7 +357,7 @@ routers:
   plugin passed over: the next line that matches, as a chat request moves on after a failed model.
   Every line is the router's own decision, so a line it would refuse is never taken, and
   `strict: true` switches the next line off. A plugin's own `fallback` is still one hop, with the
-  same request, before the line counts as failed.
+  same request (as the line's adapter carried it over, when it has one), before the line counts as failed.
 - **`adapt:` names an adapter** in front of that line's target: see
   [Adapters on a line](#adapters-on-a-line).
 - Every condition a step can test applies: the caller, a header, the time of day.
@@ -457,6 +457,8 @@ response(res: Res, req: Req): Partial<Res> | Promise<Partial<Res>>      // only 
 An example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
 
 A plugin's own `fallback` is still one hop with the same request ([A fallback](plugins.md#a-fallback)).
+On a line with `adapt:` it serves the plugin's API, so the adapter wraps it as it wraps the plugin: it is
+sent the request the adapter carried over, and its 2xx answer goes back through `response()`.
 To fall back to a plugin that speaks another API, put it on the next line with `adapt:` instead.
 
 ### Actions
