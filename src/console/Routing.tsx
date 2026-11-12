@@ -281,7 +281,8 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
           edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: end });
         } else if (t.kind === "flow") edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `flow:${t.flow}` });
         else if (t.kind === "model" || t.kind === "peer") to(line, id, `step-${i}`, t);
-        else if (t.kind === "plugin") edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `plugin:${t.plugin}` });
+        // A line that falls back through an adapter reaches its plugin by the adapter's wires, not its own.
+        else if (t.kind === "plugin" && !adapts.some((a) => a.flow === name && a.step === i && a.from !== null && a.from !== a.plugin)) edges.push({ ...line, source: id, sourceHandle: `step-${i}`, target: `plugin:${t.plugin}` });
         else if (t.kind === "fastest" || t.kind === "refuse") {
           // A line that ends in a choice or a refusal gets that as a node beside it.
           const end = `${t.kind}:${name}:${i}`;
