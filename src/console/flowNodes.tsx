@@ -6,7 +6,7 @@
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
 import { ArrowRightLeft, ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, MoreHorizontal, Pencil, Plus, Puzzle, Split, Trash2, X, Zap } from "lucide-react";
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ACTIONS, ADAPTER_NOTE, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withAdapt, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
 import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
@@ -818,12 +818,41 @@ export type AdapterBox = { /** The colour of what its OUT dot is wired to; grey 
 };
 
 /** The block's measurements: the layout puts one beside its plugin box and wires its two dots, so they must match what is drawn. */
-export const ADAPTER = { width: 340, head: 26, label: 12, pad: 4, area: 72, gap: 6, note: 18 };
+export const ADAPTER = { width: 360, head: 28, label: 16, pad: 6, area: 84, gap: 4, note: 20 };
 /** Where the input dot sits, level with the IN area, and the output dot, level with the OUT area. */
 export const ADAPTER_IN_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTER.area / 2;
 export const ADAPTER_OUT_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTER.area + ADAPTER.gap + ADAPTER.pad + ADAPTER.label + ADAPTER.area / 2;
 /** How long a call through an adapter lights its block: long enough to see a request pass, then dark again. */
 export const ADAPTER_LIT_MS = 5_000;
+
+/** A side's source as it reads on its own: tabs as two spaces, and the indent it had inside the module taken off. */
+function tidy(code: string): string {
+  const lines = code.replace(/\t/g, "  ").replace(/\s+$/, "").split("\n");
+  const indents = lines.slice(1).filter((l) => l.trim() !== "").map((l) => l.length - l.trimStart().length);
+  const cut = indents.length ? Math.min(...indents) : 0;
+  return [lines[0]!, ...lines.slice(1).map((l) => l.slice(Math.min(cut, l.length - l.trimStart().length)))].join("\n");
+}
+
+const WORDS = new Set(["const", "let", "var", "return", "if", "else", "for", "of", "in", "while", "function", "export", "default", "async", "await", "throw", "new", "null", "undefined", "true", "false", "typeof", "try", "catch"]);
+/** Light colour for adapter source: keywords, strings, numbers and comments. Read-only text, so no parser is needed. */
+function tint(code: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d[\d_.]*\b)|([A-Za-z_$][\w$]*)/g;
+  let at = 0;
+  for (const m of code.matchAll(re)) {
+    if (m.index! > at) out.push(code.slice(at, m.index));
+    const [t, comment, str, num, word] = m;
+    const k = out.length;
+    if (comment) out.push(<span key={k} className="italic text-dim">{t}</span>);
+    else if (str) out.push(<span key={k} className="text-ok">{t}</span>);
+    else if (num) out.push(<span key={k} className="text-warn">{t}</span>);
+    else if (word && WORDS.has(word)) out.push(<span key={k} className="text-adapt">{t}</span>);
+    else out.push(t);
+    at = m.index! + t.length;
+  }
+  if (at < code.length) out.push(code.slice(at));
+  return out;
+}
 
 /**
  * An adapter on a line: the block a request goes through between what the rule decided and the plugin
@@ -853,14 +882,13 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
     : [{ side: "request", label: "IN", text: data.whole ?? "", says: "the whole module: its two sides could not be told apart" },
        { side: "response", label: "OUT", text: "", says: "not shown apart" }];
   return (
-    <div className={cx("rounded-xl border bg-panel shadow-sm", failed ? "border-bad" : lit ? "border-accent bg-accent/10" : "border-adapt/70")} title={said}
+    <div className={cx("overflow-visible rounded-2xl border bg-panel shadow-md", failed ? "border-bad" : lit ? "border-accent ring-2 ring-accent/30" : "border-adapt/50")} title={said}
          style={{ width: ADAPTER.width }}>
       <Handle type="target" position={Position.Left} className={cx(PORT, dot)} style={{ left: -7, top: ADAPTER_IN_Y }} />
-      <div className="flex items-center gap-1.5 border-b border-line px-2" style={{ height: ADAPTER.head }}>
-        <ArrowRightLeft size={11} className={cx("shrink-0", failed ? "text-bad" : lit ? "text-accent" : "text-dim")} />
-        <span className="shrink-0 text-[9px] uppercase tracking-wide text-dim">adapter</span>
-        <span className="min-w-0 truncate font-mono text-[12px] font-medium" title={data.use}>{data.name}</span>
-        <span className="shrink-0 text-[9px] text-dim">{data.timeoutMs !== undefined ? `${data.timeoutMs} ms` : ""}</span>
+      <div className="flex items-center gap-1.5 rounded-t-2xl border-b border-adapt/20 bg-adapt/10 px-2.5" style={{ height: ADAPTER.head }}>
+        <ArrowRightLeft size={12} className={cx("shrink-0", failed ? "text-bad" : lit ? "text-accent" : "text-adapt")} />
+        <span className="min-w-0 truncate font-mono text-[12px] font-semibold" title={data.use}>{data.name}</span>
+        {data.timeoutMs !== undefined && <span className="shrink-0 rounded-full bg-line/70 px-1.5 text-[9px] text-dim" title="each side's deadline">{data.timeoutMs} ms</span>}
         {data.state !== undefined && data.state !== "running" && (
           <span className="shrink-0 rounded border border-bad px-1 text-[9px] font-medium text-bad" title={data.error ?? undefined}>{data.state === "off" ? "off" : "did not start"}</span>
         )}
@@ -873,18 +901,19 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
         )}
       </div>
       {areas.map(({ side, label, text: body, says }) => (
-        <div key={side} className="px-2" style={{ paddingTop: ADAPTER.pad }}>
-          <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-dim" style={{ height: ADAPTER.label }} title={says}>
-            <span className={cx("shrink-0 rounded border px-1", side === "request" ? "border-mcp/60 text-mcp" : "border-api/60 text-api")}>{label}</span>
-            <span className="truncate normal-case tracking-normal">{side}()</span>
-            <span className="ml-auto shrink-0 text-[8px] normal-case tracking-normal">{side === "request" ? "sent" : "answered"}</span>
+        <div key={side} className="px-2.5" style={{ paddingTop: ADAPTER.pad }}>
+          <div className="flex items-center gap-1.5 text-[9px] text-dim" style={{ height: ADAPTER.label }} title={says}>
+            <span className={cx("shrink-0 rounded-full px-1.5 font-semibold uppercase leading-[12px] tracking-wide", side === "request" ? "bg-adapt/15 text-adapt" : "bg-line/70")}
+                  style={side === "response" && data.outHue !== undefined ? { color: hue(data.outHue).stroke } : undefined}>{label}</span>
+            <span className="truncate font-mono">{side}()</span>
+            <span className="ml-auto shrink-0">{side === "request" ? "→ the plugin" : "→ the caller"}</span>
           </div>
-          <pre className="m-0 w-full overflow-auto whitespace-pre rounded border border-line bg-bg p-1 font-mono text-[10px] leading-snug"
+          <pre className="nowheel m-0 w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-lg border border-line/60 bg-bg/70 px-2 py-1 font-mono text-[10px] leading-[1.45] [scrollbar-width:thin]"
                style={{ height: ADAPTER.area }}
-               aria-label={`${data.name} ${side}()`}>{body || (split ? `no ${side}() in the file` : data.note ?? "the module could not be read")}</pre>
+               aria-label={`${data.name} ${side}()`}>{body ? tint(tidy(body)) : <span className="italic text-dim">{split ? `no ${side}() in the file` : data.note ?? "the module could not be read"}</span>}</pre>
         </div>
       ))}
-      <div className="truncate px-2 py-0.5 text-[9px] text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
+      <div className="truncate px-2.5 pt-1 text-[9px] italic text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
       <Handle id="out" type="source" position={Position.Right} className={cx(PORT, failed ? "!bg-bad" : lit ? "!bg-accent" : data.outHue !== undefined ? hue(data.outHue).dot : "!bg-dim", "!opacity-100")} style={{ right: -7, top: ADAPTER_OUT_Y }} />
     </div>
   );
