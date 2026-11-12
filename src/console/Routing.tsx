@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ANY, adaptOf, beside as besideLines, directTo, draftView, factsOf, groupRows, linesToPlugin, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, selectMany } from "./editStore.js";
 import { contextMenu } from "./editor.js";
-import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type AdapterBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
+import { ADAPTER, ADAPTER_OUT_Y, HUE, pluginHue, takesWork, VIEWS, type ActionBox, type AdapterBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
@@ -90,6 +90,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   // An adapter stands in a column to the right of the plugin boxes: the plugin the line falls back from
   // hands it the request, and it hands the translated request back to the plugin the line sends to.
   const adaptX = endX + 200 + 44;
+  // The plugin an adapter hands the translated request to is drawn again past the block, so the
+  // picture reads left to right; its box in the plugin column stays for the lines that reach it directly.
+  const adaptToX = adaptX + ADAPTER.width + 48;
 
   // Only what a line ends at is drawn: the models and peers the rules and the redirected names use.
   let y = 0;
@@ -150,7 +153,6 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     const lines = linesToPlugin(d.flows, name);
     // A line's dot sits on the plugin it falls back from; with none before it, on the plugin it sends to.
     const adapted = adapts.filter((a) => (a.from ?? a.plugin) === name);
-    const arriving = adapts.filter((a) => a.plugin === name && a.from !== null && a.from !== name);
     const kind = p?.mcp ? "MCP" : "API";
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
@@ -159,7 +161,6 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         ...(adapted.length
           ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
           : lines.length ? { adaptAny: true } : {}),
-        ...(arriving.length ? { adaptIn: arriving.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) } : {}),
       } satisfies Dest,
     });
     y += 56;
@@ -370,7 +371,14 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
     // to the plugin the line sends to.
     const hue = pluginHue(d.plugins, a.plugin);
     edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.from ?? a.plugin}`, sourceHandle: `to:${a.flow}:${a.step}`, target: box });
-    if (a.from !== null && a.from !== a.plugin) edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: `plugin:${a.plugin}`, targetHandle: `from:${a.flow}:${a.step}` });
+    if (a.from === null || a.from === a.plugin) continue;
+    const to = `adaptTo:${a.flow}:${a.step}:${a.plugin}`;
+    const p = servingKind(a.plugin);
+    nodes.push({
+      id: to, type: "dest", position: placed(to) ?? { x: adaptToX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),
+      data: { title: a.plugin, kind: hue, on, down: p === undefined || p.state !== "running", sub: p === undefined ? "no plugin of this name" : `a plugin · /plugins/${a.plugin}/ · from the adapter` } satisfies Dest,
+    });
+    edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: to });
   }
   return { nodes, edges, rides };
 }
