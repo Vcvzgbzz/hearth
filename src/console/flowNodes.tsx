@@ -844,9 +844,9 @@ function tint(code: string): ReactNode[] {
     const [t, comment, str, num, word] = m;
     const k = out.length;
     if (comment) out.push(<span key={k} className="italic text-dim">{t}</span>);
-    else if (str) out.push(<span key={k} className="text-ok">{t}</span>);
-    else if (num) out.push(<span key={k} className="text-warn">{t}</span>);
-    else if (word && WORDS.has(word)) out.push(<span key={k} className="text-adapt">{t}</span>);
+    else if (str) out.push(<span key={k} className="text-ok/80">{t}</span>);
+    else if (num) out.push(<span key={k} className="text-dim">{t}</span>);
+    else if (word && WORDS.has(word)) out.push(<span key={k} className="text-info">{t}</span>);
     else out.push(t);
     at = m.index! + t.length;
   }
@@ -882,13 +882,14 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
     : [{ side: "request", label: "IN", text: data.whole ?? "", says: "the whole module: its two sides could not be told apart" },
        { side: "response", label: "OUT", text: "", says: "not shown apart" }];
   return (
-    <div className={cx("overflow-visible rounded-2xl border bg-panel shadow-md", failed ? "border-bad" : lit ? "border-accent ring-2 ring-accent/30" : "border-adapt/50")} title={said}
+    <div className={cx("rounded-xl border bg-panel shadow-sm", failed ? "border-bad" : lit ? "border-accent bg-accent/10" : "border-line")} title={said}
          style={{ width: ADAPTER.width }}>
       <Handle type="target" position={Position.Left} className={cx(PORT, dot)} style={{ left: -7, top: ADAPTER_IN_Y }} />
-      <div className="flex items-center gap-1.5 rounded-t-2xl border-b border-adapt/20 bg-adapt/10 px-2.5" style={{ height: ADAPTER.head }}>
+      <div className="flex items-center gap-1.5 border-b border-line px-2.5" style={{ height: ADAPTER.head }}>
         <ArrowRightLeft size={12} className={cx("shrink-0", failed ? "text-bad" : lit ? "text-accent" : "text-adapt")} />
-        <span className="min-w-0 truncate font-mono text-[12px] font-semibold" title={data.use}>{data.name}</span>
-        {data.timeoutMs !== undefined && <span className="shrink-0 rounded-full bg-line/70 px-1.5 text-[9px] text-dim" title="each side's deadline">{data.timeoutMs} ms</span>}
+        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-adapt">adapter</span>
+        <span className="min-w-0 truncate font-mono text-[12px] font-medium" title={data.use}>{data.name}</span>
+        {data.timeoutMs !== undefined && <span className="shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title="each side's deadline">{data.timeoutMs} ms</span>}
         {data.state !== undefined && data.state !== "running" && (
           <span className="shrink-0 rounded border border-bad px-1 text-[9px] font-medium text-bad" title={data.error ?? undefined}>{data.state === "off" ? "off" : "did not start"}</span>
         )}
@@ -903,17 +904,16 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
       {areas.map(({ side, label, text: body, says }) => (
         <div key={side} className="px-2.5" style={{ paddingTop: ADAPTER.pad }}>
           <div className="flex items-center gap-1.5 text-[9px] text-dim" style={{ height: ADAPTER.label }} title={says}>
-            <span className={cx("shrink-0 rounded-full px-1.5 font-semibold uppercase leading-[12px] tracking-wide", side === "request" ? "bg-adapt/15 text-adapt" : "bg-line/70")}
-                  style={side === "response" && data.outHue !== undefined ? { color: hue(data.outHue).stroke } : undefined}>{label}</span>
+            <span className="shrink-0 rounded border border-line px-1 uppercase leading-[12px]">{label}</span>
             <span className="truncate font-mono">{side}()</span>
             <span className="ml-auto shrink-0">{side === "request" ? "→ the plugin" : "→ the caller"}</span>
           </div>
-          <pre className="nowheel m-0 w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-lg border border-line/60 bg-bg/70 px-2 py-1 font-mono text-[10px] leading-[1.45] [scrollbar-width:thin]"
+          <pre className="nowheel m-0 w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-line bg-bg px-2 py-1 font-mono text-[10px] leading-[1.45] [scrollbar-width:thin]"
                style={{ height: ADAPTER.area }}
                aria-label={`${data.name} ${side}()`}>{body ? tint(tidy(body)) : <span className="italic text-dim">{split ? `no ${side}() in the file` : data.note ?? "the module could not be read"}</span>}</pre>
         </div>
       ))}
-      <div className="truncate px-2.5 pt-1 text-[9px] italic text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
+      <div className="truncate px-2.5 pt-1 text-[9px] text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
       <Handle id="out" type="source" position={Position.Right} className={cx(PORT, failed ? "!bg-bad" : lit ? "!bg-accent" : data.outHue !== undefined ? hue(data.outHue).dot : "!bg-dim", "!opacity-100")} style={{ right: -7, top: ADAPTER_OUT_Y }} />
     </div>
   );
