@@ -5,7 +5,7 @@
 import { pipeline } from "node:stream/promises";
 
 import { Refusal } from "../errors.js";
-import { pluginAuth } from "../config/plugins.js";
+import { pluginAuth, pluginKinds } from "../config/plugins.js";
 import { ConfigError, resolveSecret } from "../config/read.js";
 import { fail, forwardable, headersOf, json } from "../wire/http.js";
 import { checkHttp } from "../plugins/mcp.js";
@@ -49,18 +49,32 @@ export function pluginRoutes(ctx: RouteContext) {
   async function routePluginServes(c: Call): Promise<void> {
     const { req, res, url } = c;
     const m = /^\/plugins\/([^/]+)(\/.*)?$/.exec(c.path);
-    // The caller's router decides, as it does for a model: the request is asked of it as MCP:<name> or API:<name>.
-    // With no rule for MCP or API, its flow for every other name decides: one that runs a name as itself lets
-    // plugins through, and one that refuses refuses them until a rule for MCP or API is added. A name that is no
-    // plugin's may be a router's own name for one, so it is asked as either type, and the plugin a step names answers.
-    const asked = m?.[1] ?? "";
+    // The caller's router decides, as it does for a model. A plugin's own name is asked of it as the type that
+    // plugin serves; a name that is no plugin's may be the router's own name for one, so it goes as written. With
+    // no rule for a type, the router's flow for every other name decides: running a name as itself lets plugins
+    // through, and refusing refuses them until a rule for that type is added. The plugin a step names answers.
+    let asked = m?.[1] ?? "";
+    try { asked = decodeURIComponent(asked); } catch { /* left as sent */ }
+    // A name is one path segment: one that decodes to more than one names no plugin, and goes no further.
+    if (asked.includes("/")) {
+      json(res, 404, { error: "a plugin's name is one path segment" });
+      return;
+    }
     const kind = plugins.kindOf(asked);
     const world = { ...worlds.worldFor(c.caller, Object.keys(cfg.scheduler.lanes)[0]!, undefined, worlds.rulesFor(c.caller), headersOf(req)), plugin: asked };
     let name: string | null = null;
     let refused: string | null = null;
-    for (const as of kind !== null ? [kind] : (["API", "MCP"] as const)) {
-      const r = resolve(`${as}:${asked}`, world);
+    // A plugin's own name is asked as the one type that plugin serves. A plain name no plugin has is asked as
+    // each type a plugin on this node serves, since a rule may give that name to a plugin of any of them. A name
+    // that is type:variant already says its type, so it goes as written and the router reads that type itself.
+    const typed = kind === null && asked.includes(":");
+    const tries = kind !== null ? [{ as: kind, named: `${kind}:${asked}` }]
+      : typed ? [{ as: undefined, named: asked }]
+      : pluginKinds(cfg.plugins).map((t) => ({ as: t, named: `${t}:${asked}` }));
+    for (const { as, named } of tries) {
+      const r = resolve(named, as !== undefined ? { ...world, kind: as } : world);
       if (r.plugin !== undefined && plugins.kindOf(r.plugin) !== null) { name = r.plugin; break; }
+      if (r.target === "local") { name = asked; break; }
       if (r.plugin === undefined) refused ??= r.reason;
     }
     if (name === null) {

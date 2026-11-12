@@ -33,7 +33,7 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   answer cache (`answers.ts`)
 - `src/config/`: `config.ts` (`HearthConfig`, `parseConfig`, `loadConfig`), and beside it one
   file per section, each with its types and the code that reads them (`backends.ts`, `flows.ts`,
-  `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`; `read.ts` is the field readers
+  `models.ts`, `plugins.ts`, `keys.ts`, `peers.ts`, `canary.ts`, `kinds.ts`, `kind.ts` (a plugin's type: the one place it is decided); `read.ts` is the field readers
   and `ConfigError` they share); `fields.ts` (the settings table the parser and the console both read),
   `configfile.ts` (live edits to hearth.yaml), `derived.ts` (a value derived from the live config, rebuilt when
   a key it reads is replaced), `migrate.ts`, `yamlq.ts`

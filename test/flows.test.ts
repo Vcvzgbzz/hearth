@@ -48,8 +48,12 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const refuse = (flows: Record<string, unknown>, re: RegExp) => assert.throws(() => parseConfig(base(flows)), re);
   const one = (steps: unknown[], inputs = ["auto"]) => ({ a: { inputs, steps } });
   refuse(one([]), /steps must be a list of steps/);
-  refuse(one([{ when: { images: true }, to: "eyes" }]), /must end with a step that always applies/);
-  refuse(one([{ to: { peer: "friend" } }]), /must end with a step that always applies/);
+  // A flow need not end with a step that always applies: it passes on what its steps do not take.
+  parseConfig(base(one([{ when: { images: true }, to: "eyes" }])));
+  parseConfig(base(one([{ to: { peer: "friend" } }])));
+  // The flow for every other name is the last place a request can go, so it still must decide everything.
+  refuse(one([{ when: { images: true }, to: "eyes" }], ["*"]), /must end with a step that always applies/);
+  refuse(one([{ to: { peer: "friend" } }], ["*"]), /must end with a step that always applies/);
   refuse(one([{ to: { refuse: "no" } }, { to: "big" }]), /steps\[0\] has no `when`, so the steps after it can never be reached/);
   // A model here can fail before it answers, so a line that only names one may stand before the lines it falls back to.
   parseConfig(base(one([{ to: "small" }, { to: "big" }])));
@@ -62,7 +66,10 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   refuse(one([{ to: { peer: "friend", flow: "a" } }]), /must say one thing/);
   refuse(one([{ to: { fastest: ["big"] } }]), /fastest must list at least two/);
   refuse(one([{ when: { warm: true }, to: { flow: "a" } }, { to: "big" }]), /tests warm, free, queuedUnder, ready or idle/);
-  refuse({ a: { inputs: ["auto"], steps: [{ to: "big" }] }, b: { inputs: ["auto"], steps: [{ to: "big" }] } }, /names "auto", which already enters flows\.a/);
+  // Several flows may take the same type: they are tried in file order.
+  assert.doesNotThrow(() => parseConfig(base({ a: { inputs: ["auto"], steps: [{ to: "big" }] }, b: { inputs: ["auto"], steps: [{ to: "big" }] } })));
+  // The flow for every other name is one and only one.
+  refuse({ a: { inputs: ["*"], steps: [{ to: "big" }] }, b: { inputs: ["*"], steps: [{ to: "big" }] } }, /which is the flow for every other name/);
   refuse({ a: { inputs: [], steps: [{ to: { flow: "b" } }] }, b: { inputs: [], steps: [{ to: { flow: "a" } }] } }, /leads back to itself: a → b → a/);
   // A peer may be passed over when it is down, so a step that only names one needs no condition.
   assert.doesNotThrow(() => parseConfig(base(one([{ to: { peer: "friend" } }, { to: { refuse: "only on a peer" } }]))));
@@ -580,6 +587,8 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   const to = (name: string) => { const r = resolve(name, world); return r.unlisted ? `no: ${r.reason}` : r.model; };
   assert.deepEqual([to("LLM"), to("LLM:fast"), to("LLM:tiny"), to("LLM:sharp")], ["big", "small", "small", "eyes"]);
   assert.deepEqual(variantsOf(cfg.flows, "LLM"), ["fast", "tiny", "sharp", "deep"], "a rule handed on to adds the variants it tests");
+  const ghost = parseConfig(base({ ...flows, ghost: { inputs: ["LLM"], off: true, steps: [{ when: { variant: "ghost" }, to: "small" }, { to: "big" }] } }));
+  assert.ok(!variantsOf(ghost.flows, "LLM").includes("ghost"), "a rule that is switched off offers none of its variants");
   assert.equal(to("LLM:deep"), "big", "a variant only a later rule tests is still a variant, decided by the lines it reaches");
   assert.equal(to("LLM:nope"), 'no: "LLM:nope" is not offered here: LLM comes as LLM:fast, LLM:tiny, LLM:sharp, LLM:deep');
   assert.equal(to("odd:name"), "small", "a name a flow takes as written is itself, colon and all");
@@ -624,7 +633,7 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   };
   const cfg = parseConfig(shape(types));
   assert.deepEqual(cfg.flows["ImageGen"]!.takes, ["/upstream/{model}/generate"], "one path may be written bare");
-  assert.throws(() => parseConfig(shape({ x: { takes: ["/nowhere"], inputs: ["x"], steps: [{ to: "vid" }] } })), /takes names "\/nowhere", which no backend declares under routes/);
+  assert.throws(() => parseConfig(shape({ x: { takes: ["/nowhere"], inputs: ["x"], steps: [{ to: "vid" }] } })), /neither a path a backend declares/);
   assert.throws(() => parseConfig(shape({ x: { takes: ["/generate"], inputs: ["x"], steps: [{ when: { images: true }, to: "vid" }, { to: "vid" }] } })), /steps\[0\]\.when\.images reads a chat request/);
 
   const lines: Record<string, unknown>[] = [];

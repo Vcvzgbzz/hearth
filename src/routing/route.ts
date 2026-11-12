@@ -58,6 +58,8 @@ export interface World {
   pinned?: (flow: string) => FlowEnd | undefined;
   /** The plugin a request to /plugins/<name>/* is for: it runs as asked only there, and a step that names a model is passed over. */
   plugin?: string;
+  /** The type this request is asked as, where its name does not carry it: a request to /plugins/<name>/* goes as the type its plugin serves. */
+  kind?: string;
 }
 
 /** Where a request ended up, and what the steps it passed through put on it. */
@@ -123,13 +125,19 @@ export function variantsOf(flows: Readonly<Record<string, Flow>>, type: string):
       if ("flow" in s.to) walk(s.to.flow);
     }
   };
-  walk(entryOf(flows, type));
+  for (const name of Object.keys(flows)) if (!flows[name]!.off && flows[name]!.inputs.includes(type)) walk(name);
   return [...out];
 }
 
 /** The flow a request for `asked` enters, if any. One that is switched off takes nothing. */
 export function entryOf(flows: Readonly<Record<string, Flow>>, asked: string): string | undefined {
   return Object.keys(flows).find((name) => !flows[name]!.off && flows[name]!.inputs.includes(asked));
+}
+
+/** Does the flow end with a step that always applies, so every request that reaches it is decided? */
+function hasOtherwise(flow: Flow): boolean {
+  const last = flow.steps[flow.steps.length - 1];
+  return last !== undefined && last.when === null;
 }
 
 /** Does any step a request for `asked` could reach send work to a peer? Peer state is only worth refreshing then. */
@@ -142,7 +150,8 @@ export function mayLeave(cfg: HearthConfig, asked: string): boolean {
     return flows[name]!.steps.some(({ to, when }) =>
       when?.down !== undefined || "peer" in to || ("fastest" in to && to.fastest.some((e) => "peer" in e)) || ("flow" in to && walk(to.flow)));
   };
-  return walk(entryOf(flows, typeOf(flows, asked).type) ?? entryOf(flows, ANY));
+  const type = typeOf(flows, asked).type;
+  return Object.keys(flows).some((n) => !flows[n]!.off && flows[n]!.inputs.includes(type) && walk(n)) || walk(entryOf(flows, ANY));
 }
 
 /** A place a step can send work, resolved against what is reachable right now. */
@@ -261,21 +270,51 @@ export function resolve(named: string, w: World): Resolution {
       && (c.queuedUnder === undefined || l.queued < c.queuedUnder);
   };
 
-  // A name no flow takes goes to the flow for every other name, when there is one.
-  let name = entryOf(flows, asked) ?? entryOf(flows, ANY);
-  if (name === undefined) {
-    const types = Object.values(flows).filter((f) => !f.off).flatMap((f) => f.inputs);
-    return { ...done(null, `"${asked}" is not offered here${types.length ? ` (${types.join(", ")})` : ""}`), unlisted: true };
-  }
   // A variant nothing tests would be answered as the plain type, which is not what was asked for. A plugin
   // request's variant is the plugin it names, which the steps decide on whether or not one tests it.
-  if (variant !== null && w.plugin === undefined && !variantsOf(flows, asked).includes(variant)) {
+  if (variant !== null && w.plugin === undefined && !variantsOf(flows, asked).includes(variant as string)) {
     const known = variantsOf(flows, asked);
     return { ...done(null, `"${named}" is not offered here: ${asked} ${known.length ? `comes as ${known.map((v) => `${asked}:${v}`).join(", ")}` : "has no variants"}`), unlisted: true };
   }
-  // A flow cannot lead back to itself: the file is refused if one would.
-  walking: while (name !== undefined) {
+
+  // Every flow that takes the type is tried, in file order. One whose steps match nothing and has no
+  // final unconditional step falls through to the next. The flow for every other name is last.
+  // A request that is not chat has one type: the path it arrived on, or the type a /plugins/<name>/* request
+  // goes as. A flow that names the types it answers is passed over for any other; a chat request is never
+  // passed over by what a flow takes, which names what it answers beside chat.
+  const requestType = w.kind ?? w.path;
+  const candidates = Object.keys(flows).filter((n) => {
+    const f = flows[n]!;
+    if (f.off || !f.inputs.includes(asked)) return false;
+    if (f.takes !== undefined && requestType !== undefined && !f.takes.includes(requestType)) return false;
+    return true;
+  });
+  const anyFlow = entryOf(flows, ANY);
+  if (candidates.length === 0 && anyFlow === undefined) {
+    const types = Object.values(flows).filter((f) => !f.off).flatMap((f) => f.inputs);
+    return { ...done(null, `"${asked}" is not offered here${types.length ? ` (${types.join(", ")})` : ""}`), unlisted: true };
+  }
+  // Try each flow that takes the type; one that cannot decide passes the request on.
+  for (const name of candidates) {
     const flow: Flow = flows[name]!;
+    // A flow with a final unconditional step decides everything that reaches it.
+    // A flow without one passes on what its steps do not match.
+    const before = via.length;
+    const r = runFlow(name, flow);
+    if (r !== undefined) return r;
+    via.length = before;
+  }
+  // No flow that takes the type could decide; the flow for every other name is the last place.
+  if (anyFlow !== undefined) {
+    const before = via.length;
+    const r = runFlow(anyFlow, flows[anyFlow]!);
+    if (r !== undefined) return r;
+    via.length = before;
+  }
+  return done(null, "no flow answered");
+
+  /** Try a flow's steps; return a resolution if one step matches, otherwise undefined (fall through). */
+  function runFlow(name: string, flow: Flow): Resolution | undefined {
     via.push(name);
     // A conversation this flow has already placed goes back there while that place can take it.
     const pin = w.pinned?.(name);
@@ -298,9 +337,9 @@ export function resolve(named: string, w: World): Resolution {
       const here = `${name} step ${i + 1}`;
       if (s.max !== undefined && (w.inFlight?.(name, i) ?? 0) >= s.max) { passed.push(`${here} is at its limit of ${s.max}`); continue; }
       if ("refuse" in s.to) { took(name, i, s); return done(null, s.to.refuse); }
-      // A plugin request goes to a plugin, and a model request to a model: a step for the other kind is passed over.
+      // A request for a plugin goes to a plugin, and one for a model to a model: a step that names the other is passed over.
       if ("plugin" in s.to || (w.plugin !== undefined && "asked" in s.to)) {
-        if (w.plugin === undefined) { passed.push(`${here} sends to the plugin ${(s.to as { plugin: string }).plugin}, which takes no model requests`); continue; }
+        if (w.plugin === undefined) { passed.push(`${here} sends to the plugin ${(s.to as { plugin: string }).plugin}, and this request is for a model`); continue; }
         const to = "plugin" in s.to ? s.to.plugin : w.plugin;
         took(name, i, s);
         return done({ model: to, plugin: to }, here);
@@ -316,14 +355,20 @@ export function resolve(named: string, w: World): Resolution {
       if (s.lane !== null) lane = s.lane;
       if (s.params !== null) Object.assign(params, s.params);
       if (r === null) {
-        name = (s.to as { flow: string }).flow;
-        continue walking;
+        // Hand off to the named flow: that flow's steps decide, not the rest of this one's.
+        const next = (s.to as { flow: string }).flow;
+        const sub = runFlow(next, flows[next]!);
+        if (sub !== undefined) return sub;
+        continue;
       }
       return done(r, here);
     }
-    return done(null, `no step of ${name} could take it`);
+    // The steps did not decide. A flow with a final unconditional step still had no step match: refuse.
+    if (hasOtherwise(flow)) {
+      return done(null, `no step of ${name} could take it`);
+    }
+    return undefined;
   }
-  return done(null, "no flow answered");
 }
 
 /** Where a request for `model` runs, on the load of the backend that serves it here. */
