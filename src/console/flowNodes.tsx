@@ -714,7 +714,9 @@ export type Dest = { /** The hardware its backend runs on, to tell two copies of
   /** On a plugin's box: one right-hand dot for each line that names an adapter, labelled with the line. */
   adaptLines?: { flow: string; step: number; label: string; on?: boolean }[];
   /** On a plugin's box with no adapter on any line: one dot to put an adapter in front of a line that sends here. */
-  adaptAny?: boolean };
+  adaptAny?: boolean;
+  /** On the plugin a line's adapter hands its translated request to: one right-hand dot for each such line. */
+  adaptIn?: { flow: string; step: number; label: string; on?: boolean }[] };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -739,6 +741,14 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
           <span className="shrink-0 rounded border border-line px-1 uppercase">{l.label}</span>
           <span className="min-w-0 flex-1 truncate" title={`${l.flow} line ${l.step + 1} hands this plugin's request to an adapter`}>{l.flow} · {l.step + 1}</span>
           <Handle type="source" id={`to:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-dim")} style={{ right: -6, top: "50%" }} />
+        </div>
+      ))}
+      {(data.adaptIn ?? []).map((l) => (
+        // Where an adapter's translated request arrives: this plugin answers the line.
+        <div key={`in:${l.flow}:${l.step}`} className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim">
+          <span className="shrink-0 rounded border border-line px-1 uppercase">{l.label}</span>
+          <span className="min-w-0 flex-1 truncate" title={`${l.flow} line ${l.step + 1} reaches this plugin through an adapter`}>from the adapter</span>
+          <Handle type="target" id={`from:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-dim")} style={{ right: -6, top: "50%" }} />
         </div>
       ))}
       {data.adaptAny === true && (
@@ -874,7 +884,8 @@ export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<Ad
         </div>
       ))}
       <div className="truncate px-2 py-0.5 text-[9px] text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
-      <Handle id="out" type="source" position={Position.Right} className={cx(PORT, dot)} style={{ right: -7, top: ADAPTER_OUT_Y }} />
+      {/* The translated request goes back to its plugin's box, which sits left of the adapter column. */}
+      <Handle id="out" type="source" position={Position.Left} className={cx(PORT, dot)} style={{ left: -7, top: ADAPTER_OUT_Y }} />
     </div>
   );
 });

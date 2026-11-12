@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ANY, adaptOf, beside as besideLines, directTo, draftView, factsOf, groupRows, linesToPlugin, lineTrouble, list, nodeOf, ordered, orderOf, peerNode, placedOn, refusal, restOf, spread, toOf, unchecked, type End, type Facts, type To } from "./draft.js";
 import { connect, editSelect, pick, place, useEdit, type EditSel, type Tried, selectMany } from "./editStore.js";
 import { contextMenu } from "./editor.js";
-import { ADAPTER, ADAPTER_OUT_Y, HUE, pluginHue, takesWork, VIEWS, type ActionBox, type AdapterBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type ServiceTag, type SwitchBox } from "./flowNodes.js";
+import { HUE, pluginHue, takesWork, VIEWS, type ActionBox, type AdapterBox, type Dest, type FastestBox, type Hub, type OrderBox, type RefuseBox, type SwitchBox } from "./flowNodes.js";
 import { arrive, edgeTypes, held, type Line } from "./Topology.js";
 import type { UiData } from "../observe/uidata.js";
 import { useStore } from "./store.js";
@@ -87,10 +87,9 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   let x = 330;
   for (let col = 0; col < columns; col++) { colX.push(x); x += RULE.width + (beside(col) ? 280 : 0) + 70; }
   const endX = columns ? x : 420;
-  // An adapter stands in a column to the right of the plugin boxes, and the service it ends at to the
-  // right of that: the picture reads rule → plugin box → adapter → service, every edge left to right.
+  // An adapter stands in a column to the right of the plugin boxes: the plugin the line falls back from
+  // hands it the request, and it hands the translated request back to the plugin the line sends to.
   const adaptX = endX + 200 + 44;
-  const tagX = adaptX + ADAPTER.width + 36;
 
   // Only what a line ends at is drawn: the models and peers the rules and the redirected names use.
   let y = 0;
@@ -132,13 +131,26 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   const servingKind = (p: string) => (d.plugins?.plugins ?? []).find((x) => x.name === p);
   /** A line of a rule the request was tried or replayed down: the blocks and dots on it light. */
   const wentDown = (flow: string, step: number) => tried !== null && tried.path.some((p) => p.flow === flow && p.step === step);
-  /** Every adapter block to draw, before the column is laid out: which plugin box it stands beside. */
-  const adapts: { plugin: string | null; flow: string; step: number; adapt: string; ruleY: number }[] = [];
-  for (const name of new Set(flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "plugin" ? [t.plugin] : []; })))) {
+  /** Every adapter block to draw: the plugin its line sends to, and the plugin of the line it falls back from. */
+  const adapts: { plugin: string | null; from: string | null; flow: string; step: number; adapt: string; ruleY: number }[] = [];
+  /** The plugin of the nearest earlier line of the same rule with the same condition: what a failed request was asked of. */
+  const fellFrom = (flow: string, step: number): string | null => {
+    const steps = flows.find(([n]) => n === flow)?.[1].steps ?? [];
+    const when = JSON.stringify(steps[step]?.when ?? null);
+    for (let k = step - 1; k >= 0; k--) {
+      const t = toOf(steps[k]!.to);
+      if (t.kind === "plugin" && JSON.stringify(steps[k]!.when ?? null) === when) return t.plugin;
+    }
+    return null;
+  };
+  const pluginNames = [...new Set(flows.flatMap(([, f]) => f.steps.flatMap((s) => { const t = toOf(s.to); return t.kind === "plugin" ? [t.plugin] : []; })))];
+  for (const name of pluginNames) for (const l of linesToPlugin(d.flows, name)) if (l.adapt !== undefined) adapts.push({ plugin: name, from: fellFrom(l.flow, l.step), flow: l.flow, step: l.step, adapt: l.adapt, ruleY: 0 });
+  for (const name of pluginNames) {
     const p = servingKind(name);
     const lines = linesToPlugin(d.flows, name);
-    const adapted = lines.flatMap((l) => (l.adapt === undefined ? [] : [{ ...l, adapt: l.adapt }]));
-    for (const l of adapted) adapts.push({ plugin: name, flow: l.flow, step: l.step, adapt: l.adapt, ruleY: 0 });
+    // A line's dot sits on the plugin it falls back from; with none before it, on the plugin it sends to.
+    const adapted = adapts.filter((a) => (a.from ?? a.plugin) === name);
+    const arriving = adapts.filter((a) => a.plugin === name && a.from !== null && a.from !== name);
     const kind = p?.mcp ? "MCP" : "API";
     nodes.push({
       id: `plugin:${name}`, type: "dest", position: { x: endX, y },
@@ -147,6 +159,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         ...(adapted.length
           ? { adaptLines: adapted.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) }
           : lines.length ? { adaptAny: true } : {}),
+        ...(arriving.length ? { adaptIn: arriving.map((l) => ({ flow: l.flow, step: l.step, label: `${kind} · ${l.step + 1}`, on: wentDown(l.flow, l.step) })) } : {}),
       } satisfies Dest,
     });
     y += 56;
@@ -284,7 +297,7 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
         // A plugin's line was collected with its plugin box; one that runs the plugin a request asks
         // for has no box to stand beside, so it stands level with its own line.
         const adaptName = adaptOf(t);
-        if (adaptName !== undefined && t.kind === "asked") adapts.push({ plugin: null, flow: name, step: i, adapt: adaptName, ruleY: fy + RULE.head + i * RULE.row + groupRows(f.steps, i) + 4 });
+        if (adaptName !== undefined && t.kind === "asked") adapts.push({ plugin: null, from: null, flow: name, step: i, adapt: adaptName, ruleY: fy + RULE.head + i * RULE.row + groupRows(f.steps, i) + 4 });
         // What a line sets off is a dashed line of its own: it is beside where the request goes, not instead of it.
         for (const a of list(s.do)) if (d.actions?.[a]) edges.push({ ...wire(`e:${id}:${i}:do:${a}`, lit && tried !== null, "action", { ghost: true }), source: id, sourceHandle: `step-${i}`, target: `action:${a}` });
       });
@@ -336,7 +349,8 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
   for (const a of adapts) {
     const box = `adapt:${a.flow}:${a.step}:${a.adapt}`;
     const running = adapters.find((x) => x.name === a.adapt);
-    const position = placed(box) ?? { x: adaptX, y: a.plugin === null ? a.ruleY : where.get(`plugin:${a.plugin}`)!.y };
+    const beside = a.from ?? a.plugin;
+    const position = placed(box) ?? { x: adaptX, y: beside === null ? a.ruleY : where.get(`plugin:${beside}`)?.y ?? a.ruleY };
     const on = wentDown(a.flow, a.step);
     nodes.push({
       id: box, type: "adapt", position, zIndex: 1000, ...(edit ? { draggable: true } : {}),
@@ -352,16 +366,11 @@ function layout(d: UiData, sel: EditSel, edit?: Editing) {
       } satisfies AdapterBox,
     });
     if (a.plugin === null) continue;
-    // The line's request comes from the plugin box's dot, and the block's answer goes on to the service.
+    // The request comes from the dot on the plugin the line falls back from, and goes on, translated,
+    // to the plugin the line sends to.
     const hue = pluginHue(d.plugins, a.plugin);
-    edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.plugin}`, sourceHandle: `to:${a.flow}:${a.step}`, target: box });
-    const tag = `tag:${a.flow}:${a.step}:${a.plugin}`;
-    const p = servingKind(a.plugin);
-    nodes.push({
-      id: tag, type: "tag", position: { x: tagX, y: position.y + ADAPTER_OUT_Y - 20 }, zIndex: 1000, ...(edit ? { draggable: true } : {}),
-      data: { title: a.plugin, sub: p === undefined ? "no plugin of this name" : p.serves ?? (p.state === "off" ? "off: hearth started with --no-plugins" : "a plugin with no API of its own"), on } satisfies ServiceTag,
-    });
-    edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: tag });
+    edges.push({ ...wire(`e:${box}:in`, on, hue), source: `plugin:${a.from ?? a.plugin}`, sourceHandle: `to:${a.flow}:${a.step}`, target: box });
+    if (a.from !== null && a.from !== a.plugin) edges.push({ ...wire(`e:${box}:out`, on, hue), source: box, sourceHandle: "out", target: `plugin:${a.plugin}`, targetHandle: `from:${a.flow}:${a.step}` });
   }
   return { nodes, edges, rides };
 }
