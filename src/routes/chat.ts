@@ -13,7 +13,7 @@ import type { HearthConfig } from "../config/config.js";
 import { callerDecls, flowsFor, routerDecls } from "../config/flows.js";
 import { ConfigError } from "../config/read.js";
 import { emulatedRequest, relayEmulated } from "../wire/emulate.js";
-import { KEY_REFUSED, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../wire/http.js";
+import { KEY_REFUSED, deliveredWhole, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../wire/http.js";
 import { MessagesResponse, chatOf } from "../wire/messages.js";
 import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins/plugins.js";
 import { type Timing, type Traced, firstByte, notRun } from "../observe/requestlog.js";
@@ -728,7 +728,7 @@ export function chatRoutes(ctx: RouteContext) {
 
     const ctrl = new AbortController();
     res.on("close", () => {
-      if (!res.writableEnded) ctrl.abort();
+      if (!res.writableEnded && !deliveredWhole(res)) ctrl.abort();
     });
 
     if (fromPeer === null) {
