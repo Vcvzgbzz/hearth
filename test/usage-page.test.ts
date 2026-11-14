@@ -21,6 +21,14 @@ assert.equal(models[0]!.cached, 4);
 // cost: cached input at the cached price, the rest at the input price
 assert.equal(costOf("m2", { requests: 1, failed: 0, in: 10, out: 5, cached: 4 }, prices), (6 * 10 + 4 * 1 + 5 * 10) / 1e6);
 assert.equal(costOf("none", { requests: 1, failed: 0, in: 10, out: 5 }, prices), 0);
+// input written to the cache at the write price; without one, at the input price
+const writes = { m3: { in: 10, out: 10, cached: 1, cacheWrite: 20 } };
+assert.equal(costOf("m3", { requests: 1, failed: 0, in: 10, out: 5, cached: 4, written: 3 }, writes), (3 * 10 + 4 * 1 + 3 * 20 + 5 * 10) / 1e6);
+assert.equal(costOf("m2", { requests: 1, failed: 0, in: 10, out: 5, cached: 4, written: 3 }, prices), (6 * 10 + 4 * 1 + 5 * 10) / 1e6);
+// a count that says more was written than there was input is held to the input
+assert.equal(costOf("m3", { requests: 1, failed: 0, in: 10, out: 0, cached: 4, written: 50 }, writes), (4 * 1 + 6 * 20) / 1e6);
+const withWrites: UsageSnapshot = { "2026-01-01": { "key:a": { m3: { requests: 1, failed: 0, in: 10, out: 5, written: 3 } } }, "2026-01-02": { "key:a": { m3: { requests: 1, failed: 0, in: 10, out: 5, written: 2 } } } };
+assert.equal(totalsBy(withWrites, writes, "model")[0]!.written, 5, "writes are summed across days");
 
 // stacking: the named parts plus others equal the day's total
 const days = ["2026-01-01", "2026-01-02", "2026-01-03"];

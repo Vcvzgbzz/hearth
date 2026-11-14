@@ -61,6 +61,12 @@ off a peer, by a header, a caller or a lane.
   provider that reports the count on its last event of text instead sends no
   extra event, and the caller is sent that one as it came. Per-key usage and
   `tokensPerDay` then count what the provider billed, not an estimate.
+- Where the answer's usage says how much input was read from the provider's
+  prompt cache (`cached_tokens`) and how much was written to it
+  (`cache_write_tokens`), each is counted apart and priced at the model's
+  `price.cached` and `price.cacheWrite`. A provider that charges more for a
+  write than for plain input usually prices it by how long the entry is kept:
+  set `cacheWrite` at the rate for the lifetime your requests ask for.
 
 The API has to be OpenAI-shaped, or Anthropic's (below). One with another
 format of its own is not reached this way. Where a provider offers an OpenAI-compatible layer beside a native
@@ -107,13 +113,20 @@ backends:
   One sent later stays where it stands, as text in a user turn: moved to the
   front it would change the start of the cached prefix, and every turn after
   it would be paid for in full again.
-- `usage.prompt_tokens` counts all input, cached or not, and
+- `usage.prompt_tokens` counts all input, cached or not;
   `usage.prompt_tokens_details.cached_tokens` says how much was read from the
-  cache. Per-key usage counts the same totals.
-- A cache write is counted, and priced, as plain input. The provider charges
-  more for one, and more again with `promptCacheTtl: 1h`, so the spend shown
-  for a model with a `price`, and what `limits.dollarsPerDay` counts, is
-  somewhat below the provider's bill.
+  cache, and `cache_write_tokens` how much was written to it, where any was.
+  Per-key usage counts the same totals.
+- The provider charges more for a cache write than for plain input, and more
+  again with `promptCacheTtl: 1h`. Give the model's `price` a `cacheWrite` at
+  the rate for the lifetime you set, and the spend shown, and what
+  `limits.dollarsPerDay` counts, prices writes as such; without one they are
+  priced as plain input, and the spend is somewhat below the provider's bill:
+
+  ```yaml
+  models:
+    big: { backend: provider, as: their-model-id, price: { in: 4, out: 20, cached: 0.4, cacheWrite: 8 } }
+  ```
 - What is carried across: system and developer messages, text and images,
   tools, tool calls and their results, `tool_choice`, `max_tokens`
   (4096 when the request names none: this API requires one), `temperature`,

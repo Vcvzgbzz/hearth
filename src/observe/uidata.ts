@@ -225,6 +225,8 @@ export interface RequestTrace {
   tokensIn?: number;
   tokensOut?: number;
   tokensCached?: number;
+  /** How much of `tokensIn` was written to a prompt cache. */
+  tokensWritten?: number;
   tokensEstimated?: true;
   /** The step that decided in each flow it passed through; empty when no rule took it. */
   path: { flow: string; step: number }[];
@@ -327,7 +329,7 @@ export interface Canary {
 }
 
 /** Requests and tokens over some days. */
-export interface Used { requests: number; failed: number; in: number; out: number; /** How much of `in` was read from a prompt cache. */ cached?: number; /** Dollars, at the prices the models carry now. */ cost?: number }
+export interface Used { requests: number; failed: number; in: number; out: number; /** How much of `in` was read from a prompt cache. */ cached?: number; /** How much of `in` was written to one. */ written?: number; /** Dollars, at the prices the models carry now. */ cost?: number }
 
 /** The limits one lent model is held to. */
 export interface ModelLimits { tokensPerDay: number; maxConcurrent: number; rateLimit: number }
