@@ -61,6 +61,12 @@ off a peer, by a header, a caller or a lane.
   provider that reports the count on its last event of text instead sends no
   extra event, and the caller is sent that one as it came. Per-key usage and
   `tokensPerDay` then count what the provider billed, not an estimate.
+- Where the answer's usage says how much input was read from the provider's
+  prompt cache (`cached_tokens`) and how much was written to it
+  (`cache_write_tokens`), each is counted apart and priced at the model's
+  `price.cached` and `price.cacheWrite`. A provider that charges more for a
+  write than for plain input usually prices it by how long the entry is kept:
+  set `cacheWrite` at the rate for the lifetime your requests ask for.
 
 The API has to be OpenAI-shaped, or Anthropic's (below). One with another
 format of its own is not reached this way. Where a provider offers an OpenAI-compatible layer beside a native
