@@ -124,12 +124,19 @@ export function toAnthropic(body: Doc, cache: boolean, ttl: CacheTtl = "5m"): Do
 
 const FINISH: Record<string, string> = { end_turn: "stop", stop_sequence: "stop", max_tokens: "length", tool_use: "tool_calls" };
 
-/** What a Messages answer cost, as a chat completion's `usage`: input counts what was read from and written to the cache too. */
+/**
+ * What a Messages answer cost, as a chat completion's `usage`: input counts what was read from and
+ * written to the cache too, and the details say how much of each, since each is billed at its own price.
+ */
 function usageOf(u: Doc): Doc {
   const n = (k: string): number => (typeof u[k] === "number" ? (u[k] as number) : 0);
   const read = n("cache_read_input_tokens");
-  const input = n("input_tokens") + read + n("cache_creation_input_tokens");
-  return { prompt_tokens: input, completion_tokens: n("output_tokens"), total_tokens: input + n("output_tokens"), prompt_tokens_details: { cached_tokens: read } };
+  const written = n("cache_creation_input_tokens");
+  const input = n("input_tokens") + read + written;
+  return {
+    prompt_tokens: input, completion_tokens: n("output_tokens"), total_tokens: input + n("output_tokens"),
+    prompt_tokens_details: { cached_tokens: read, ...(written > 0 ? { cache_write_tokens: written } : {}) },
+  };
 }
 
 /** A Messages answer as a chat completion. */

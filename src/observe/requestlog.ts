@@ -155,7 +155,7 @@ export class RequestLog {
     const firstByteMs = t.startedAt > 0 && t.firstByteAt !== undefined ? t.firstByteAt - t.startedAt : undefined;
     const said = error ? String(error).slice(0, 200) : undefined;
     const path = route.path ?? [];
-    const tokens = used ? { tokensIn: used.in, tokensOut: used.out, ...(used.cached ? { tokensCached: used.cached } : {}), ...(used.est ? { tokensEstimated: true as const } : {}) } : {};
+    const tokens = used ? { tokensIn: used.in, tokensOut: used.out, ...(used.cached ? { tokensCached: used.cached } : {}), ...(used.written ? { tokensWritten: used.written } : {}), ...(used.est ? { tokensEstimated: true as const } : {}) } : {};
     this.log.info("request", {
       ...(id ? { id } : {}),
       ...fields,

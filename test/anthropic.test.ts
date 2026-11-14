@@ -96,7 +96,7 @@ const answer = fromAnthropic({
 }, "big") as { choices: { message: Doc; finish_reason: string }[]; usage: Doc };
 assert.deepEqual(answer.choices[0]!.message, { role: "assistant", content: "looking", reasoning_content: "hm", tool_calls: [{ id: "tu_1", type: "function", function: { name: "look", arguments: "{\"q\":\"y\"}" } }] });
 assert.equal(answer.choices[0]!.finish_reason, "tool_calls");
-assert.deepEqual(answer.usage, { prompt_tokens: 105, completion_tokens: 7, total_tokens: 112, prompt_tokens_details: { cached_tokens: 90 } }, "input counts the cached part too, and says how much of it was read");
+assert.deepEqual(answer.usage, { prompt_tokens: 105, completion_tokens: 7, total_tokens: 112, prompt_tokens_details: { cached_tokens: 90, cache_write_tokens: 5 } }, "input counts the cached part too, and says how much of it was read and how much written");
 
 // Through a node, against a server that speaks Messages and nothing else.
 const got: { path: string; key: unknown; bearer: unknown; version: unknown; body: Doc }[] = [];
@@ -110,11 +110,11 @@ const provider = createServer(async (req, res) => {
   if (req.url === "/v1/models") return say(200, { data: [{ id: "their-model" }] });
   if (req.url !== "/v1/messages") return say(404, { type: "error", error: { type: "not_found_error", message: "no" } });
   if (body.max_tokens === 1) return say(400, { type: "error", error: { type: "invalid_request_error", message: "max_tokens: too small" } });
-  const usage = { input_tokens: 3, cache_read_input_tokens: 40, output_tokens: 6 };
+  const usage = { input_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 2, output_tokens: 6 };
   if (!body.stream) return say(200, { id: "msg_2", type: "message", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "from afar" }], usage });
   res.writeHead(200, { "Content-Type": "text/event-stream" });
   const ev = (type: string, data: Doc) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
-  ev("message_start", { message: { id: "msg_3", usage: { input_tokens: 3, cache_read_input_tokens: 40, output_tokens: 1 } } });
+  ev("message_start", { message: { id: "msg_3", usage: { input_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 2, output_tokens: 1 } } });
   ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
   ev("ping", {});
   for (const text of ["from ", "afar é✓"]) ev("content_block_delta", { index: 0, delta: { type: "text_delta", text } });
@@ -138,7 +138,7 @@ backends:
     key: provider-secret
     serves: [their-model]
 models:
-  big: {backend: away, as: their-model, price: {in: 1000000, out: 0, cached: 100000}}
+  big: {backend: away, as: their-model, price: {in: 1000000, out: 0, cached: 100000, cacheWrite: 2000000}}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 apiKeys:
@@ -165,7 +165,7 @@ try {
   const plain = await chat();
   assert.equal(plain.status, 200, await plain.clone().text());
   const said = (await plain.json()) as { object: string; choices: { message: Doc; finish_reason: string }[]; usage: Doc };
-  assert.deepEqual([said.object, said.choices[0]!.message.content, said.choices[0]!.finish_reason, said.usage.prompt_tokens, said.usage.completion_tokens], ["chat.completion", "from afar", "stop", 43, 6]);
+  assert.deepEqual([said.object, said.choices[0]!.message.content, said.choices[0]!.finish_reason, said.usage.prompt_tokens, said.usage.completion_tokens], ["chat.completion", "from afar", "stop", 45, 6]);
   const sent = got.find((g) => g.path === "/v1/messages")!;
   assert.deepEqual([sent.key, sent.bearer, sent.version], ["provider-secret", undefined, "2023-06-01"], "its key goes in the header this API reads, and ours does not go at all");
   assert.equal(sent.body.model, "their-model");
@@ -183,15 +183,15 @@ try {
   assert.ok(chunks.every((c) => c.choices.length === 1), "a caller who did not ask gets no usage event");
 
   const withUsage = await (await chat({ stream: true, stream_options: { include_usage: true } })).text();
-  assert.match(withUsage, /"choices":\[\],"usage":\{"prompt_tokens":43,"completion_tokens":6/);
+  assert.match(withUsage, /"choices":\[\],"usage":\{"prompt_tokens":45,"completion_tokens":6/);
 
   await new Promise((r) => setTimeout(r, 50));
   const used = ((await (await fetch(`${url}/usage?days=1`, { headers: ours })).json()) as { usage: Record<string, Record<string, Record<string, { requests: number; in: number; out: number }>>> }).usage;
-  assert.deepEqual(Object.values(used)[0]!["key:app"]!["big"], { requests: 3, failed: 0, in: 129, out: 18, cached: 120 }, "all three counted from what the provider said, the stream nobody asked usage of included, and how much was a cache read");
+  assert.deepEqual(Object.values(used)[0]!["key:app"]!["big"], { requests: 3, failed: 0, in: 135, out: 18, cached: 120, written: 6 }, "all three counted from what the provider said, the stream nobody asked usage of included, and how much was a cache read or write");
 
-  // Priced at a dollar a token in and a tenth of that for a cache read: 9 fresh and 120 read.
+  // Priced at a dollar a token in, a tenth of that for a cache read and twice it for a cache write: 9 fresh, 120 read, 6 written.
   const page = (await (await fetch(`${url}/ui/data`, { headers: ours })).json()) as { keys: { label: string; today: { cost: number } }[] };
-  assert.equal(page.keys.find((k) => k.label === "app")!.today.cost, 21, "input read from the cache is priced as such");
+  assert.equal(page.keys.find((k) => k.label === "app")!.today.cost, 33, "input read from and written to the cache is each priced as such");
 
   const small = await chat({ max_tokens: 1 });
   assert.equal(small.status, 400);
