@@ -80,11 +80,15 @@ const show = (full: Doc | null, router: string | null): Pick<EditState, "draft" 
 type Kept = { base: Doc; draft: Doc } | null;
 let keeping: ReturnType<typeof setTimeout> | null = null;
 let toKeep: Kept = null;
+/** This tab handed the node a draft, so only it may have the node let go of one: an idle tab must not wipe another's. */
+let holding = false;
 /** Hand the node what is to be kept, or with null have it let go. */
 const send = (): void => {
   if (keeping === null) return;
   clearTimeout(keeping);
   keeping = null;
+  if (!toKeep && !holding) return;
+  holding = toKeep !== null;
   // Keeping is a convenience: where it fails, a reload starts from the file.
   void (toKeep ? request("PUT", "/config/draft", toKeep) : request("DELETE", "/config/draft")).catch(() => {});
 };
@@ -92,6 +96,7 @@ const send = (): void => {
 const forget = async (): Promise<void> => {
   if (keeping !== null) clearTimeout(keeping);
   keeping = null;
+  holding = false;
   await request("DELETE", "/config/draft").catch(() => {});
 };
 const keep = (s: Shown): void => {
