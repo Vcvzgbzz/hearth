@@ -44,11 +44,20 @@ export function pluginRoutes(ctx: RouteContext) {
    * `/plugins/<name>/*`: the API a plugin `serves`, forwarded both ways as it streams. Only the first byte has a
    * deadline (`backendDefaults.firstByteMs`): once an answer starts, a service may hold the stream open (an MCP
    * session, server-sent events). The caller's key for this node is not passed on; the plugin's own `key` is, and
-   * the service is told who is calling in `x-hearth-caller`.
+   * the service is told who is calling in `x-hearth-caller` and how many plugins the request has already been
+   * through in `x-hearth-hops`, which is refused past `pluginsMaxHops`.
    */
   async function routePluginServes(c: Call): Promise<void> {
     const { req, res, url } = c;
     const m = /^\/plugins\/([^/]+)(\/.*)?$/.exec(c.path);
+    // A request that has been through as many plugins as pluginsMaxHops allows would loop forever, so it stops here.
+    // Both headers a client sends are dropped and set again below: neither is something a caller may choose.
+    const hop = plugins.hops(req.headers["x-hearth-hops"] as string | undefined);
+    if ("why" in hop) {
+      log.info("plugin.refused", { plugin: m?.[1] ?? "", caller: c.caller, reason: hop.why });
+      json(res, hop.status, { error: hop.why });
+      return;
+    }
     // The caller's router decides, as it does for a model. A plugin's own name is asked of it as the type that
     // plugin serves; a name that is no plugin's may be the router's own name for one, so it goes as written. With
     // no rule for a type, the router's flow for every other name decides: running a name as itself lets plugins
@@ -85,7 +94,7 @@ export function pluginRoutes(ctx: RouteContext) {
     const path = m?.[2] ?? "/";
     // The plugin that answers if this one cannot: it serves the same API, so it is sent the same request.
     const fb = plugins.fallbackOf(name);
-    const to = plugins.serve(name);
+    const to = plugins.serve(name, c.caller);
     if ("why" in to && fb === null) {
       json(res, to.status, { error: to.why });
       return;
@@ -114,10 +123,12 @@ export function pluginRoutes(ctx: RouteContext) {
     const call = (target: { url: string; auth: Record<string, string> }, at: string, search: string) => {
       const headers = callers.headersFor(req) as Record<string, string>;
       delete headers["x-hearth-caller"];
+      delete headers["x-hearth-hops"];
       // The plugin's own key and headers replace a caller's of the same name.
       for (const h of Object.keys(headers)) if (h.toLowerCase() in target.auth) delete headers[h];
       Object.assign(headers, target.auth);
       headers["x-hearth-caller"] = c.caller;
+      headers["x-hearth-hops"] = String(hop.hops + 1);
       return send(`${target.url}${at}${search}`, {
         method: req.method ?? "GET",
         ...(body && body.length > 0 ? { raw: body } : {}),
@@ -166,7 +177,7 @@ export function pluginRoutes(ctx: RouteContext) {
       return;
     }
     // A fallback is one hop: it answers with its own API, and its own fallback is not followed.
-    const alt = plugins.serve(fb!.plugin);
+    const alt = plugins.serve(fb!.plugin, c.caller);
     log.info("plugin.fallback", { plugin: name, to: fb!.plugin, why: failure, caller: c.caller });
     if ("why" in alt || "stdio" in alt) {
       if ("done" in alt) alt.done(false);

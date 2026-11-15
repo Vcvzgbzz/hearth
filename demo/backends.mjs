@@ -90,9 +90,11 @@ function provider(port, key, models, { anthropic = false, perSec = 90 } = {}) {
     if (!anthropic || req.url !== "/v1/messages") return json(res, 404, { error: { message: "not found" } });
     const out = 12 + Math.floor(Math.random() * 48);
     const size = Math.max(8, Math.round(JSON.stringify(body.messages ?? "").length / 4));
-    // A conversation's earlier turns were written to the cache by the turn before: most of the input is a read.
+    // A conversation's earlier turns were written to the cache by the turn before: most of the input is a read,
+    // and the new turn, marked as the end of the cached prefix, is written for the next one; a few tokens are neither.
     const cached = (body.messages ?? []).length > 1 ? Math.round(size * 0.8) : 0;
-    const usage = { input_tokens: size - cached, cache_read_input_tokens: cached, cache_creation_input_tokens: 0, output_tokens: out };
+    const written = Math.max(0, size - cached - 4);
+    const usage = { input_tokens: size - cached - written, cache_read_input_tokens: cached, cache_creation_input_tokens: written, output_tokens: out };
     if (!body.stream) { await wait((out / perSec) * 1000); return json(res, 200, { id: "msg_demo", type: "message", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: WORDS.slice(0, out).join(" ") }], usage }); }
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const ev = (type, o) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`);
