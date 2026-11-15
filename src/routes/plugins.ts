@@ -54,15 +54,24 @@ export function pluginRoutes(ctx: RouteContext) {
    * `/plugins/<name>/*`: the API a plugin `serves`, forwarded both ways as it streams. Only the first byte has a
    * deadline (`backendDefaults.firstByteMs`): once an answer starts, a service may hold the stream open (an MCP
    * session, server-sent events). The caller's key for this node is not passed on; the plugin's own `key` is, and
-   * the service is told who is calling in `x-hearth-caller`.
+   * the service is told who is calling in `x-hearth-caller` and how many plugins the request has already been
+   * through in `x-hearth-hops`, which is refused past `pluginsMaxHops`.
    *
    * The caller's router decides one line at a time: a line whose plugin cannot answer — or whose adapter says the
    * request has no counterpart there — hands the request to the next line that matches, as a chat request does,
-   * unless the caller's router is strict. Each line's own `fallback` is still one hop, with the same request.
+   * unless the caller's router is strict. A plugin's own `fallback` is still one hop.
    */
   async function routePluginServes(c: Call): Promise<void> {
     const { req, res, url } = c;
     const m = /^\/plugins\/([^/]+)(\/.*)?$/.exec(c.path);
+    // A request that has been through as many plugins as pluginsMaxHops allows would loop forever, so it stops here.
+    // Both headers a client sends are dropped and set again below: neither is something a caller may choose.
+    const hop = plugins.hops(req.headers["x-hearth-hops"] as string | undefined);
+    if ("why" in hop) {
+      log.info("plugin.refused", { plugin: m?.[1] ?? "", caller: c.caller, reason: hop.why });
+      json(res, hop.status, { error: hop.why });
+      return;
+    }
     // The caller's router decides, as it does for a model: the request is asked of it as MCP:<name> or API:<name>.
     // With no rule for MCP or API, its flow for every other name decides: one that runs a name as itself lets
     // plugins through, and one that refuses refuses them until a rule for MCP or API is added. A name that is no
@@ -103,8 +112,10 @@ export function pluginRoutes(ctx: RouteContext) {
     const call = (target: { url: string; auth: Record<string, string> }, method: string, at: string, search: string, raw: Buffer | undefined, plain: boolean, type: string | null) => {
       const headers = callers.headersFor(req) as Record<string, string>;
       delete headers["x-hearth-caller"];
+      delete headers["x-hearth-hops"];
       // An answer the adapter reads is asked for uncompressed, so it can be read.
       if (plain) delete headers["accept-encoding"];
+      // The plugin's own key and headers replace a caller's of the same name.
       for (const h of Object.keys(headers)) if (h.toLowerCase() in target.auth) delete headers[h];
       Object.assign(headers, target.auth);
       // What the target is told it is being sent, when the adapter changed it.
@@ -113,6 +124,7 @@ export function pluginRoutes(ctx: RouteContext) {
         else headers["content-type"] = type;
       }
       headers["x-hearth-caller"] = c.caller;
+      headers["x-hearth-hops"] = String(hop.hops + 1);
       return send(`${target.url}${at}${search}`, {
         method,
         ...(raw && raw.length > 0 ? { raw } : {}),

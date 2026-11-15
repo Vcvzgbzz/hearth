@@ -121,7 +121,8 @@ export class Limits {
     for (const [model, row] of Object.entries(this.usage.byModel(caller, days))) {
       const p = this.cfg.models[model]?.price;
       const cached = Math.min(row.cached ?? 0, row.in);
-      if (p) cost += ((row.in - cached) * p.in + cached * (p.cached ?? p.in) + row.out * p.out) / 1_000_000;
+      const written = Math.min(row.written ?? 0, row.in - cached);
+      if (p) cost += ((row.in - cached - written) * p.in + cached * (p.cached ?? p.in) + written * (p.cacheWrite ?? p.in) + row.out * p.out) / 1_000_000;
     }
     return { ...this.usage.total(caller, days), cost };
   }

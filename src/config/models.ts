@@ -37,7 +37,7 @@ export interface ModelRoute {
   /** Tokens the model's running requests share (vLLM's KV cache, llama.cpp `--kv-unified`); `output` caps each request's counted `max_tokens`, null counts it whole. */
   pool: { tokens: number; output: number | null } | null;
   /** What a million tokens in and out cost, in dollars, where using this model is paid for. null is not priced. */
-  price: { in: number; out: number; cached?: number } | null;
+  price: { in: number; out: number; cached?: number; cacheWrite?: number } | null;
   /** A turn shares the backend with this model's running turns only once each has run this long; unset never waits. */
   shareAfterMs?: number;
   /** How long an answer is kept for an identical request; unset or 0 keeps none. */
@@ -112,7 +112,10 @@ export function modelConcurrency(entry: Record<string, unknown>, id: string): nu
   return count(entry.concurrency, `models.${id}.concurrency`, 1, 1);
 }
 
-/** `price: { in: 3, out: 15, cached: 0.3 }`: dollars per million tokens; `cached` is for input read from the provider's prompt cache. */
+/**
+ * `price: { in: 3, out: 15, cached: 0.3, cacheWrite: 3.75 }`: dollars per million tokens; `cached` is for
+ * input read from the provider's prompt cache, `cacheWrite` for input written to it.
+ */
 export function modelPrice(v: unknown, id: string): ModelRoute["price"] {
   if (v === undefined || v === null) return null;
   const p = asRecord(v, `models.${id}.price`);
@@ -120,6 +123,7 @@ export function modelPrice(v: unknown, id: string): ModelRoute["price"] {
   return {
     in: atLeast(p.in, `models.${id}.price.in`, 0), out: atLeast(p.out, `models.${id}.price.out`, 0),
     ...(p.cached !== undefined ? { cached: atLeast(p.cached, `models.${id}.price.cached`, 0) } : {}),
+    ...(p.cacheWrite !== undefined ? { cacheWrite: atLeast(p.cacheWrite, `models.${id}.price.cacheWrite`, 0) } : {}),
   };
 }
 

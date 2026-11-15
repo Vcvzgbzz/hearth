@@ -384,7 +384,7 @@ plugins:
   type for refuses plugins too.
   See [Plugins on the router](routing.md#plugins-on-the-router).
 - **The caller's key stays here.** The service is sent the plugin's `key` as a bearer token instead, when it
-  has one, and who is calling in `x-hearth-caller` (`local` or `key:<label>`), which a caller cannot set.
+  has one, who is calling in `x-hearth-caller` (`local` or `key:<label>`), and how far the request has come in `x-hearth-hops`, which a caller cannot set and which is refused past `pluginsMaxHops` (default 3) with 508.
 - **`headers` are sent on every call** to the service: the passthrough, the MCP check, and a hook service's
   `/manifest` and hook calls. Each replaces a caller's header of the same name, and a value may be `env:NAME`.
   They are for a service that reads its key from somewhere other than `Authorization`, so `key` can be left
