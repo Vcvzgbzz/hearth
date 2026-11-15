@@ -14,6 +14,8 @@ export interface Counted {
   est: boolean;
   /** How much of `in` the backend read from its prompt cache, where it says. */
   cached?: number;
+  /** How much of `in` the backend wrote to its prompt cache, where it says. */
+  written?: number;
 }
 
 /** How much of an answer's end is kept to find its `usage` in. */
@@ -57,7 +59,8 @@ export class Meter {
     };
     const [i, o] = [num("prompt_tokens"), num("completion_tokens")];
     const cached = num("cached_tokens");
-    if (i !== null && o !== null) return { in: i, out: o, est: false, ...(cached ? { cached } : {}) };
+    const written = num("cache_write_tokens");
+    if (i !== null && o !== null) return { in: i, out: o, est: false, ...(cached ? { cached } : {}), ...(written ? { written } : {}) };
     // The first event names the role and the last says it is done; what is between is the answer.
     return { in: fallbackIn, out: Math.max(0, this.events - 2), est: true };
   }
@@ -114,12 +117,18 @@ export interface Row {
   out: number;
   /** How much of `in` was read from a backend's prompt cache; absent where none was. */
   cached?: number;
+  /** How much of `in` was written to a backend's prompt cache; absent where none was. */
+  written?: number;
 }
 
 const blank = (): Row => ({ requests: 0, failed: 0, in: 0, out: 0 });
 const plus = (a: Row, b: Row): Row => {
   const cached = (a.cached ?? 0) + (b.cached ?? 0);
-  return { requests: a.requests + b.requests, failed: a.failed + b.failed, in: a.in + b.in, out: a.out + b.out, ...(cached > 0 ? { cached } : {}) };
+  const written = (a.written ?? 0) + (b.written ?? 0);
+  return {
+    requests: a.requests + b.requests, failed: a.failed + b.failed, in: a.in + b.in, out: a.out + b.out,
+    ...(cached > 0 ? { cached } : {}), ...(written > 0 ? { written } : {}),
+  };
 };
 
 /** How many days are kept. */
@@ -144,6 +153,7 @@ export class Usage {
     row.in += used?.in ?? 0;
     row.out += used?.out ?? 0;
     if (used?.cached) row.cached = (row.cached ?? 0) + used.cached;
+    if (used?.written) row.written = (row.written ?? 0) + used.written;
     this.prune();
   }
 
@@ -203,7 +213,7 @@ export class Usage {
           if (typeof row !== "object" || row === null) continue;
           const r = row as Partial<Row>;
           const into = (((this.days[day] ??= {})[caller] ??= {})[model] ??= blank());
-          Object.assign(into, plus(into, { requests: n(r.requests), failed: n(r.failed), in: n(r.in), out: n(r.out), cached: n(r.cached) }));
+          Object.assign(into, plus(into, { requests: n(r.requests), failed: n(r.failed), in: n(r.in), out: n(r.out), cached: n(r.cached), written: n(r.written) }));
         }
       }
     }

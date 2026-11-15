@@ -38,6 +38,8 @@ export interface HearthConfig {
   callers: Record<string, string>;
   /** Plugins by name, in the order they run within a stage. */
   plugins: Record<string, PluginDecl>;
+  /** How many plugins in a row a request may reach before it is refused `508 Loop Detected`. */
+  pluginsMaxHops: number;
   /** Whether a chat answer carries `x-hearth-model`, the id it ran as. */
   modelHeader: boolean;
   /** Ask the npm registry once a day whether a newer hearth is out, for the console to say so. */
@@ -613,6 +615,7 @@ export function parseConfig(raw: unknown): HearthConfig {
     historyFile: str(root.historyFile, "historyFile", "") || null,
     layout: layoutDecl(root.layout),
     modelHeader: bool(root.modelHeader, "modelHeader", true),
+    pluginsMaxHops: count(root.pluginsMaxHops, "pluginsMaxHops", 3, 1),
     updateCheck: bool(root.updateCheck, "updateCheck", true),
     flows: flowDecls(root.flows, lanes, peers, actions, backends.flatMap((b) => b.routes.map((r) => r.path)), plugins),
     routers,

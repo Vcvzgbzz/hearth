@@ -84,7 +84,7 @@ function Cells({ e, total }: { e: Entry; total: number }) {
       <td className={cx("tabular px-4 py-2 text-right", e.failed > 0 ? "text-bad" : "text-dim")}>{e.failed > 0 ? short(e.failed) : "—"}</td>
       <td className="tabular px-4 py-2 text-right">{short(e.in)}</td>
       <td className="tabular px-4 py-2 text-right">{short(e.out)}</td>
-      <td className="tabular px-4 py-2 text-right text-dim">{e.cached > 0 ? short(e.cached) : "—"}</td>
+      <td className="tabular px-4 py-2 text-right text-dim" title={e.cached > 0 || e.written > 0 ? `${e.cached} read from the cache, ${e.written} written to it` : undefined}>{e.cached > 0 ? short(e.cached) : "—"}</td>
       <td className="tabular px-4 py-2 text-right">{e.cost > 0 ? money(e.cost) : <span className="text-dim">—</span>}</td>
       <td className="w-32 px-4 py-2" title={`${(share * 100).toFixed(1)}% of tokens`}>
         <div className="h-1.5 rounded-full bg-muted"><div className="h-full rounded-full bg-accent" style={{ width: `${share * 100}%` }} /></div>

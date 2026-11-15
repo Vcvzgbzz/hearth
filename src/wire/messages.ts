@@ -77,12 +77,17 @@ export function chatOf(body: Doc): Doc {
 
 const STOP: Record<string, string> = { stop: "end_turn", length: "max_tokens", tool_calls: "tool_use", function_call: "tool_use" };
 
-/** A chat completion's usage as Messages usage: cached input is reported apart from the rest. */
+/** A chat completion's usage as Messages usage: input read from and written to a cache is reported apart from the rest. */
 function usageOf(u: unknown): Doc {
   const n = (v: unknown): number => (typeof v === "number" ? v : 0);
   const doc = isObj(u) ? u : {};
-  const cached = n(isObj(doc.prompt_tokens_details) ? doc.prompt_tokens_details.cached_tokens : 0);
-  return { input_tokens: Math.max(0, n(doc.prompt_tokens) - cached), output_tokens: n(doc.completion_tokens), cache_read_input_tokens: cached };
+  const details = isObj(doc.prompt_tokens_details) ? doc.prompt_tokens_details : {};
+  const cached = n(details.cached_tokens);
+  const written = n(details.cache_write_tokens);
+  return {
+    input_tokens: Math.max(0, n(doc.prompt_tokens) - cached - written), output_tokens: n(doc.completion_tokens), cache_read_input_tokens: cached,
+    ...(written > 0 ? { cache_creation_input_tokens: written } : {}),
+  };
 }
 
 const msgId = (id: unknown): string => `msg_${String(id ?? "").replace(/^chatcmpl-/, "") || Date.now().toString(36)}`;

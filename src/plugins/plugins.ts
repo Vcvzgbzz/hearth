@@ -131,7 +131,7 @@ export interface PluginStatus {
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
   /** Requests at /plugins/<name>/* in flight, and those that ended within SEEN_MS, by id: what the map draws as dots. */
-  live: string[];
+  live: { id: string; caller: string }[];
   /** For a plugin that speaks MCP: whether its server answers, its name, how many tools it has, and its path under /plugins/<name>. */
   mcp: (McpState & { path: string }) | null;
   /** The program a plugin that runs an MCP server starts, as its command line; never its env. */
@@ -307,8 +307,8 @@ interface Loaded {
   stdio: StdioMcp | null;
   mcp: McpState | null;
   recheck: NodeJS.Timeout | null;
-  /** Requests served: when each ended, or null while it runs. */
-  flying: Map<string, number | null>;
+  /** Requests served: who asked and when each ended, or null while it runs. */
+  flying: Map<string, { caller: string; ended: number | null }>;
 }
 
 /** One plugin as it applies to one request: its hooks, the settings its router gives it, its models and its line. */
@@ -501,10 +501,30 @@ export class Plugins {
   }
 
   /**
+   * How many hops `/plugins/<name>/*` the request has already travelled, or why it may go no further. A missing
+   * or malformed header is no hops; a value at or above the limit is refused, since the next hop would be past it.
+   * The plugin is handed the count it is at plus one, so a plugin that passes it on is counted the same way.
+   */
+  hops(given: string | undefined): { hops: number } | { status: number; why: string } {
+    if (given === undefined || given.trim() === "") return { hops: 0 };
+    if (!/^\d+$/.test(given.trim())) {
+      return { status: 400, why: "X-Hearth-Hops must be a whole number of hops, zero or more" };
+    }
+    const hops = Number(given.trim());
+    if (hops >= this.cfg.pluginsMaxHops) {
+      return {
+        status: 508,
+        why: `this request has been through ${hops} plugin${hops === 1 ? "" : "s"} already, as many as pluginsMaxHops allows (${this.cfg.pluginsMaxHops}): it is probably looping between them`,
+      };
+    }
+    return { hops };
+  }
+
+  /**
    * Where `/plugins/<name>/*` goes: the service's URL and the key it is sent, or why it cannot be reached
    * now, with the status to answer. Counts the request either way.
    */
-  serve(name: string): { url: string; auth: Record<string, string>; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
+  serve(name: string, caller: string): { url: string; auth: Record<string, string>; done: (ok: boolean) => void } | { stdio: StdioMcp; done: (ok: boolean) => void } | { status: number; why: string } {
     const l = this.loaded.find((x) => x.name === name);
     if (!l || (l.decl.serves === null && l.stdio === null)) return { status: 404, why: `no plugin named ${name} serves an API here` };
     if (l.state !== "running") return { status: 503, why: `${name} is ${l.state === "off" ? "off" : `not running: ${l.error}`}` };
@@ -513,8 +533,8 @@ export class Plugins {
     // Let go of what has been seen out here too, so the record stays bounded whether or not anyone reads the status.
     this.live(l);
     const id = `${name}:${++this.seq}`;
-    l.flying.set(id, null);
-    const done = (ok: boolean) => { if (!ok) l.served.errors++; l.flying.set(id, Date.now()); };
+    l.flying.set(id, { caller, ended: null });
+    const done = (ok: boolean) => { if (!ok) l.served.errors++; const entry = l.flying.get(id); if (entry) entry.ended = Date.now(); };
     return l.stdio ? { stdio: l.stdio, done } : { url: l.decl.serves!, auth: pluginAuth(l.decl), done };
   }
 
@@ -659,10 +679,10 @@ export class Plugins {
   }
 
   /** The requests still in flight, and those that ended within SEEN_MS, which are let go after it. */
-  private live(l: Loaded): string[] {
+  private live(l: Loaded): { id: string; caller: string }[] {
     const now = Date.now();
-    for (const [id, ended] of l.flying) if (ended !== null && now - ended > SEEN_MS) l.flying.delete(id);
-    return [...l.flying.keys()];
+    for (const [id, entry] of l.flying) if (entry.ended !== null && now - entry.ended > SEEN_MS) l.flying.delete(id);
+    return [...l.flying.entries()].map(([id, entry]) => ({ id, caller: entry.caller }));
   }
 
   status(): PluginStatus[] {
