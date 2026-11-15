@@ -273,7 +273,8 @@ export function pluginRoutes(ctx: RouteContext) {
           const a = await to.stdio.handle(went.method, went.body);
           done(a.status < 500);
           if (adapter !== null && a.status >= 200 && a.status < 300) {
-            return await adaptAnswer({ status: a.status, contentType: a.type, body: a.body }, {}, went, name);
+            // The session the server opened stays the caller's, as on the unadapted answer below.
+            return await adaptAnswer({ status: a.status, contentType: a.type, body: a.body }, a.session ? { "mcp-session-id": a.session } : {}, went, name);
           }
           res.writeHead(a.status, { "content-type": a.type, ...(a.session ? { "mcp-session-id": a.session } : {}) }).end(a.body);
           log.info("plugin.served", { plugin: name, method: went.method, path: went.path, status: a.status, caller: c.caller, ms: Date.now() - t0 });
