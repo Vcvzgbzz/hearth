@@ -311,6 +311,8 @@ export function chatRoutes(ctx: RouteContext) {
         ...(talk?.later ? { pinned: (flow: string) => worlds.pinned(flow, talk.key) } : {}),
         // A plugin asked to keep this request on this machine: no peer, no cloud provider.
         ...(r.plugins?.stayLocal ? { keepHere: offHere } : {}),
+        // A key running all it may waits here for a slot rather than borrowing past its limit.
+        ...(limits.keyAtLimit(caller) ? { noPeers: true } : {}),
       };
       this.flowsNow = this.world.cfg.flows;
     }
@@ -587,11 +589,16 @@ export function chatRoutes(ctx: RouteContext) {
       const peer = peers.config(decision.peer)!;
       let fellBack = false;
       log.debug("route.peer", { model: this.model, peer: decision.peer, reason: decision.reason });
+      // Peer work counts towards the key's jobs at once until it ends or falls back here.
+      const counted = limits.keyLimitOf(caller, this.model).keyLimit !== undefined;
+      let held = counted;
+      if (counted) pool.tally.started(caller, this.model);
+      const letGo = () => { if (held) { held = false; pool.tally.ended(caller, this.model); } };
       const logged = () => ({ model: this.model, lane: this.lane, caller, backend: this.local.name, target: fellBack ? "local" : "peer", peer: peer.name });
       try {
         await this.local.scheduler.submit(
           // No local slot: this runs on their hardware, not ours.
-          { lane: this.lane, model: this.model, caller, maxPerCaller: limits.capOf(caller, this.model), offbox: true, ...(id ? { id } : {}), peer: decision.peer, signal },
+          { lane: this.lane, model: this.model, caller, ...limits.peerCapOf(caller, this.model), offbox: true, ...(id ? { id } : {}), peer: decision.peer, signal },
           async () => {
             this.t.startedAt = Date.now();
             // The peer's id, with the route's params still applied.
@@ -626,6 +633,7 @@ export function chatRoutes(ctx: RouteContext) {
               // Nothing reached the client yet, so they'll never see this.
               log.warn("route.peer_failed_retrying_local", { model: this.model, peer: peer.name, error: e instanceof Error ? e.message : String(e) });
               fellBack = true;
+              letGo();
               // A local retry goes back through admission, without re-applying the caller cap.
               this.limitModel(this.model);
               await this.local.scheduler.submit({ lane: this.lane, model: this.model, caller, ...limits.keyLimitOf(caller, this.model), signal, tokens: pool.models.poolTokens(this.model, this.need) }, () => this.runLocal());
@@ -636,6 +644,8 @@ export function chatRoutes(ctx: RouteContext) {
         // Logged as where it last ran, a local fallback included, with its backend so the call ring counts it.
         requests.record(this.t, logged(), false, e, this.traced(fellBack ? decision.model : undefined));
         throw e;
+      } finally {
+        letGo();
       }
       const status = this.localStatus;
       // Only the fallback can have relayed a bad status: a peer's own 4xx threw a PeerStatusError above.
