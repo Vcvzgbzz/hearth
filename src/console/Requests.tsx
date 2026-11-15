@@ -87,6 +87,7 @@ function Timeline({ t }: { t: RequestTrace }) {
         <div className="mt-1 text-[11px] text-dim">
           tokens in <b className="tabular text-fg">{est}{t.tokensIn ?? "?"}</b> · out <b className="tabular text-fg">{est}{t.tokensOut ?? "?"}</b>
           {t.tokensCached ? <> · cached <b className="tabular text-fg">{t.tokensCached}</b></> : null}
+          {t.tokensWritten ? <> · written to cache <b className="tabular text-fg">{t.tokensWritten}</b></> : null}
           {tps !== null && <> · <b className="tabular text-fg">{est}{tps}</b> tokens/s</>}
         </div>
       )}

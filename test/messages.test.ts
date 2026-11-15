@@ -56,6 +56,9 @@ type Doc = Record<string, unknown>;
     content: [{ type: "thinking", thinking: "thinking", signature: "" }, { type: "text", text: "here" }, { type: "tool_use", id: "call_1", name: "look", input: { q: "y" } }],
     stop_reason: "tool_use", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 2 },
   });
+  // Input written to a cache is reported apart too, as the Messages API reports it.
+  const wrote = messageOf({ id: "chatcmpl-w", choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 7 } } }, "chat") as Doc;
+  assert.deepEqual(wrote.usage, { input_tokens: 3, output_tokens: 5, cache_read_input_tokens: 2, cache_creation_input_tokens: 7 });
 }
 
 // Through a node.

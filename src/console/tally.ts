@@ -1,13 +1,13 @@
 /** The Usage page's arithmetic: `GET /usage` rolled up by caller or model, and by day for the chart. */
 
 /** One caller's use of one model on one day, as `/usage` answers it; the server's own copy pulls in node, which the page cannot. */
-export interface Row { requests: number; failed: number; in: number; out: number; cached?: number }
+export interface Row { requests: number; failed: number; in: number; out: number; cached?: number; written?: number }
 /** day -> caller -> model -> row. */
 export type UsageSnapshot = Record<string, Record<string, Record<string, Row>>>;
 
-export type Prices = Record<string, { in: number; out: number; cached?: number }>;
+export type Prices = Record<string, { in: number; out: number; cached?: number; cacheWrite?: number }>;
 export type By = "caller" | "model";
-export interface Entry { name: string; requests: number; failed: number; in: number; out: number; cached: number; cost: number }
+export interface Entry { name: string; requests: number; failed: number; in: number; out: number; cached: number; written: number; cost: number }
 export interface Group extends Entry { parts: Entry[] }
 export interface Bar { day: string; failed: number; total: number; parts: Record<string, number>; others: number }
 
@@ -22,12 +22,13 @@ export function costOf(model: string, row: Row, prices: Prices): number {
   const p = prices[model];
   if (!p) return 0;
   const cached = Math.min(row.cached ?? 0, row.in);
-  return ((row.in - cached) * p.in + cached * (p.cached ?? p.in) + row.out * p.out) / 1_000_000;
+  const written = Math.min(row.written ?? 0, row.in - cached);
+  return ((row.in - cached - written) * p.in + cached * (p.cached ?? p.in) + written * (p.cacheWrite ?? p.in) + row.out * p.out) / 1_000_000;
 }
 
-const blank = (name: string): Entry => ({ name, requests: 0, failed: 0, in: 0, out: 0, cached: 0, cost: 0 });
+const blank = (name: string): Entry => ({ name, requests: 0, failed: 0, in: 0, out: 0, cached: 0, written: 0, cost: 0 });
 function add(e: Entry, model: string, row: Row, prices: Prices): void {
-  e.requests += row.requests; e.failed += row.failed; e.in += row.in; e.out += row.out; e.cached += row.cached ?? 0;
+  e.requests += row.requests; e.failed += row.failed; e.in += row.in; e.out += row.out; e.cached += row.cached ?? 0; e.written += row.written ?? 0;
   e.cost += costOf(model, row, prices);
 }
 const biggest = (a: Entry, b: Entry): number => tokens(b) - tokens(a) || b.requests - a.requests || a.name.localeCompare(b.name);
@@ -39,8 +40,11 @@ function pairs(usage: UsageSnapshot): Map<string, Row> {
     for (const [caller, models] of Object.entries(callers)) {
       for (const [model, row] of Object.entries(models)) {
         const k = `${caller}\n${model}`;
-        const o = out.get(k) ?? { requests: 0, failed: 0, in: 0, out: 0, cached: 0 };
-        out.set(k, { requests: o.requests + row.requests, failed: o.failed + row.failed, in: o.in + row.in, out: o.out + row.out, cached: (o.cached ?? 0) + (row.cached ?? 0) });
+        const o = out.get(k) ?? { requests: 0, failed: 0, in: 0, out: 0, cached: 0, written: 0 };
+        out.set(k, {
+          requests: o.requests + row.requests, failed: o.failed + row.failed, in: o.in + row.in, out: o.out + row.out,
+          cached: (o.cached ?? 0) + (row.cached ?? 0), written: (o.written ?? 0) + (row.written ?? 0),
+        });
       }
     }
   }

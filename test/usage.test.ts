@@ -32,6 +32,10 @@ said.feed('data: {"choices":[{"delta":{"content":"a"}}]}\n\ndata: {"choices":[],
 assert.deepEqual(said.read(), { in: 5, out: 1, est: false });
 assert.equal(new Meter().read(), null, "nothing written, nothing read");
 
+const cache = new Meter();
+cache.feed('{"usage":{"prompt_tokens":50,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":15}}}');
+assert.deepEqual(cache.read(), { in: 50, out: 2, est: false, cached: 30, written: 15 }, "input read from and written to a prompt cache is each counted");
+
 // The ledger.
 let now = Date.UTC(2030, 0, 10, 12);
 const ledger = new Usage(() => now);
@@ -51,6 +55,12 @@ back.restore({ nonsense: 1, "2030-01-11": { "key:app": { chat: "x" } } });
 assert.deepEqual(back.total("key:app", 2), { requests: 3, failed: 1, in: 12, out: 6 }, "a saved ledger comes back");
 now += 40 * 86_400_000;
 assert.deepEqual(back.since(), {}, "a day past the window is gone");
+
+const writes = new Usage(() => now);
+writes.add("key:app", "chat", true, { in: 50, out: 2, est: false, cached: 30, written: 15 });
+const kept = new Usage(() => now);
+kept.restore(JSON.parse(JSON.stringify(writes.snapshot())));
+assert.deepEqual(kept.total("key:app"), { requests: 1, failed: 0, in: 50, out: 2, cached: 30, written: 15 }, "a saved ledger keeps what was written to a cache");
 
 // Through a node.
 const backend = createServer((req, res) => {
