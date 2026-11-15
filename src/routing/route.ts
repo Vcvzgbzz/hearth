@@ -321,7 +321,8 @@ export function resolve(named: string, w: World): Resolution {
     const same = (e: FlowEnd): boolean => pin !== undefined
       && ("peer" in pin ? "peer" in e && e.peer === pin.peer && (e.model ?? asked) === pin.model : !("peer" in e) && e.model === pin.model);
     const kept = flow.steps.findIndex(({ to }) => endsOf(to, asked).some(same));
-    if (kept >= 0) {
+    // A plugin request goes to a plugin, so a conversation kept on a model is not where it goes.
+    if (kept >= 0 && w.plugin === undefined) {
       const r = reach(pin!);
       if (typeof r !== "string") {
         const s = flow.steps[kept]!;

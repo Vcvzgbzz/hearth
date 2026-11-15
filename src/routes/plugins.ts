@@ -83,7 +83,8 @@ export function pluginRoutes(ctx: RouteContext) {
     for (const { as, named } of tries) {
       const r = resolve(named, as !== undefined ? { ...world, kind: as } : world);
       if (r.plugin !== undefined && plugins.kindOf(r.plugin) !== null) { name = r.plugin; break; }
-      if (r.target === "local") { name = asked; break; }
+      // Only a name the router ran as itself goes to the plugin the URL names; one it sent to a model does not.
+      if (r.target === "local" && r.model === named) { name = asked; break; }
       if (r.plugin === undefined) refused ??= r.reason;
     }
     if (name === null) {
