@@ -176,8 +176,8 @@ apiKeys:
 ```
 
 `limits.maxConcurrent` is how many jobs a key may run at once over every model
-and backend. It is the one limit that does not refuse: more wait in line, and
-other callers pass them. `limits.models` gives a model its own `maxConcurrent`,
+and backend, work sent to a peer included. It is the one limit that does not
+refuse: more wait in line here, never on a peer, and other callers pass them. `limits.models` gives a model its own `maxConcurrent`,
 `tokensPerDay` and `requestsPerMinute`, beside the key's. A model is named by
 the id its job runs as, not the type asked for, and an id no longer reached does
 nothing. `lane` queues the key's chat requests in that lane, over the lane a
@@ -187,8 +187,8 @@ holds its chat work.
 
 These hold what a key asks for through `/v1`, for clients that behave. They are
 not a security boundary: a key with no `models` list is a full local caller, and
-can reach the rest of the node, `/upstream/<model>` included, past its router
-and limits. A key that must be kept to a list needs `models`.
+can reach the rest of the node, `/upstream/<model>` included, past its router;
+a request there that names a model is still held to the key's limits. A key that must be kept to a list needs `models`.
 
 ```yaml
 apiKeys:

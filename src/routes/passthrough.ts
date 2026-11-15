@@ -315,6 +315,11 @@ export function passthroughRoutes(ctx: RouteContext) {
         // for the polling, not the working.
         await proxy();
       } else {
+        // Unqueued, but a request that names a model spends it: the key's limits hold here too.
+        if (named) {
+          limits.withinLimits(who);
+          limits.withinModelLimits(who, named);
+        }
         const mark = { id: `p${++proxySeq}`, backend: target.name, model: named ?? null };
         proxying.add(mark);
         try {
