@@ -116,7 +116,10 @@ export function keyRoutes(ctx: RouteContext) {
         json(c.res, 200, { key, label, rotated: true, restartPending: commit.restartPending });
         return;
       }
-      const commit = config.patch({ ops: [{ path: ["apiKeys", i], delete: true }] });
+      // Its router line goes with it, or a key minted later under the label would inherit it.
+      const ops: ConfigOp[] = [{ path: ["apiKeys", i], delete: true }];
+      if (cfg.callers[label] !== undefined) ops.push({ path: Object.keys(cfg.callers).length > 1 ? ["callers", label] : ["callers"], delete: true });
+      const commit = config.patch({ ops });
       callers.forget("key:" + label);
       log.info("keys.revoked", { label, caller: c.caller });
       json(c.res, 200, { label, revoked: true, restartPending: commit.restartPending });
