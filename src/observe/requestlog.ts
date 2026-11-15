@@ -134,7 +134,9 @@ export class RequestLog {
       });
     }
     // Whoever asked used it, here or on a peer; an admission refusal used nothing.
-    const used = t.startedAt > 0 ? t.meter?.read(t.need) ?? null : null;
+    // A failed answer that reported no usage and streamed nothing was refused before any work, so nothing is estimated for it.
+    const read = t.startedAt > 0 ? t.meter?.read(t.need) ?? null : null;
+    const used = read && !ok && read.est && read.out === 0 ? null : read;
     if (t.startedAt > 0 && typeof fields.model === "string") {
       const who = typeof fields.caller === "string" && fields.caller !== "" ? fields.caller : typeof fields.forPeer === "string" ? `peer:${fields.forPeer}` : "local";
       this.usage.add(who, fields.model, ok, used);

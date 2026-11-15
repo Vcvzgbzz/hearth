@@ -54,15 +54,24 @@ assert.deepEqual(back.since(), {}, "a day past the window is gone");
 
 // Through a node.
 const backend = createServer((req, res) => {
-  req.resume();
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(req.url === "/v1/models"
-    ? JSON.stringify({ data: [{ id: "chat" }] })
-    : JSON.stringify({ choices: [{ message: { role: "assistant", content: "hi" } }], usage: { prompt_tokens: 12, completion_tokens: 3 } }));
+  let body = "";
+  req.on("data", (c) => (body += c));
+  req.on("end", () => {
+    // A model with no funds behind it answers every request with the provider's quota refusal.
+    if (body.includes('"model":"broke"')) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "You exceeded your current quota", type: "insufficient_quota", code: "insufficient_quota" } }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(req.url === "/v1/models"
+      ? JSON.stringify({ data: [{ id: "chat" }, { id: "broke" }] })
+      : JSON.stringify({ choices: [{ message: { role: "assistant", content: "hi" } }], usage: { prompt_tokens: 12, completion_tokens: 3 } }));
+  });
 });
 await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
 const node = createNode(parseV1({
-  backend: { url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}`, kind: "none", serves: ["chat"] },
+  backend: { url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}`, kind: "none", serves: ["chat", "broke"] },
   apiKeys: [{ key: "k", label: "app" }],
 }), silentLogger);
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
@@ -73,10 +82,13 @@ const chat = (model: string) => fetch(`${url}/v1/chat/completions`, { method: "P
 assert.equal((await chat("chat")).status, 200);
 await (await chat("chat")).text();
 assert.notEqual((await chat("no-such-model")).status, 200);
+const refused = await chat("broke");
+assert.notEqual(refused.status, 200);
+await refused.text();
 const got = (await (await fetch(`${url}/usage?days=1`, { headers: auth })).json()) as { days: number; usage: Record<string, Record<string, Record<string, unknown>>> };
 assert.equal(got.days, 1);
 const [today] = Object.values(got.usage);
-assert.deepEqual(today, { "key:app": { chat: { requests: 2, failed: 0, in: 24, out: 6 } } }, "what ran is counted to its key, and what was refused is not");
+assert.deepEqual(today, { "key:app": { chat: { requests: 2, failed: 0, in: 24, out: 6 }, broke: { requests: 1, failed: 1, in: 0, out: 0 } } }, "what ran is counted to its key, and what was refused is not; a provider's refusal is a failed request with no tokens");
 assert.equal((await fetch(`${url}/usage`)).status, 401, "it takes a key");
 
 await node.close();
