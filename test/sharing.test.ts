@@ -185,6 +185,8 @@ const cfg = parseV1({
   peers: [{ name: "friend", url: "http://127.0.0.1:1", token: "t", models: { borrowed: "theirs" } }],
   models: { borrowed: { policy: "peer", peers: ["friend"], fallbackLocal: true } },
 });
+// A type: a name only a flow takes. It is offered on /v1/models but no backend answers it.
+cfg.flows.LLM = { ...cfg.flows.borrowed!, inputs: ["LLM"] };
 const node = createNode(cfg, silentLogger);
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
 const url = `http://127.0.0.1:${(node.server.address() as AddressInfo).port}`;
@@ -222,6 +224,8 @@ const advertised = async () => {
   // the peer's operator cannot tell that from a broken link.
   const bad = await control({ share: { nonexistent: true } });
   assert.equal(bad.status, 400, "lending something we cannot serve is refused");
+  // A peer's request skips flows, so a type lent would 404 at the peer every time.
+  assert.equal((await control({ share: { LLM: true } })).status, 400, "lending a type is refused too");
 
   assert.equal((await control({ share: { mine: true, spare: false } })).status, 200);
   assert.deepEqual(await advertised(), ["mine"], "and both edits can be put back");

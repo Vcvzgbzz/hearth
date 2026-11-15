@@ -266,6 +266,14 @@ export class ModelCatalog {
 
   /** Everything any backend could serve, deduped; a backend's declared `serves` replaces what it reports. */
   catalog(): string[] {
+    const out = new Set(this.served());
+    // An id a flow takes is advertised whether or not a backend serves it: where it lands is decided per request.
+    for (const flow of Object.values(this.cfg.flows)) for (const id of flow.inputs) if (id !== ANY) out.add(id);
+    return [...out];
+  }
+
+  /** What a backend here answers by name, without the ids only a flow takes: what a peer's request, which skips flows, can run. */
+  served(): string[] {
     const out = new Set<string>();
     for (const s of this.slots) {
       for (const m of s.cfg.serves.length ? s.cfg.serves : s.state.catalog()) {
@@ -276,8 +284,6 @@ export class ModelCatalog {
     for (const id of this.followIds()) {
       if (out.has(this.cfg.models[id]!.as!)) out.add(id);
     }
-    // An id a flow takes is advertised whether or not a backend serves it: where it lands is decided per request.
-    for (const flow of Object.values(this.cfg.flows)) for (const id of flow.inputs) if (id !== ANY) out.add(id);
     return [...out];
   }
 
