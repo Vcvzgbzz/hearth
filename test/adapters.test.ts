@@ -298,4 +298,63 @@ try {
   await node2.close();
   search.close();
 }
+// --- an adapter in front of an MCP server hearth runs ------------------------
+// The session hearth opens for a caller's initialize stays the caller's when the answer is adapted.
+const mcpProgram = join(dir, "mcp.mjs");
+writeFileSync(mcpProgram, `
+import { createInterface } from "node:readline";
+const say = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.method === "initialize") return say({ id: m.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "run-tools", version: "1.0" } } });
+  if (m.method === "tools/list") return say({ id: m.id, result: { tools: [{ name: "echo" }] } });
+});
+`);
+const passPath = join(dir, "pass.mjs");
+writeFileSync(passPath, `export default { apiVersion: 1, kinds: {}, setup() { return { adapt: {
+  request() { return {}; },
+  response(res) { return { body: JSON.stringify({ adapted: true, inner: JSON.parse(res.body) }) }; },
+} }; } };
+`);
+const free4 = await port();
+const cfg4 = join(mkdtempSync(join(tmpdir(), "hearth-adapters-mcp-")), "mcp.yaml");
+writeFileSync(cfg4, `version: 3
+name: t
+listen: {host: 127.0.0.1, port: ${free4}}
+backends:
+  main: {url: http://127.0.0.1:1, serves: [m]}
+models:
+  m: {backend: main}
+flows:
+  plugins:
+    inputs: [MCP, API]
+    steps:
+      - when: {variant: [tools]}
+        to: {plugin: runner, adapt: pass}
+      - to: {asked: true}
+  rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+plugins:
+  runner:
+    run: {command: ${JSON.stringify(process.execPath)}, args: [${JSON.stringify(mcpProgram)}]}
+    trust: code
+  pass: {use: 'file:${passPath}', trust: code}
+`);
+const node4 = createNode(loadConfig(cfg4), silentLogger);
+node4.start();
+await node4.startPlugins();
+await new Promise<void>((r) => node4.server.listen(free4, "127.0.0.1", r));
+try {
+  for (let i = 0; i < 100 && node4.plugins.status().find((p) => p.name === "runner")?.mcp?.tools !== 1; i++) await new Promise((r) => setTimeout(r, 50));
+  const r = await fetch(`http://127.0.0.1:${free4}/plugins/tools/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "c", version: "0" } } }),
+  });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json() as { adapted?: boolean }).adapted, true, "the answer went through the adapter");
+  assert.match(String(r.headers.get("mcp-session-id")), /^[0-9a-f-]{36}$/, "an adapted answer keeps the session the server opened");
+} finally {
+  await node4.close();
+}
+
 console.log("adapters: ok");
