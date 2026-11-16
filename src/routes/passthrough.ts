@@ -5,7 +5,7 @@
 import { inScope } from "../access/admit.js";
 import { QueueFullError, Refusal } from "../errors.js";
 import { backendAuth } from "../config/backends.js";
-import { KEY_REFUSED, fail, headersOf, jobId, pipeThrough, refusedKey } from "../wire/http.js";
+import { KEY_REFUSED, deliveredWhole, fail, headersOf, jobId, pipeThrough, refusedKey } from "../wire/http.js";
 import { multipartField, replaceMultipartField } from "../wire/multipart.js";
 import type { BackendSlot } from "../queue/pool.js";
 import { type Traced, firstByte, notRun } from "../observe/requestlog.js";
@@ -212,7 +212,7 @@ export function passthroughRoutes(ctx: RouteContext) {
 
     const ctrl = new AbortController();
     res.on("close", () => {
-      if (!res.writableEnded) ctrl.abort();
+      if (!res.writableEnded && !deliveredWhole(res)) ctrl.abort();
     });
     // `orFail` turns a 5xx into a throw before anything is relayed, so a route with a fallback can still use it.
     const proxy = async (to: BackendSlot = target, sendBody = outBody, orFail = false): Promise<void> => {
@@ -315,6 +315,11 @@ export function passthroughRoutes(ctx: RouteContext) {
         // for the polling, not the working.
         await proxy();
       } else {
+        // Unqueued, but a request that names a model spends it: the key's limits hold here too.
+        if (named) {
+          limits.withinLimits(who);
+          limits.withinModelLimits(who, named);
+        }
         const mark = { id: `p${++proxySeq}`, backend: target.name, model: named ?? null };
         proxying.add(mark);
         try {

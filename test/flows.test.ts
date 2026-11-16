@@ -594,6 +594,10 @@ const heavy = { inputs: ["big"], steps: [{ when: { caller: "app" }, to: { peer: 
   assert.equal(to("odd:name"), "small", "a name a flow takes as written is itself, colon and all");
   assert.equal(to("qwen:latest"), "qwen:latest", "and one no flow knows goes to the flow for every other name whole");
   assert.deepEqual(typeOf(cfg.flows, "LLM:fast"), { type: "LLM", variant: "fast" });
+  // A rule that keeps conversations where they went sends a plugin request to no model it kept one on.
+  const kept = parseConfig(base({ ...flows, tools: { sticky: 60000, inputs: ["MCP"], steps: [{ to: "small" }] } }));
+  const r = resolve("MCP:web", { ...world, cfg: kept, plugin: "web", kind: "MCP", pinned: () => ({ model: "small" }) } as World);
+  assert.ok(r.unlisted || r.model !== "small", "a plugin request is not sent to the model its rule kept a conversation on");
   assert.throws(() => parseConfig(base({ a: { inputs: ["a"], steps: [{ when: { variant: "x:y" }, to: "small" }, { to: "big" }] } })), /a variant is a plain word/);
 }
 

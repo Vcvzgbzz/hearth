@@ -3,6 +3,7 @@
  * relaying an upstream answer, and the header rules for crossing a proxy hop. No node state.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createHash, timingSafeEqual } from "node:crypto";
 
@@ -173,13 +174,38 @@ export async function pipeThrough(up: UpstreamResponse, res: ServerResponse, wat
       "X-Accel-Buffering": "no",
     });
   }
-  if (watch === undefined) {
-    await pipeline(up.body, res);
-  } else {
-    await pipeline(up.body, watch.through(), res);
-    watch.end();
+  const done = String(up.headers["content-type"] ?? "").includes("text/event-stream") ? doneMarker(res) : null;
+  try {
+    if (watch === undefined) await (done ? pipeline(up.body, done, res) : pipeline(up.body, res));
+    else await (done ? pipeline(up.body, done, watch.through(), res) : pipeline(up.body, watch.through(), res));
+  } catch (e) {
+    // A client that hangs up once it has read `[DONE]` has its whole answer.
+    if (!delivered.has(res)) throw e;
+    up.body.destroy();
   }
+  watch?.end();
   return up.status;
+}
+
+const delivered = new WeakSet<ServerResponse>();
+const DONE = "data: [DONE]";
+
+/** Whether `res` has carried a stream's closing `data: [DONE]`: a hang-up after it is not an abort. */
+export const deliveredWhole = (res: ServerResponse): boolean => delivered.has(res);
+
+/** Passes every chunk on unchanged and marks `res` once `data: [DONE]` has gone by, split across chunks or not. */
+function doneMarker(res: ServerResponse): Transform {
+  let tail = "";
+  return new Transform({
+    transform(chunk: Buffer, _enc, next) {
+      if (!delivered.has(res)) {
+        const seen = tail + chunk.toString("latin1");
+        if (seen.includes(DONE)) delivered.add(res);
+        tail = seen.slice(-(DONE.length - 1));
+      }
+      next(null, chunk);
+    },
+  });
 }
 
 /** Open a server-sent event stream. */
