@@ -429,7 +429,11 @@ plugins:
     trust: code
 ```
 
-- The bare-string shorthand `fallback: degoog` still works and means the same as `{ plugin: degoog }`.
+- **It is asked when the plugin cannot answer**: it cannot be reached (within 3 seconds) or does not start answering in time, it
+  answers 5xx or 429, or it is paused or did not start. A 4xx is the plugin's answer and is passed on. A
+  plugin that has begun answering is not replaced partway. When it has no `fallback`, a failure hands the
+  request to the next line of the flow instead, unless the caller's router is `strict`.
+- The bare-string shorthand `fallback: crawler-2` means the same as `{ plugin: crawler-2 }`.
 - `adapt` is optional. With it the fallback may speak a different API; without it the fallback is sent
   the same request, exactly as before.
 - `adapt` must name a `trust: code` adapter plugin loaded from a `file:` or `npm:` use (the same rule
@@ -456,6 +460,9 @@ With `adapt` on a plugin's fallback:
 - **Each side is held to the adapter plugin's `timeoutMs`; the caller's credentials are never handed
   to the adapter.**
 - **The adapter's last call is recorded** (so the console lights the block).
+- **On a line with its own `adapt:`, the two stack.** The line's adapter carries the caller's request to the
+  plugin's API, the fallback's carries that on to the fallback's API, and a 2xx answer comes back through the
+  fallback's adapter, then the line's.
 
 The adapter's contract and failure rules are under [Adapter plugins](#adapter-plugins) below.
 

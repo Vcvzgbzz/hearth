@@ -356,8 +356,8 @@ routers:
   the line's `adapt:` code finds no counterpart for the request, the router is asked again with that
   plugin passed over: the next line that matches, as a chat request moves on after a failed model.
   Every line is the router's own decision, so a line it would refuse is never taken, and
-  `strict: true` switches the next line off. A plugin's own `fallback` is still one hop, with the
-  same request, before the line counts as failed.
+  `strict: true` switches the next line off. A plugin's own `fallback` is still one hop, sent the
+  same request (as the line's adapter carried it over, when it has one), before the line counts as failed.
 - **`adapt:` names an adapter** in front of that line's target: see
   [Adapters on a line](#adapters-on-a-line).
 - Every condition a step can test applies: the caller, a header, the time of day.
@@ -467,8 +467,10 @@ lights the block). This is the automatic way — no second line is needed.
 
 An example is at [`examples/adapters/searxng-to-degoog.mjs`](../examples/adapters/searxng-to-degoog.mjs).
 
-A plugin's own `fallback` is still one hop with the same request ([A fallback](plugins.md#a-fallback)).
-To fall back to a plugin that speaks another API, put it on the next line with `adapt:` instead.
+A plugin's own `fallback` is still one hop ([A fallback](plugins.md#a-fallback)). On a line with `adapt:` it
+serves the plugin's API, so the adapter wraps it as it wraps the plugin: it is sent the request the adapter
+carried over, and its 2xx answer goes back through `response()`. To fall back to a plugin that speaks another
+API, give the fallback its own adapter (`fallback: { plugin, adapt }`), or put it on the next line with `adapt:`.
 
 ### Adapters on the map
 
@@ -499,7 +501,7 @@ request goes down that line; it turns red when the last call through it failed, 
 did, and the reason is on the block when you hover it. Only the last call is kept, in memory, so a
 restart forgets it.
 
-Click the block for its panel beside the map:
+The pencil on the block opens its dialog, as a rule's pencil does:
 
 - **used on**: every line of every router that names it, each with a way to take it off that line.
 - **try it**: one side of the code run against a sample request (and, for `response()`, a sample

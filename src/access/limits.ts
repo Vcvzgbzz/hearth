@@ -139,6 +139,20 @@ export class Limits {
     return r !== null && (r.maxConcurrent > 0 || r.models[model]?.maxConcurrent !== undefined) ? undefined : callerCap(null, this.cfg);
   }
 
+  /** Is this key running as many jobs as it may, here and on peers together? */
+  keyAtLimit(caller: string): boolean {
+    const total = this.callers.ruleOf(caller)?.maxConcurrent ?? 0;
+    return total > 0 && this.pool.tally.full(caller, "", { total, model: 0 });
+  }
+
+  /** The cap on a local caller's peer work: off-box work cannot wait, so a key's own limit refuses there, else the node's cap does. */
+  peerCapOf(caller: string, model: string): { maxPerCaller?: number; maxPerModel?: number } {
+    const r = this.callers.ruleOf(caller);
+    const total = r?.maxConcurrent ?? 0;
+    const one = r?.models[model]?.maxConcurrent ?? 0;
+    return { maxPerCaller: total > 0 ? total : callerCap(null, this.cfg), ...(one > 0 ? { maxPerModel: one } : {}) };
+  }
+
   /**
    * Jobs one caller may hold per lane. A peer's limit is one total over every model, since the
    * hardware is shared; a model's own limit caps that model as well.

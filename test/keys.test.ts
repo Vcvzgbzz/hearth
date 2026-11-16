@@ -5,6 +5,7 @@
  *   - a revoke after another revoke removing a neighbour
  *   - a key held to some models minting one held to none
  *   - a model evicted while it is answering
+ *   - a revoked key's router line handed to the next key minted under its label
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -49,6 +50,10 @@ models:
   spare: {backend: main}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+routers:
+  narrowed:
+    flows:
+      rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
 apiKeys:
   - {key: full-secret, label: admin}
   - {key: narrow-secret, label: narrow, models: [spare]}
@@ -96,6 +101,12 @@ assert.equal((await post("/keys/rotate", "narrow-secret", { label: "turns" })).s
 assert.equal((await post("/keys/revoke", "full-secret", { label: "turns" })).status, 200);
 assert.equal((await post("/keys/revoke", "full-secret", { label: "five" })).status, 200);
 assert.equal((await post("/keys/mint", first.key, { label: "four" })).status, 401, "a revoked key is turned away at once");
+
+// A revoked key takes its router line with it.
+assert.equal((await post("/keys/mint", "full-secret", { label: "routed", router: "narrowed" })).status, 200);
+assert.match(readFileSync(cfgPath, "utf8"), /routed: narrowed/);
+assert.equal((await post("/keys/revoke", "full-secret", { label: "routed" })).status, 200);
+assert.doesNotMatch(readFileSync(cfgPath, "utf8"), /routed: narrowed/, "the router line goes with the key");
 
 // Evict.
 assert.equal((await post("/v1/evict", "narrow-secret", { model: "mine" })).status, 403, "a scoped key drops only what it may run");

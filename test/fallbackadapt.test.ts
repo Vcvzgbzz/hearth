@@ -7,6 +7,8 @@
  *   - the plugin fails: the fallback answers through the adapter
  *   - `null` from request(): the plugin's own failure stands
  *   - a response() that throws is a 502 naming the adapter
+ *   - on a line with its own adapter, the fallback's adapter is given the request on the plugin's API, and its
+ *     answer goes on through the line's adapter to the caller
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -68,6 +70,21 @@ writeFileSync(gate, `export default {
   },
 };
 `);
+// A line's adapter: the caller asks with `term` and is answered with `hits`; the plugin's API takes `q`.
+const front = join(dir, "front.mjs");
+writeFileSync(front, `export default {
+  apiVersion: 1,
+  kinds: {},
+  setup() {
+    return {
+      adapt: {
+        request(req) { return { path: "/search", query: { q: req.query.term } }; },
+        response(res) { return { body: JSON.stringify({ hits: JSON.parse(res.body).results }) }; },
+      },
+    };
+  },
+};
+`);
 const cfgPath = join(dir, "hearth.yaml");
 writeFileSync(cfgPath, `version: 3
 name: t
@@ -78,12 +95,14 @@ models:
   m: {backend: main}
 flows:
   rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+  plugins: {inputs: [API], steps: [{when: {variant: [lookup]}, to: {plugin: primary, adapt: front}}, {to: {asked: true}}]}
 apiKeys:
   - {key: k-app, label: app}
 plugins:
   primary: {serves: "${apiUrl}/primary", trust: http, fallback: {plugin: other, adapt: gate}}
   other: {serves: "${apiUrl}/other", trust: http}
   gate: {use: 'file:${gate}', trust: code, timeoutMs: 500}
+  front: {use: 'file:${front}', trust: code, timeoutMs: 500}
 `);
 const node = createNode(loadConfig(cfgPath), silentLogger);
 node.start();
@@ -100,6 +119,9 @@ try {
   assert.deepEqual(await call("/plugins/primary/search?q=hearth"), { status: 200, body: { results: [{ url: "https://a.test" }], q: "hearth" } });
   // No counterpart on the fallback's API: the plugin's own failure is the caller's.
   assert.equal((await call("/plugins/primary/search?q=none")).status, 502, "null from request() leaves the plugin's failure");
+  // Both adapters in turn: the line's carries the caller's request to primary's API, the fallback's on to other's,
+  // and the answer comes back through the fallback's adapter, then the line's.
+  assert.deepEqual(await call("/plugins/lookup/x?term=stacked"), { status: 200, body: { hits: [{ url: "https://a.test" }] } });
   // An answer the adapter cannot read is a 502 that names it.
   const bad = await call("/plugins/primary/search?q=bad");
   assert.equal(bad.status, 502);
