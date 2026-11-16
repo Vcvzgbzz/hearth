@@ -14,6 +14,7 @@ import type { HearthConfig } from "../config/config.js";
 import { DEFAULT_ROUTER, type Flow } from "../config/flows.js";
 import { PLUGIN_STAGES, pluginAuth, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
 import type { Logger } from "../observe/log.js";
+import { answerOf, type Adapter, type AdapterAnswer, type AdapterRequest, type LineAdapter, requestOf } from "../routing/adapters.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */
@@ -72,13 +73,15 @@ export interface Decision {
   flag?: string;
 }
 
-/** What a code plugin's `setup` returns: one function per stage it hooks. */
+/** What a code plugin's `setup` returns: one function per stage it hooks, or an adapter a line names. */
 export interface Hooks {
   request?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   routed?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   log?: (x: HookExchange) => Promise<void> | void;
   error?: (x: HookExchange) => Promise<void> | void;
   stop?: () => Promise<void> | void;
+  /** For a plugin another flow line names with `adapt:`: it translates that line's request and answer. */
+  adapt?: Adapter;
 }
 
 /** What `setup` is given. */
@@ -126,7 +129,7 @@ export interface PluginStatus {
   use: string;
   /** The service's own API, answered at `/plugins/<name>/*`, shown as its origin and path; null when it has none. */
   serves: string | null;
-  /** The plugin that answers when this one cannot; null when it has none. */
+  /** The plugin that answers when this one cannot, with the same request; null when it has none. */
   fallback: { plugin: string } | null;
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
@@ -330,6 +333,22 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
   return out;
 }
 
+/** Every plugin some flow line names with `adapt:`, in the default rules and every router's. */
+export function adapterNames(cfg: HearthConfig): Set<string> {
+  const out = new Set<string>();
+  const walk = (flows: Record<string, Flow>) => {
+    for (const f of Object.values(flows)) {
+      for (const st of f.steps) {
+        const adapt = "adapt" in st.to ? st.to.adapt : undefined;
+        if (adapt !== undefined) out.add(adapt);
+      }
+    }
+  };
+  walk(cfg.flows);
+  for (const r of Object.values(cfg.routers)) walk(r.flows);
+  return out;
+}
+
 export class Plugins {
   private loaded: Loaded[] = [];
   private seq = 0;
@@ -378,13 +397,19 @@ export class Plugins {
       l.kinds = effectiveKinds(declared, decl.kinds);
       const misplaced = this.misplaced(name, l.kinds, needs);
       if (misplaced) throw new Error(misplaced);
+      // A line that names this plugin with `adapt:` calls both sides, so a setup without them cannot serve it.
+      const namedAsAdapter = adapterNames(this.cfg).has(name);
+      if (namedAsAdapter && (typeof hooks.adapt?.request !== "function" || typeof hooks.adapt.response !== "function")) {
+        throw new Error("it is named as an adapter (a line's `adapt:`) but its setup returns no adapt with request and response");
+      }
       l.hooks = hooks;
       l.state = "running";
       l.error = null;
       this.startMcp(l);
       const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
       this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
-      if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+      // An adapter runs where a line that names it does, so it is not a plugin that runs nowhere.
+      if (decl.use !== null && !decl.everyLine && !namedAsAdapter && !placements(this.cfg).some((x) => x.plugin.name === name)) {
         this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
       }
     } catch (e) {
@@ -499,6 +524,23 @@ export class Plugins {
   /** The plugin that answers `/plugins/<name>/*` when this one cannot; null when it has none. */
   fallbackOf(name: string): PluginDecl["fallback"] {
     return this.loaded.find((x) => x.name === name)?.decl.fallback ?? null;
+  }
+
+  /**
+   * The adapter a running plugin exposes to a line that names it with `adapt:`; null when there is
+   * none, or it did not start. Both sides are held to the adapter plugin's `timeoutMs`, as every
+   * hook is: one that never settles does not hold the caller open.
+   */
+  adapterOf(name: string): LineAdapter | null {
+    const l = this.loaded.find((x) => x.name === name);
+    const a = l?.state === "running" ? l.hooks.adapt : undefined;
+    if (!l || !a) return null;
+    const ms = l.decl.timeoutMs;
+    return {
+      name,
+      request: (req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.request(req)).then((v) => requestOf(v, `adapter ${name} request()`)), ms, `adapter ${name}`),
+      response: (res: AdapterAnswer, req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.response(res, req)).then((v) => answerOf(v, `adapter ${name} response()`)), ms, `adapter ${name}`),
+    };
   }
 
   /**

@@ -18,7 +18,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   (`login.ts`), and the sliding-window rate limit (`window.ts`)
 - `src/routing/`: where a request goes: `route.ts` decides, from the live state in `world.ts`;
   `actions.ts` is what a step can set off; `stats.ts` is what a model can take against what a
-  request needs; `reach.ts` is who can reach what, for the console
+  request needs; `reach.ts` is who can reach what, for the console; `adapters.ts` is the adapter
+  contract a `trust: code` plugin's `setup` returns and a line's `adapt:` names
 - `src/queue/`: when it runs: `scheduler.ts` (admission per backend), `pool.ts` (the backends
   and their queues, and what they can take), `models.ts` (which backend serves a model, and what it is
   called on each side), `hardware.ts` (backends taking turns on shared hardware: evictions, residents, holds), `resources.ts` (whose turn each resource is), `backend.ts` (one backend's state),
@@ -68,6 +69,8 @@ whether it may run, `routing/` says where, `queue/` says when, and `wire/` does 
   and the replay strip over the routing map are `Requests.tsx`, and what a trace says is `trace.ts`; the Usage
   page is `Usage.tsx`, and its sums are `tally.ts`; the Playground page is
   `Playground.tsx`, and its stream parser, code-fence split and facts line are `chat.ts`
+- `examples/`: files people copy into their own setup, not loaded by hearth itself;
+  `examples/adapters/` holds an example adapter plugin, for a fallback between two APIs
 - `test/`: one `*.test.ts` per area; run one with `npx tsx test/<name>.test.ts`
   (`npm run build:console` first for anything that serves the page)
 

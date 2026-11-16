@@ -50,7 +50,7 @@ export interface World {
   now?: () => Date;
   /** Leave peers out: one has already failed this request. */
   noPeers?: boolean;
-  /** Models here that have just failed this request, to be passed over. */
+  /** Models here that have just failed this request, to be passed over; a plugin request passes over the plugins that failed it. */
   skip?: ReadonlySet<string>;
   /** Kept on this machine: no peer, and no model this says runs elsewhere (a cloud provider). */
   keepHere?: (model: string) => boolean;
@@ -78,6 +78,8 @@ export type Resolution = {
   unlisted?: true;
   /** For a request to /plugins/<name>/*: the plugin it goes to, which a step may name in place of the one asked for. */
   plugin?: string;
+  /** For a plugin target that names one: the adapter the request and the answer pass through on that line. */
+  adapt?: string;
 } & ({ target: "local" } | { target: "peer"; peer: string; theirModel: string } | { target: "unavailable" });
 
 /**
@@ -146,7 +148,7 @@ export function mayLeave(cfg: HearthConfig, asked: string): boolean {
 }
 
 /** A place a step can send work, resolved against what is reachable right now. */
-type Reached = { model: string; peer?: string; theirModel?: string; plugin?: string };
+type Reached = { model: string; peer?: string; theirModel?: string; plugin?: string; adapt?: string };
 
 /**
  * Walk the flow a request for `asked` enters. Steps are tried in order: one is passed over
@@ -172,7 +174,7 @@ export function resolve(named: string, w: World): Resolution {
   const done = (r: Reached | null, reason: string): Resolution => {
     const why = passed.length > 0 ? `${reason} (${passed[0]})` : reason;
     if (r === null) return { target: "unavailable", model: asked, lane, params, via, path, actions, reason: passed.length > 0 ? `${passed[0]}; ${reason}` : reason };
-    if (r.plugin !== undefined) return { target: "local", plugin: r.plugin, model: r.model, lane, params, via, path, actions, reason: why };
+    if (r.plugin !== undefined) return { target: "local", plugin: r.plugin, ...(r.adapt !== undefined ? { adapt: r.adapt } : {}), model: r.model, lane, params, via, path, actions, reason: why };
     if (r.peer !== undefined) return { target: "peer", peer: r.peer, theirModel: r.theirModel!, model: r.model, lane, params, via, path, actions, reason: why };
     return { target: "local", model: r.model, lane: w.cfg.models[r.model]?.lane ?? lane, params, via, path, actions, reason: why };
   };
@@ -302,8 +304,11 @@ export function resolve(named: string, w: World): Resolution {
       if ("plugin" in s.to || (w.plugin !== undefined && "asked" in s.to)) {
         if (w.plugin === undefined) { passed.push(`${here} sends to the plugin ${(s.to as { plugin: string }).plugin}, which takes no model requests`); continue; }
         const to = "plugin" in s.to ? s.to.plugin : w.plugin;
+        // A plugin that has already failed this request is passed over, so the next line that names one is its fallback.
+        if (w.skip?.has(to)) { passed.push(`${here} sends to ${to}, which just failed`); continue; }
+        const adapt = s.to.adapt;
         took(name, i, s);
-        return done({ model: to, plugin: to }, here);
+        return done({ model: to, plugin: to, ...(adapt !== undefined ? { adapt } : {}) }, here);
       }
       if (w.plugin !== undefined && !("flow" in s.to)) { passed.push(`${here} sends to a model, and this request is for the plugin ${w.plugin}`); continue; }
       let r: Reached | string | null = null;
