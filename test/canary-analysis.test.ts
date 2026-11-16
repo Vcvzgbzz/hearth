@@ -16,7 +16,7 @@
  */
 import assert from "node:assert/strict";
 
-import { analyseAnswer, isFailure, readCompletion } from "../src/observe/canary.js";
+import { analyseAnswer, isFailure, pattern, patternCacheSize, readCompletion } from "../src/observe/canary.js";
 
 const PARIS = /paris/i;
 
@@ -190,6 +190,21 @@ const PARIS = /paris/i;
   assert.equal(readCompletion(null), null);
   assert.equal(readCompletion("not json"), null);
   assert.equal(readCompletion({ choices: [{ message: {} }] })?.content, "");
+}
+
+// --- the compiled patterns stay bounded --------------------------------------
+// A probe compiles its expectation once and keeps it. Configurations change over a node's
+// life, so the cache must not keep every expectation it has ever seen.
+{
+  for (let i = 0; i < 1000; i++) pattern(`^expect-${i}$`);
+  assert.ok(patternCacheSize() <= 256, `the cache is capped, got ${patternCacheSize()}`);
+  // The most recent ones still match, and are still compiled case-insensitively.
+  assert.equal(pattern("^expect-999$").test("expect-999"), true);
+  assert.equal(pattern("^expect-999$").test("EXPECT-999"), true, "still case-insensitive");
+  assert.equal(pattern("^expect-999$").test("expect-998"), false);
+  // Reusing one already kept does not grow it.
+  pattern("^expect-999$");
+  assert.ok(patternCacheSize() <= 256);
 }
 
 console.log("canary-analysis.test.ts ok");
