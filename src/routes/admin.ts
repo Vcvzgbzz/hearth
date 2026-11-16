@@ -143,7 +143,7 @@ export function adminRoutes(ctx: RouteContext, { networkView }: { networkView: (
         apiError(res, 400, "share must be an object of model -> true, false or null");
         return;
       }
-      const catalog = pool.models.catalog();
+      const catalog = pool.models.served();
       for (const [model, want] of Object.entries(body.share as Record<string, unknown>)) {
         if (want !== true && want !== false && want !== null) {
           apiError(res, 400, `share.${model} must be true, false or null`);
@@ -202,7 +202,7 @@ export function adminRoutes(ctx: RouteContext, { networkView }: { networkView: (
         return;
       }
       // If we serve it too, `fastest` with local fallback; if not, peer only, since home would 404.
-      const local = pool.models.catalog().includes(mine);
+      const local = pool.models.served().includes(mine);
       const policy = (e.policy as RoutePolicy | undefined) ?? (local ? "fastest" : "peer");
       if (!["local", "peer", "spillover", "fastest"].includes(policy)) {
         apiError(res, 400, `policy must be local, peer, spillover or fastest (got ${policy})`);

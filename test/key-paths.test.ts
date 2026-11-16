@@ -4,6 +4,8 @@
  *   - work going to a peer refused by a cap the key was told it skips
  *   - a failed peer's retry running past the key's limit, uncounted
  *   - a model's own limit checked on the first model and not the one that ran
+ *   - a key's own limit ignored by work it sends to a peer
+ *   - an unqueued passthrough spending a model past the key's limits
  */
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
@@ -60,6 +62,8 @@ const node = createNode(parseConfig({
     { key: "one-secret", label: "one", limits: { maxConcurrent: 1 } },
     { key: "last-secret", label: "last", limits: { models: { "moved-to": { requestsPerMinute: 1 } } } },
     { key: "rank-secret", label: "rank", limits: { models: { kept: { requestsPerMinute: 1 } } } },
+    { key: "solo-secret", label: "solo", limits: { maxConcurrent: 1 } },
+    { key: "plain-secret", label: "plain", limits: { requestsPerMinute: 1 } },
   ],
 }), silentLogger);
 node.start();
@@ -100,6 +104,25 @@ assert.equal((await post("rank-secret", "/v1/rank", {})).status, 200);
 const third = await post("rank-secret", "/v1/rank", {});
 assert.equal(third.status, 429);
 assert.match(await third.text(), /requests a minute of kept/);
+
+// Peer work counts towards the key's limit: a key running all it may is not sent to a peer, so its flow's next step answers.
+const borrowed = ask("solo-secret", "out");
+await until(() => away.length === 1);
+assert.equal((await ask("solo-secret", "out")).status, 503, "the flow's refuse step answers, not the peer");
+await settle();
+assert.equal(away.length, 1, "the peer was asked once");
+away.shift()!();
+assert.equal((await borrowed).status, 200);
+const freed = ask("solo-secret", "out");
+await until(() => away.length === 1);
+away.shift()!();
+assert.equal((await freed).status, 200, "once the first ends the key may borrow again");
+
+// An unqueued passthrough that names a model counts against the key's limits.
+assert.equal((await post("plain-secret", "/v1/completions", { model: "kept", prompt: "hi" })).status, 200);
+const over = await post("plain-secret", "/v1/completions", { model: "kept", prompt: "hi" });
+assert.equal(over.status, 429);
+assert.match(await over.text(), /requests a minute/);
 
 await node.close();
 console.log("key-paths.test.ts ok");

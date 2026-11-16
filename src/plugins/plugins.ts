@@ -14,6 +14,7 @@ import type { HearthConfig } from "../config/config.js";
 import { DEFAULT_ROUTER, type Flow } from "../config/flows.js";
 import { PLUGIN_STAGES, pluginAuth, pluginKind, REQUEST_KINDS, type PluginDecl, type PluginStage, type PluginWhen, type RequestKind, type StepPlugin } from "../config/plugins.js";
 import type { Logger } from "../observe/log.js";
+import { answerOf, type Adapter, type AdapterAnswer, type AdapterRequest, type LineAdapter, requestOf } from "../routing/adapters.js";
 import { checkHttp, StdioMcp, type McpState } from "./mcp.js";
 
 /** The stages this build calls. The others may be declared, and are never called yet. */
@@ -72,13 +73,15 @@ export interface Decision {
   flag?: string;
 }
 
-/** What a code plugin's `setup` returns: one function per stage it hooks. */
+/** What a code plugin's `setup` returns: one function per stage it hooks, or an adapter a line names. */
 export interface Hooks {
   request?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   routed?: (r: HookRequest) => Promise<Decision | void> | Decision | void;
   log?: (x: HookExchange) => Promise<void> | void;
   error?: (x: HookExchange) => Promise<void> | void;
   stop?: () => Promise<void> | void;
+  /** For a plugin another flow line names with `adapt:`: it translates that line's request and answer. */
+  adapt?: Adapter;
 }
 
 /** What `setup` is given. */
@@ -126,7 +129,7 @@ export interface PluginStatus {
   use: string;
   /** The service's own API, answered at `/plugins/<name>/*`, shown as its origin and path; null when it has none. */
   serves: string | null;
-  /** The plugin that answers when this one cannot; null when it has none. */
+  /** The plugin that answers when this one cannot, with the same request; null when it has none. */
   fallback: { plugin: string } | null;
   /** Requests answered at `/plugins/<name>/*`, and those the service could not answer. */
   served: { calls: number; errors: number };
@@ -160,6 +163,8 @@ const MCP_RECHECK_MS = 60_000;
 const runLine = (r: { command: string; args: string[] }) => [r.command, ...r.args].join(" ");
 const BREAK_MS = 30_000;
 const OBSERVE_MS = 10_000;
+/** How much of a streamed reply's text is kept for plugins that read a reply. */
+const REPLY_KEPT_MAX = 2_000_000;
 const CREDENTIALS = new Set(["authorization", "cookie", "x-api-key"]);
 /** How often a service that was not there at startup is asked again. */
 const RETRY_MS = 30_000;
@@ -231,6 +236,55 @@ export function matches(when: PluginWhen | null, r: HookRequest): boolean {
   return true;
 }
 
+/** What one line of a relayed answer adds to the assistant's text, and nothing for a line that adds none. */
+function replyLine(line: string): string {
+  if (!line.startsWith("data:")) return "";
+  const data = line.slice(5).trim();
+  if (data === "[DONE]") return "";
+  try {
+    const c = (JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
+    return typeof c === "string" ? c : "";
+  } catch {
+    // A comment, or a line that is not one of ours: the text before it still stands.
+    return "";
+  }
+}
+
+/**
+ * Reads a streamed chat answer as it arrives, a chunk at a time, keeping only the text it carries.
+ * The result is the text `replyText` gives for the whole body, without keeping the body itself.
+ */
+export class ReplyStream {
+  /** A line that did not end in the chunk it started in, to finish on the next one. */
+  private partial = "";
+  private out = "";
+
+  /** Take the next chunk of the stream. `cap` bounds the text kept, not the stream read. */
+  write(chunk: string, cap = REPLY_KEPT_MAX): void {
+    // Over the cap, add nothing but still end every line, so a later read starts on a line.
+    const room = this.out.length < cap;
+    const lines = (this.partial + chunk).split("\n");
+    this.partial = lines.pop() ?? "";
+    if (!room) return;
+    for (const line of lines) {
+      if (this.out.length >= cap) return;
+      this.out += replyLine(line);
+    }
+    if (this.out.length > cap) this.out = this.out.slice(0, cap);
+  }
+
+  /** Finish the stream: a last line with no newline after it still counts. */
+  end(cap = REPLY_KEPT_MAX): void {
+    if (this.partial !== "" && this.out.length < cap) this.out = (this.out + replyLine(this.partial)).slice(0, cap);
+    this.partial = "";
+  }
+
+  /** The assistant's text so far, or null when no line carried any. */
+  text(): string | null {
+    return this.out === "" ? null : this.out;
+  }
+}
+
 /** The assistant's text in a relayed chat answer: a JSON completion, or a stream of `data:` lines. */
 export function replyText(raw: string): string | null {
   const t = raw.trimStart();
@@ -243,20 +297,10 @@ export function replyText(raw: string): string | null {
       return null;
     }
   }
-  let out = "";
-  let any = false;
-  for (const line of raw.split("\n")) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (data === "[DONE]") continue;
-    try {
-      const c = (JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
-      if (typeof c === "string") { out += c; any = true; }
-    } catch {
-      // A line split across chunks or a comment: the text before it still stands.
-    }
-  }
-  return any ? out : null;
+  const stream = new ReplyStream();
+  stream.write(raw);
+  stream.end();
+  return stream.text();
 }
 
 /** Why a service could not be reached, said the way an operator can act on it. */
@@ -330,6 +374,22 @@ export function placements(cfg: HearthConfig): { line: Line; kind: RequestKind; 
   return out;
 }
 
+/** Every plugin some flow line names with `adapt:`, in the default rules and every router's. */
+export function adapterNames(cfg: HearthConfig): Set<string> {
+  const out = new Set<string>();
+  const walk = (flows: Record<string, Flow>) => {
+    for (const f of Object.values(flows)) {
+      for (const st of f.steps) {
+        const adapt = "adapt" in st.to ? st.to.adapt : undefined;
+        if (adapt !== undefined) out.add(adapt);
+      }
+    }
+  };
+  walk(cfg.flows);
+  for (const r of Object.values(cfg.routers)) walk(r.flows);
+  return out;
+}
+
 export class Plugins {
   private loaded: Loaded[] = [];
   private seq = 0;
@@ -378,13 +438,19 @@ export class Plugins {
       l.kinds = effectiveKinds(declared, decl.kinds);
       const misplaced = this.misplaced(name, l.kinds, needs);
       if (misplaced) throw new Error(misplaced);
+      // A line that names this plugin with `adapt:` calls both sides, so a setup without them cannot serve it.
+      const namedAsAdapter = adapterNames(this.cfg).has(name);
+      if (namedAsAdapter && (typeof hooks.adapt?.request !== "function" || typeof hooks.adapt.response !== "function")) {
+        throw new Error("it is named as an adapter (a line's `adapt:`) but its setup returns no adapt with request and response");
+      }
       l.hooks = hooks;
       l.state = "running";
       l.error = null;
       this.startMcp(l);
       const idle = Object.keys(l.kinds).filter((k) => !LIVE_KINDS.has(k as RequestKind));
       this.log.info("plugin.started", { plugin: name, trust: decl.trust, kinds: l.kinds, ...(idle.length ? { notYetRun: idle } : {}) });
-      if (decl.use !== null && !decl.everyLine && !placements(this.cfg).some((x) => x.plugin.name === name)) {
+      // An adapter runs where a line that names it does, so it is not a plugin that runs nowhere.
+      if (decl.use !== null && !decl.everyLine && !namedAsAdapter && !placements(this.cfg).some((x) => x.plugin.name === name)) {
         this.log.warn("plugin.on_no_line", { plugin: name, hint: "it runs nowhere: place it on a flow step, or set everyLine: true to run it on every request" });
       }
     } catch (e) {
@@ -498,6 +564,23 @@ export class Plugins {
   /** The plugin that answers `/plugins/<name>/*` when this one cannot; null when it has none. */
   fallbackOf(name: string): PluginDecl["fallback"] {
     return this.loaded.find((x) => x.name === name)?.decl.fallback ?? null;
+  }
+
+  /**
+   * The adapter a running plugin exposes to a line that names it with `adapt:`; null when there is
+   * none, or it did not start. Both sides are held to the adapter plugin's `timeoutMs`, as every
+   * hook is: one that never settles does not hold the caller open.
+   */
+  adapterOf(name: string): LineAdapter | null {
+    const l = this.loaded.find((x) => x.name === name);
+    const a = l?.state === "running" ? l.hooks.adapt : undefined;
+    if (!l || !a) return null;
+    const ms = l.decl.timeoutMs;
+    return {
+      name,
+      request: (req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.request(req)).then((v) => requestOf(v, `adapter ${name} request()`)), ms, `adapter ${name}`),
+      response: (res: AdapterAnswer, req: AdapterRequest) => withTimeout(Promise.resolve().then(() => a.response(res, req)).then((v) => answerOf(v, `adapter ${name} response()`)), ms, `adapter ${name}`),
+    };
   }
 
   /**

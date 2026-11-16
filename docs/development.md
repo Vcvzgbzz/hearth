@@ -34,6 +34,12 @@ way this used to fall over: a client that hangs up while the response is
 backpressured. That leaked a scheduler slot, and at `concurrency: 1` it wedged
 the whole node until restart without logging a thing.
 
+[`test/stream-done-close.test.ts`](../test/stream-done-close.test.ts) covers the
+opposite hang-up: OpenAI-style clients stop reading at `data: [DONE]` and close,
+while the backend may hold its own response open a moment longer. That close is
+an answered request, not an abort, on the chat route and the passthrough alike;
+a close before `[DONE]` is still recorded as an abort.
+
 [`test/ui.test.ts`](../test/ui.test.ts) binds a node to every interface and knocks
 on `/ui/data` from this machine's own LAN address, with a valid api key, to prove
 the gate holds anyway. It skips itself on a host with no routable
