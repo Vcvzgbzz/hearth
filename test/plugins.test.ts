@@ -22,6 +22,7 @@ import { loadConfig, parseConfig } from "../src/config/config.js";
 import { ConfigError } from "../src/config/read.js";
 import { createLogger, silentLogger } from "../src/observe/log.js";
 import { matches, replyText } from "../src/plugins/plugins.js";
+import { keepReplyStream } from "../src/routes/chat.js";
 import { createNode, type HearthNode } from "../src/server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "hearth-plugins-"));
@@ -46,6 +47,53 @@ assert.equal(parses({ plugins: { p: { use: "npm:@acme/x@1.2.3", trust: "code" } 
 // --- pure parts -------------------------------------------------------------
 assert.equal(replyText('{"choices":[{"message":{"content":"hi there"}}]}'), "hi there");
 assert.equal(replyText('data: {"choices":[{"delta":{"content":"hi "}}]}\n\ndata: {"choices":[{"delta":{"content":"there"}}]}\n\ndata: [DONE]\n\n'), "hi there");
+
+// An SSE reply arrives in many chunks, one of them in the middle of a `data:` line: reading it chunk by
+// chunk must give the same text replyText gives for the whole body, which is what a plugin got before.
+{
+  const body = 'data: {"choices":[{"delta":{"content":"hi "}}]}\n\n'
+    + 'data: {"choices":[{"delta":{"content":"there"}}]}\r\n\r\n'
+    + ": keep-alive\n\n"
+    + "data: not json\n\n"
+    + 'data: {"choices":[{"delta":{"content":"!"}}]}\n\n'
+    + "data: [DONE]\n\n";
+  const cuts = [5, 20, 41, 42, 77, 90, 130, 165, 190];
+  const made = keepReplyStream(true);
+  let at = 0;
+  for (const cut of cuts) {
+    if (cut <= at) continue;
+    made.write(body.slice(at, cut));
+    at = cut;
+  }
+  made.write(body.slice(at));
+  made.end();
+  assert.equal(made.text(), replyText(body), "reading SSE as it arrives gives the text replyText gives for the body");
+  assert.equal(made.text(), "hi there!", "including a line split across two chunks");
+
+  // The same body with no stream behind it is read as one piece.
+  const once = keepReplyStream(true);
+  once.write(body);
+  once.end();
+  assert.equal(once.text(), replyText(body));
+
+  // A character whose bytes arrive in two chunks is read whole.
+  const wide = Buffer.from('data: {"choices":[{"delta":{"content":"café 🔥"}}]}\n\n');
+  const split = wide.indexOf(Buffer.from("🔥")) + 2;
+  const halves = keepReplyStream(true);
+  halves.write(wide.subarray(0, split));
+  halves.write(wide.subarray(split));
+  halves.end();
+  assert.equal(halves.text(), "café 🔥", "a multi-byte character split across chunks");
+
+  // A JSON answer is kept as it is written and read as it was: the path replyText already took.
+  const json = '{"choices":[{"message":{"content":"plain"}}]}';
+  const whole = keepReplyStream(false);
+  whole.write(json.slice(0, 7));
+  whole.write(json.slice(7));
+  whole.end();
+  assert.equal(whole.text(), json);
+  assert.equal(replyText(whole.text() ?? ""), "plain");
+}
 const req = { id: "r", kind: "chat" as const, asked: "m", caller: "local", router: "default", lane: "chat", headers: { "x-a": "1" }, body: {} };
 assert.equal(matches({ target: ["peer"] }, req), false, "a target condition waits for routing");
 assert.equal(matches({ header: { "x-a": [] } }, req), true);
@@ -62,9 +110,18 @@ const backend = createServer(async (rq, rs) => {
   if (rq.url === "/running") return say({ running: [] });
   if (rq.url === "/v1/chat/completions") {
     backendCalls++;
-    seen.push(JSON.parse(raw));
+    const body = JSON.parse(raw) as { stream?: boolean; messages: { role: string; content: string }[] };
+    seen.push(body);
     await new Promise((r) => setTimeout(r, 20));
-    return say({ choices: [{ message: { role: "assistant", content: "the answer" } }] });
+    // A streamed answer, in frames small enough that some land mid-line: the reply a plugin must read is the text.
+    if (body.stream !== true) return say({ choices: [{ message: { role: "assistant", content: "the answer" } }] });
+    const delta = (content: string) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+    const frames = ["strea", "ming ", "the ", "an", "swer"];
+    rs.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+    const DONE = "data: [DONE]\n\n";
+    const pieces = [delta(frames[0]!), delta(frames[1]!), "da", delta(frames[2]!).slice(2), delta(frames[3]!), delta(frames[4]!), DONE.slice(0, 7), DONE.slice(7)];
+    for (const piece of pieces) { rs.write(piece); await new Promise((r) => setTimeout(r, 5)); }
+    return rs.end();
   }
   rs.writeHead(404).end();
 });
@@ -98,6 +155,10 @@ plugin("memory", `export default { apiVersion: 1, kinds: { chat: ["request", "ro
   request: (r) => ({ body: { ...r.body, messages: [{ role: "system", content: "remembered: " + ctx.config.fact }, ...r.body.messages] } }),
   routed: (r) => { globalThis.note("routed", r.target + ":" + r.model); },
   log: (x) => { globalThis.note("log", x.reply); },
+}) };`);
+// Sees the reply as a service does, without a reply of its own, so the answer is still the backend's.
+plugin("reader", `export default { apiVersion: 1, kinds: { chat: ["log"] }, setup: () => ({
+  log: (r) => { globalThis.note("reader", r.reply); },
 }) };`);
 plugin("where", `export default { apiVersion: 1, kinds: { chat: ["routed"] }, setup: () => ({
   routed: (r) => { globalThis.note("where", r.model + ":" + r.backend + ":" + r.leaves); },
@@ -154,6 +215,7 @@ plugins:
   where: {use: "file:./where.mjs", trust: code, everyLine: true}
   keeper: {use: "file:./keeper.mjs", trust: code, everyLine: true}
   memory: {use: "file:./memory.mjs", trust: code, integrity: "${integrity("memory")}", config: {fact: "likes tea"}, everyLine: true}
+  reader: {use: "file:./reader.mjs", trust: code, everyLine: true}
   imageonly: {use: "file:./imageonly.mjs", trust: code, everyLine: true}
   wrongkind: {use: "file:./wrongkind.mjs", trust: code, kinds: {image: [request]}, everyLine: true}
   guard: {use: "file:./guard.mjs", trust: code, locked: true, everyLine: true}
@@ -177,8 +239,8 @@ async function up(opts: { plugins?: boolean } = {}): Promise<{ node: HearthNode;
   await new Promise<void>((r) => node.server.listen(free, "127.0.0.1", r));
   return { node, url: `http://127.0.0.1:${free}` };
 }
-const chat = (url: string, content: string, headers: Record<string, string> = {}, key = "k-app", model = "m") =>
-  fetch(`${url}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...headers }, body: JSON.stringify({ model, messages: [{ role: "user", content }] }) });
+const chat = (url: string, content: string, headers: Record<string, string> = {}, key = "k-app", model = "m", stream = false) =>
+  fetch(`${url}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...headers }, body: JSON.stringify({ model, messages: [{ role: "user", content }], ...(stream ? { stream: true } : {}) }) });
 const settle = () => new Promise((r) => setTimeout(r, 60));
 
 {
@@ -198,6 +260,19 @@ const settle = () => new Promise((r) => setTimeout(r, 60));
     assert.deepEqual(g.pluginLog.routed, ["local:m"]);
     assert.deepEqual(g.pluginLog.log, ["the answer"]);
     assert.equal(g.pluginLog.imageonly, undefined, "a plugin for images is never called on chat");
+
+    // A streamed reply reads as its text: what a plugin gets is the answer, not the frames around it.
+    const streamed = await chat(url, "hello", {}, "k-app", "m", true);
+    assert.equal(streamed.status, 200);
+    const frames = await streamed.text();
+    assert.match(frames, /^data: /, "the caller is still handed the events it asked for");
+    await settle();
+    assert.equal(g.pluginLog.reader!.at(-1), "streaming the answer", "a plugin reads a streamed reply as its text, not as the frames");
+    assert.equal(g.pluginLog.reader!.at(-1), replyText(frames), "and as replyText reads the raw stream");
+    const plain = await chat(url, "hello");
+    await plain.text();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(g.pluginLog.reader!.at(-1), "the answer", "a JSON reply reads as it did");
 
     // A service is sent only what it reads: headers, not the messages.
     const sent = serviceGot.at(-1)! as { kind: string; request: Record<string, unknown> };
