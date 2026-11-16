@@ -85,6 +85,13 @@ assert.equal(replyText('data: {"choices":[{"delta":{"content":"hi "}}]}\n\ndata:
   halves.end();
   assert.equal(halves.text(), "café 🔥", "a multi-byte character split across chunks");
 
+  // The cap holds for a last line with no newline after it too.
+  const capped = keepReplyStream(true, 5);
+  capped.write('data: {"choices":[{"delta":{"content":"abc"}}]}\n');
+  capped.write('data: {"choices":[{"delta":{"content":"defgh"}}]}');
+  capped.end();
+  assert.equal(capped.text(), "abcde", "the text kept never passes the cap");
+
   // A JSON answer is kept as it is written and read as it was: the path replyText already took.
   const json = '{"choices":[{"message":{"content":"plain"}}]}';
   const whole = keepReplyStream(false);

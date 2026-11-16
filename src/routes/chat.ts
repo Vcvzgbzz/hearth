@@ -50,7 +50,7 @@ export function keepReplyStream(streamed: boolean, cap = 2_000_000): { write: (c
     end: () => {
       if (!stream) return;
       stream.write(utf8.end(), cap);
-      stream.end();
+      stream.end(cap);
     },
     text: () => (stream ? stream.text() : Buffer.concat(parts).toString("utf8")),
   };

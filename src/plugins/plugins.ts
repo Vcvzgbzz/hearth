@@ -271,8 +271,8 @@ export class ReplyStream {
   }
 
   /** Finish the stream: a last line with no newline after it still counts. */
-  end(): void {
-    if (this.partial !== "") this.out += replyLine(this.partial);
+  end(cap = REPLY_KEPT_MAX): void {
+    if (this.partial !== "" && this.out.length < cap) this.out = (this.out + replyLine(this.partial)).slice(0, cap);
     this.partial = "";
   }
 
