@@ -1,11 +1,11 @@
 /**
  * The smoke's fire follows the node's load: banked coals at idle, a full glow
  * and a steady run of embers when the queue is full, and nothing out of range
- * in between.
+ * in between; each finished request sends up the thing that says where it ran.
  */
 import assert from "node:assert/strict";
 
-import { fire, seedOf } from "../src/console/fire.js";
+import { fire, seedOf, STOKE, stokeOf } from "../src/console/fire.js";
 
 // --- idle is banked, not out; full is full -------------------------------------------
 {
@@ -44,6 +44,19 @@ import { fire, seedOf } from "../src/console/fire.js";
   for (const name of ["", "demo", "friend", "a-very-long-node-name-indeed"]) {
     for (const v of seedOf(name)) assert.ok(v >= 0 && v < 1, `${name}: ${v} is outside [0, 1)`);
   }
+}
+
+// --- each finished request sends up what says where it ran ---------------------------
+{
+  const clouds = new Set(["provider"]);
+  const req = (r: Partial<{ ok: boolean; caller: string; backend: string; peer: string }>) => stokeOf({ ok: true, caller: "me", ...r }, clouds);
+  assert.equal(req({ backend: "local" }), STOKE.request, "a request this node ran is its own spark");
+  assert.equal(req({ backend: "provider" }), STOKE.cloud, "a request a provider answered leaves through the top");
+  assert.equal(req({ peer: "friend" }), STOKE.peerOut, "a request sent to a peer drifts off the side");
+  assert.equal(req({ caller: "peer:friend", backend: "local" }), STOKE.peerIn, "a request in from a peer is blue-hot");
+  assert.equal(req({ ok: false, backend: "provider" }), STOKE.rain, "a provider's failure is rain like any other");
+  assert.equal(req({ ok: false }), null, "a refusal that never ran sends nothing");
+  assert.equal(new Set(Object.values(STOKE)).size, Object.keys(STOKE).length, "every kind is its own number");
 }
 
 console.log("smoke: ok");
