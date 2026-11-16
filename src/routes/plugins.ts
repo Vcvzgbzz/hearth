@@ -10,7 +10,7 @@ import { ConfigError, resolveSecret } from "../config/read.js";
 import { fail, forwardable, headersOf, json } from "../wire/http.js";
 import { checkHttp } from "../plugins/mcp.js";
 import { Plugins } from "../plugins/plugins.js";
-import type { AdapterAnswer, AdapterRequest } from "../routing/adapters.js";
+import type { AdapterAnswer, AdapterRequest, LineAdapter } from "../routing/adapters.js";
 import { resolve } from "../routing/route.js";
 import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
@@ -59,7 +59,7 @@ export function pluginRoutes(ctx: RouteContext) {
    *
    * The caller's router decides one line at a time: a line whose plugin cannot answer — or whose adapter says the
    * request has no counterpart there — hands the request to the next line that matches, as a chat request does,
-   * unless the caller's router is strict. Each line's own `fallback` is still one hop, with the same request.
+   * unless the caller's router is strict. A plugin's own `fallback` is still one hop.
    */
   async function routePluginServes(c: Call): Promise<void> {
     const { req, res, url } = c;
@@ -145,6 +145,7 @@ export function pluginRoutes(ctx: RouteContext) {
      * One line: the plugin it names, with the adapter in front of it when it has one. Falls back to the plugin's
      * own `fallback` — one hop, sent the request as the adapter carried it over — before the line counts as failed.
      * The adapter wraps the fallback as it wraps the plugin: the fallback serves the plugin's API, not the caller's.
+     * A fallback that names its own `adapt` is carried over again, from the plugin's API to its own.
      */
     async function serveLine(name: string, adaptName: string | undefined): Promise<Line> {
       /** What one attempt at a target is sent. */
@@ -168,7 +169,9 @@ export function pluginRoutes(ctx: RouteContext) {
         let carried: Partial<AdapterRequest> | null;
         try {
           carried = await adapter.request(original);
+          plugins.adapterCalled(adapter.name, { side: "request", ok: true, plugin: name });
         } catch (e) {
+          plugins.adapterCalled(adapter.name, { side: "request", ok: false, error: said(e), plugin: name });
           log.warn("flow.adapter_failed", { adapter: adapter.name, side: "request", plugin: name, caller: c.caller, error: said(e) });
           return { failed: `adapter ${adapter.name} could not carry the request over: ${said(e)}` };
         }
@@ -185,26 +188,37 @@ export function pluginRoutes(ctx: RouteContext) {
         return out;
       }
 
-      /** A 2xx answer from `by` (the plugin or its fallback) through the line's adapter; a 502 naming it when the code cannot read it. */
-      async function adaptAnswer(answer: AdapterAnswer, from: Record<string, string | string[]>, went: Outgoing, by: string): Promise<Line> {
+      /** A 2xx answer from `by` read through adapter `a`; a 502 naming it when its code cannot read the answer. */
+      async function through(a: LineAdapter, answer: AdapterAnswer, asked: AdapterRequest, by: string): Promise<AdapterAnswer | { answer: number; error: string }> {
         let read: Partial<AdapterAnswer>;
         try {
-          read = await adapter!.response(answer, original);
+          read = await a.response(answer, asked);
+          plugins.adapterCalled(a.name, { side: "response", ok: true, plugin: by });
         } catch (e) {
-          log.warn("flow.adapter_failed", { adapter: adapter!.name, side: "response", plugin: by, status: answer.status, caller: c.caller, error: said(e) });
-          return { answer: 502, error: `adapter ${adapter!.name} could not read ${by}'s answer: ${said(e)}` };
+          plugins.adapterCalled(a.name, { side: "response", ok: false, error: said(e), plugin: by });
+          log.warn("flow.adapter_failed", { adapter: a.name, side: "response", plugin: by, status: answer.status, caller: c.caller, error: said(e) });
+          return { answer: 502, error: `adapter ${a.name} could not read ${by}'s answer: ${said(e)}` };
         }
+        return { status: read.status ?? answer.status, contentType: read.contentType === undefined ? answer.contentType : read.contentType, body: read.body ?? answer.body };
+      }
+
+      /** An answer an adapter made, written out as the caller's own. */
+      function writeAdapted(out: AdapterAnswer, from: Record<string, string | string[]>, went: Outgoing, by: string, adapt: string): Line {
         // The answer is the adapter's now: what described the target's bytes no longer does.
         const headers: Record<string, string | string[]> = { ...from };
         for (const h of Object.keys(headers)) if (["content-length", "content-encoding", "etag"].includes(h.toLowerCase())) delete headers[h];
-        const kind = read.contentType === undefined ? answer.contentType : read.contentType;
-        if (kind === null) delete headers["content-type"];
-        else headers["content-type"] = kind;
-        const out = read.body ?? answer.body;
-        headers["content-length"] = String(Buffer.byteLength(out));
-        res.writeHead(read.status ?? answer.status, headers).end(out);
-        log.info("plugin.served", { plugin: by, ...(by !== name ? { for: name } : {}), method: went.method, path: went.path, status: read.status ?? answer.status, adapt: adapter!.name, caller: c.caller, ms: Date.now() - t0 });
+        if (out.contentType === null) delete headers["content-type"];
+        else headers["content-type"] = out.contentType;
+        headers["content-length"] = String(Buffer.byteLength(out.body));
+        res.writeHead(out.status, headers).end(out.body);
+        log.info("plugin.served", { plugin: by, ...(by !== name ? { for: name } : {}), method: went.method, path: went.path, status: out.status, adapt, caller: c.caller, ms: Date.now() - t0 });
         return { answered: true };
+      }
+
+      /** A 2xx answer from `by` (the plugin or its fallback) through the line's adapter. */
+      async function adaptAnswer(answer: AdapterAnswer, from: Record<string, string | string[]>, went: Outgoing, by: string): Promise<Line> {
+        const out = await through(adapter!, answer, original, by);
+        return "error" in out ? out : writeAdapted(out, from, went, by, adapter!.name);
       }
 
       /** The plugin's own fallback, one hop, sent the request as the adapter carried it over; or why the line failed. */
@@ -224,7 +238,8 @@ export function pluginRoutes(ctx: RouteContext) {
           if ("done" in alt) alt.done(false);
           return { failed: `${why}, and neither could its fallback ${fb.plugin}${"why" in alt ? `: ${alt.why}` : ""}` };
         }
-        log.info("plugin.fallback", { plugin: name, to: fb.plugin, why, caller: c.caller });
+        log.info("plugin.fallback", { plugin: name, to: fb.plugin, why, ...(fb.adapt !== undefined ? { adapt: fb.adapt } : {}), caller: c.caller });
+        if (fb.adapt !== undefined) return fallbackAdapted(why, went, fb.plugin, fb.adapt, alt);
         try {
           const up = await call(alt, went.method, went.path, went.search, went.body, adapter !== null, went.type);
           // A non-2xx is the fallback's answer to give; a 2xx goes back through the line's adapter, as the plugin's would.
@@ -244,6 +259,76 @@ export function pluginRoutes(ctx: RouteContext) {
           if (ctrl.signal.aborted) return { answered: true };
           log.warn("plugin.serve_failed", { plugin: fb.plugin, for: name, path: went.path, error: said(e) });
           if (!res.headersSent) return { failed: `${why}, and its fallback ${fb.plugin} failed: ${said(e)}` };
+          res.destroy();
+          return { answered: true };
+        }
+      }
+
+      /**
+       * The fallback through its own adapter: the request on the plugin's API (`went`) carried over to the
+       * fallback's, and a 2xx answer carried back, then through the line's adapter when it has one. `null` from
+       * request() means no counterpart there: the plugin's own failure stands.
+       */
+      async function fallbackAdapted(why: string, went: Outgoing, to: string, adaptName: string, alt: { url: string; auth: Record<string, string>; done: (ok: boolean) => void }): Promise<Line> {
+        const a = plugins.adapterOf(adaptName);
+        if (a === null) {
+          alt.done(false);
+          log.warn("flow.adapter_missing", { adapter: adaptName, plugin: to, for: name, caller: c.caller });
+          return { failed: `${why}, and its fallback's adapter ${adaptName} is not running` };
+        }
+        const asked: AdapterRequest = adapter === null ? original : {
+          method: went.method,
+          path: went.path,
+          query: Object.fromEntries(new URLSearchParams(went.search)),
+          contentType: went.type,
+          body: went.body === undefined || went.body.length === 0 || !isText(went.type) ? null : went.body.toString("utf8"),
+        };
+        let carried: Partial<AdapterRequest> | null;
+        try {
+          carried = await a.request(asked);
+          plugins.adapterCalled(a.name, { side: "request", ok: true, plugin: to });
+        } catch (e) {
+          alt.done(false);
+          plugins.adapterCalled(a.name, { side: "request", ok: false, error: said(e), plugin: to });
+          log.warn("flow.adapter_failed", { adapter: a.name, side: "request", plugin: to, for: name, caller: c.caller, error: said(e) });
+          return { failed: `${why}, and adapter ${a.name} could not carry the request over to ${to}: ${said(e)}` };
+        }
+        if (carried === null) {
+          alt.done(false);
+          return { failed: `${why}, and adapter ${a.name} has no counterpart for it on ${to}'s API` };
+        }
+        const out: Outgoing = { ...went };
+        if (carried.method !== undefined) out.method = carried.method;
+        if (carried.path !== undefined) out.path = carried.path;
+        if (carried.query !== undefined) {
+          const qs = new URLSearchParams(carried.query).toString();
+          out.search = qs === "" ? "" : `?${qs}`;
+        }
+        if (carried.body !== undefined) out.body = carried.body === null ? undefined : Buffer.from(carried.body, "utf8");
+        if (carried.contentType !== undefined) out.type = carried.contentType;
+        try {
+          const up = await call(alt, out.method, out.path, out.search, out.body, true, out.type);
+          // A non-2xx is the fallback's own answer: it is never given to an adapter.
+          if (up.status < 200 || up.status >= 300) {
+            alt.done(up.status < 500);
+            res.writeHead(up.status, forwardable(up.headers));
+            await pipeline(up.body, res);
+            log.info("plugin.served", { plugin: to, for: name, method: out.method, path: out.path, status: up.status, caller: c.caller, ms: Date.now() - t0 });
+            return { answered: true };
+          }
+          const text = await up.text(cfg.maxBodyBytes);
+          alt.done(true);
+          const typeOf = up.headers["content-type"];
+          const back = await through(a, { status: up.status, contentType: typeof typeOf === "string" ? typeOf : null, body: text }, asked, to);
+          if ("error" in back) return back;
+          // Back on the plugin's API: a line's adapter carries it on to the caller's, as it would the plugin's answer.
+          if (adapter === null) return writeAdapted(back, forwardable(up.headers), out, to, a.name);
+          return await adaptAnswer(back, forwardable(up.headers), out, to);
+        } catch (e) {
+          alt.done(false);
+          if (ctrl.signal.aborted) return { answered: true };
+          log.warn("plugin.serve_failed", { plugin: to, for: name, path: out.path, error: said(e) });
+          if (!res.headersSent) return { failed: `${why}, and its fallback ${to} failed: ${said(e)}` };
           res.destroy();
           return { answered: true };
         }

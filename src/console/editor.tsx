@@ -6,9 +6,10 @@
 import { ArrowDown, ArrowUp, ChevronDown, CircleHelp, History, Plus, Redo2, RefreshCw, Split, RotateCcw, Save, Search, Trash2, Undo2, Users, X, Zap } from "lucide-react";
 import { Fragment, useContext, useEffect, useState } from "react";
 
+import { AdapterPanel, NewAdapterDialog } from "./Adapters.js";
 import { NewDialog, Refs, refsOf, Review, Value } from "./config.js";
-import { ACTIONS, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withCaller, withDo, type Doc, type To } from "./draft.js";
-import { addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, pickOut, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Replayed } from "./editStore.js";
+import { ACTIONS, servingPlugins, setFallback, peerChoices, arranged, callersIn, directTo, EVERYONE, editStep, FACTS, isObj, linesRunning, list, moveStep, nodeOf, obj, peerNode, problems, put, rawTo, routeId, TEMPLATES, text, tidied, toOf, toText, usersOf, withAdapt, withCaller, withDo, type Doc, type To } from "./draft.js";
+import { adaptOn, addRouter, change, changed, choose, chooseAt, closeMenu, copy, copyMany, dirty, duplicate, edits, closeRule, editSelect, openRule, type EditSel, facts, focusOn, goBack, loadDraft, paste, pick, redo, remove, removeMany, removeRouter, pickOut, rename, revert, replayDraft, review, setAdding, showRouter, startRule, tryRequest, undo, useEdit, versions, whole, wire, type Choice, type Named, type Replayed } from "./editStore.js";
 import { HUE } from "./flowNodes.js";
 import { Conds } from "./flowNodes.js";
 import { sendTest, useLink, useStore, type Ran } from "./store.js";
@@ -67,7 +68,7 @@ export function finding(draft: Doc): Choice[] {
   ];
 }
 
-/** Open what can be edited: a rule in its dialog, an action in the side panel. */
+/** Open what can be edited: a rule in its dialog, an action or an adapter in the side panel. */
 const show = (on: NonNullable<EditSel>) => (on.kind === "flow" ? openRule(on.id) : editSelect(on));
 
 /** Go to what a search found: bring it into view, and open it when it has a panel. */
@@ -94,13 +95,18 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
   if (!draft) return;
   const at = node ? nodeOf(node) : null;
   const on = at?.kind.opens?.(at.id) ?? null;
-  const entry = on ? obj(obj(draft[SECTION[on.kind]])[on.id]) : {};
+  // An adapter is a plugin and a block drawn by a line: it is read in its panel and taken off the line
+  // there. Nothing about it is an entry of the file, so nothing here renames or deletes it.
+  const named: Named | null = on !== null && on.kind !== "adapter" ? { kind: on.kind, id: on.id } : null;
+  const entry = named ? obj(obj(draft[SECTION[named.kind]])[named.id]) : {};
+  const adapted = on?.kind === "adapter" && on.at !== undefined ? on.at : null;
   const items: Choice[] = on ? [
-    { label: `${on.kind === "flow" ? "rule" : "action"} ${on.id}`, head: true },
-    { label: "Edit…", value: "edit", hint: "its name is changed there, or by clicking it" },
-    { label: "Duplicate", value: "duplicate", hint: "⌘D, or ⌘C then ⌘V" },
-    ...(on.kind === "flow" ? [{ label: entry.off === true ? "Switch on" : "Switch off", value: "toggle", hint: entry.off === true ? undefined : "its names run as themselves until it is on again" }] : []),
-    { label: "Delete", value: "delete", danger: true, hint: "or press Delete" },
+    { label: `${on.kind === "flow" ? "rule" : on.kind === "adapter" ? "adapter" : "action"} ${on.id}`, head: true },
+    { label: "Edit…", value: "edit", hint: "its code and the lines that use it are in the panel" },
+    ...(named ? [{ label: "Duplicate", value: "duplicate", hint: "⌘D, or ⌘C then ⌘V" }] : []),
+    ...(named?.kind === "flow" ? [{ label: entry.off === true ? "Switch on" : "Switch off", value: "toggle", hint: entry.off === true ? undefined : "its names run as themselves until it is on again" }] : []),
+    ...(adapted !== null ? [{ label: "Take it off this line", value: "unadapt", danger: true, hint: "the line sends straight to its plugin again" }] : []),
+    ...(named ? [{ label: "Delete", value: "delete", danger: true, hint: "or press Delete" }] : []),
     { label: "the map", head: true },
   ] : [];
   chooseAt(e.clientX, e.clientY, [
@@ -118,9 +124,10 @@ export function contextMenu(e: { clientX: number; clientY: number }, node: strin
     else if (v.startsWith("action:")) setAdding(`actions:${v.slice(7)}`);
     else if (v === "fit") focusOn("*");
     else if (v === "tidy") change(tidied);
-    else if (on && v === "duplicate") duplicate(on);
+    else if (named && v === "duplicate") duplicate(named);
     else if (on && v === "edit") { show(on); focusOn(node!); }
-    else if (on && v === "delete") remove(on);
+    else if (adapted !== null && v === "unadapt") change((d) => withAdapt(d, adapted.flow, adapted.step, null) ?? d);
+    else if (named && v === "delete") remove(named);
     else if (on && v === "toggle") change((d) => { const { off: _, ...rest } = obj(obj(d.flows)[on.id]); return put(d, "flows", on.id, entry.off === true ? rest : { ...rest, off: true }); });
   });
 }
@@ -212,7 +219,7 @@ const anyModel = (draft: Doc | null): string =>
 
 /** The strip over the graph: add things, and review what the draft changes. */
 export function EditBar() {
-  const { draft, err, plan, past, future, unread, adding, router, replay } = useEdit();
+  const { draft, err, plan, past, future, unread, adding, router, replay, newAdapter } = useEdit();
   const hash = useStore((s) => s.data?.config.hash);
   const isDirty = useEdit(dirty);
   const ruleOpen = useEdit((s) => (s.opened && s.sel?.kind === "flow" ? s.sel.id : null));
@@ -242,12 +249,13 @@ export function EditBar() {
       // With a rule open in its dialog the key belongs to the dialog, not to the map under it.
       else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.opened) return;
       else if ((e.key === "Backspace" || e.key === "Delete") && !mod && several) removeMany();
-      else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.sel) remove(s.sel);
+      // An adapter is not an entry of the file: Delete on one does nothing, and its panel takes it off the line.
+      else if ((e.key === "Backspace" || e.key === "Delete") && !mod && s.sel) { const on = s.sel; if (on.kind !== "adapter") remove({ kind: on.kind, id: on.id }); }
       else if (mod && k === "d" && several) { if (copyMany()) paste(); }
-      else if (mod && k === "d" && s.sel) duplicate(s.sel);
+      else if (mod && k === "d" && s.sel && s.sel.kind !== "adapter") duplicate({ kind: s.sel.kind, id: s.sel.id });
       // Text that is selected on the page is what a copy is for, before any node.
       else if (mod && k === "c" && several && !String(getSelection() ?? "")) copyMany();
-      else if (mod && k === "c" && s.sel && !String(getSelection() ?? "")) copy(s.sel);
+      else if (mod && k === "c" && s.sel && s.sel.kind !== "adapter" && !String(getSelection() ?? "")) copy({ kind: s.sel.kind, id: s.sel.id });
       else if (mod && k === "v" && !e.shiftKey) paste();
       else if (mod && k === "z") (e.shiftKey ? redo : undo)();
       else if (e.key === "Escape" && (s.sel || several)) { editSelect(null); pickOut([]); }
@@ -365,6 +373,7 @@ export function EditBar() {
                    }} />
       )}
       {plan && <Review plan={plan} onClose={() => useEdit.setState({ plan: null })} />}
+      {newAdapter && <NewAdapterDialog onClose={() => useEdit.setState({ newAdapter: false })} />}
     </>
   );
 }
@@ -375,8 +384,13 @@ export function EditBar() {
 export function Picker() {
   const picking = useEdit((s) => s.picking);
   const draft = useEdit((s) => s.draft);
+  const adapters = useStore((s) => s.data?.adapters?.adapters ?? []);
   const [q, setQ] = useState("");
-  useEffect(() => setQ(picking?.q ?? ""), [picking]);
+  // "reuse adapter ▸": the adapter plugins the node has, in place of the places a wire can go.
+  const [reuse, setReuse] = useState(false);
+  // From a plugin box's dot: the adapter chosen, waiting for the plugin it falls back to.
+  const [fbAdapt, setFbAdapt] = useState<string | null>(null);
+  useEffect(() => { setQ(picking?.q ?? ""); setReuse(false); setFbAdapt(null); }, [picking]);
   if (!picking || !draft) return null;
   const from = picking.from;
   const send = (to: To) => { if (from) wire(from, to); pick(null); };
@@ -407,6 +421,15 @@ export function Picker() {
   const own = entering.length === 1 ? entering[0]! : entering.length > 1 ? "whichever was asked for" : null;
   // A rule that takes MCP or API takes plugin requests: as asked, each goes to the plugin it names.
   const forPlugins = entering.some((n) => n === "MCP" || n === "API");
+  // An adapter stands in front of a plugin, so only a line that sends to one can name it: its outlet
+  // says so. A plugin box's own dot stands for every line that sends there, and asks which one later.
+  const pluginDot = from !== undefined && from !== null && from.node.startsWith("plugin:") && from.handle === "adapt";
+  const canAdapt = out?.adapt !== undefined || pluginDot;
+  /** Put the adapter on the line this dot belongs to; from a plugin box's dot, ask what that plugin falls back to through it. */
+  const adaptTo = (name: string) => { if (pluginDot) { setFbAdapt(name); return; } if (from) adaptOn(from, name, { x: picking.x, y: picking.y }); pick(null); };
+  const dotPlugin = pluginDot && from ? from.node.slice("plugin:".length) : null;
+  // What the list offers: an adapter's outlet offers plugins, as a plugin rule's does.
+  const pluginPicks = forPlugins || out?.pluginOnly === true;
   const row = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-line/60";
   const head = "px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-dim";
   return (
@@ -418,8 +441,8 @@ export function Picker() {
           <input autoFocus aria-label="send it to" placeholder="send these requests to…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => {
                    if (e.key === "Escape") pick(null);
                    // Enter takes the first place that fits what was typed: a model here, else one a peer lends.
-                   const first = forPlugins ? undefined : models.find((m) => !chat || known?.kind(m) !== "paths");
-                   const lent = forPlugins ? undefined : peers.find((p) => p.model !== null);
+                   const first = pluginPicks ? undefined : models.find((m) => !chat || known?.kind(m) !== "paths");
+                   const lent = pluginPicks ? undefined : peers.find((p) => p.model !== null);
                    if (e.key !== "Enter" || !q.trim()) return;
                    if (first) send({ kind: "model", model: first });
                    else if (lent) send({ kind: "peer", ...lent });
@@ -427,20 +450,50 @@ export function Picker() {
                  className="h-8 w-full rounded-md border border-line bg-bg px-2 text-[12px] focus:border-accent focus:outline-none" />
         </div>
         <div className="max-h-72 overflow-auto p-1.5">
-          {forPlugins && (
+          {fbAdapt !== null && dotPlugin !== null ? (
             <>
-              {hit("as asked") && <button className={row} onClick={() => send({ kind: "asked" })}><span className="size-2 rounded-full bg-info" />As asked<span className="ml-auto text-[11px] text-dim">the plugin it names</span></button>}
+              <button className={cx(row, "text-dim")} onClick={() => setFbAdapt(null)}>← back</button>
+              <div className={head}>{dotPlugin} falls back, through {fbAdapt}, to</div>
+              {servingPlugins(draft, dotPlugin).map((t) => (
+                <button key={t} className={cx(row, mono)} onClick={() => { change((d) => setFallback(d, dotPlugin, { plugin: t, adapt: fbAdapt }) ?? d); pick(null); }}>{t}</button>
+              ))}
+            </>
+          ) : canAdapt && (reuse ? (
+            <>
+              <button className={cx(row, "text-dim")} onClick={() => setReuse(false)}>← back to the places</button>
+              <div className={head}>reuse an adapter</div>
+              {adapters.map((a) => (
+                <button key={a.name} className={cx(row, mono)} title={a.use} onClick={() => adaptTo(a.name)}>{a.name}</button>
+              ))}
+            </>
+          ) : (
+            <>
+              <div className={head}>an adapter between the line and its plugin</div>
+              <button className={row} title="a file, and the entry in hearth.yaml that names it: a trust: code plugin, read at startup"
+                      onClick={() => { pick(null); useEdit.setState({ newAdapter: true }); }}>
+                <Plus size={12} className="shrink-0 text-dim" />A new adapter…<span className="ml-auto text-[11px] text-dim">a file, then a restart</span>
+              </button>
+              {adapters.length > 0 && <button className={cx(row, "font-medium")} onClick={() => setReuse(true)}>reuse adapter<span className="ml-auto text-[11px] text-dim">{adapters.length} ▸</span></button>}
+              <div className="mx-1 my-1 border-t border-line" />
+            </>
+          ))}
+          {/* A plugin box's own dot stands for a line; it exists to put an adapter in front of one, so it
+              offers the adapters and not the places a line could be sent to. */}
+          {!reuse && !pluginDot && (<>
+          {pluginPicks && (
+            <>
+              {forPlugins && hit("as asked") && <button className={row} onClick={() => send({ kind: "asked" })}><span className="size-2 rounded-full bg-info" />As asked<span className="ml-auto text-[11px] text-dim">the plugin it names</span></button>}
               {servingKinds.map((g) => (
                 <Fragment key={g.kind}>
                   <div className={head}>{g.head}</div>
                   {g.items.map((p) => <button key={p.name} className={cx(row, mono)} onClick={() => send({ kind: "plugin", plugin: p.name })}>{p.name}<span className="ml-auto rounded border border-line px-1 font-sans text-[10px] text-dim">{p.kind}</span></button>)}
                 </Fragment>
               ))}
-              {hit("refuse it") && <button className={row} onClick={() => send({ kind: "refuse", why: "not open to this caller" })}><span className="size-2 rounded-full bg-bad" />Refuse it<span className="ml-auto text-[11px] text-dim">tell the caller why</span></button>}
-              <p className="px-2 pb-1 pt-2 text-[11px] text-dim">This rule takes plugin requests, which a model or a peer is passed over for.</p>
+              {hit("refuse it") && forPlugins && <button className={row} onClick={() => send({ kind: "refuse", why: "not open to this caller" })}><span className="size-2 rounded-full bg-bad" />Refuse it<span className="ml-auto text-[11px] text-dim">tell the caller why</span></button>}
+              <p className="px-2 pb-1 pt-2 text-[11px] text-dim">{forPlugins ? "This rule takes plugin requests, which a model or a peer is passed over for." : "The adapter hands the request to this plugin: pick the one it is sent to."}</p>
             </>
           )}
-          {!ends && !forPlugins && (
+          {!ends && !pluginPicks && (
             <>
               {(hit("fastest of several") || hit("refuse it")) && <div className={head}>something other than one model</div>}
               {hit("fastest of several") && <button className={row} onClick={() => send({ kind: "fastest", of: [{ kind: "model", model: models[0] ?? anyModel(draft) }, { kind: "model", model: models[1] ?? anyModel(draft) }] })}><span className="size-2 rounded-full bg-ok" />Fastest of several<span className="ml-auto text-[11px] text-dim">whichever starts soonest</span></button>}
@@ -448,21 +501,22 @@ export function Picker() {
             </>
           )}
           {/* Leaving a name alone is a choice too, and the one most lines end on. */}
-          {own && !forPlugins && hit("its own model") && <button className={row} onClick={() => send(entering.length === 1 ? { kind: "model", model: own } : { kind: "asked" })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
-          {!forPlugins && models.length > 0 && <div className={head}>a model on this node</div>}
-          {!forPlugins && models.map((m) => {
+          {own && !pluginPicks && hit("its own model") && <button className={row} onClick={() => send(entering.length === 1 ? { kind: "model", model: own } : { kind: "asked" })}><span className="size-2 rounded-full bg-info" />Its own model<span className="ml-auto text-[11px] text-dim">the default: {own}</span></button>}
+          {!pluginPicks && models.length > 0 && <div className={head}>a model on this node</div>}
+          {!pluginPicks && models.map((m) => {
             const shut = chat && known?.kind(m) === "paths";
             const on = text(obj(obj(draft.models)[m]).backend) || Object.entries(obj(draft.backends)).find(([, b]) => list(obj(b).serves).includes(m) || (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).some((r) => text(obj(r).model) === m))?.[0];
             const hw = on ? list(obj(obj(draft.backends)[on]).resources) : [];
             return <button key={m} disabled={shut} title={shut ? `${m} is not a chat model, and this rule takes chat requests. To send it requests on its own path, open the rule and set "It takes" to that path.` : undefined} className={cx(row, mono, "disabled:opacity-40")} onClick={() => send({ kind: "model", model: m })}>{m}{shut ? <span className="ml-auto font-sans text-[10px] text-dim">not chat: set what the rule takes</span>
               : hw.length > 0 && <span className="ml-auto shrink-0 font-sans text-[10px] uppercase text-dim" title={`runs on ${hw.join(", ")}, behind the ${on} backend`}>{hw.join(" · ")}</span>}</button>;
           })}
-          {!forPlugins && peers.length > 0 && <div className={head}>a peer</div>}
-          {!forPlugins && peers.map(({ peer, model }) => model === null
+          {!pluginPicks && peers.length > 0 && <div className={head}>a peer</div>}
+          {!pluginPicks && peers.map(({ peer, model }) => model === null
             ? <button key={peer} className={row} onClick={() => send({ kind: "peer", peer, model: null })}>{peer}<span className="ml-auto shrink-0 text-[11px] text-dim">whatever was asked for</span></button>
             : <button key={`${peer}/${model}`} className={cx(row, mono)} onClick={() => send({ kind: "peer", peer, model })}><span className="truncate">{model}</span><span className="ml-auto shrink-0 font-sans text-[11px] text-dim">on {peer}</span></button>)}
           {!ends && flows.length > 0 && <div className={head}>another routing rule</div>}
           {!ends && flows.map((f) => <button key={f} className={cx(row, mono)} onClick={() => send({ kind: "flow", flow: f })}>{f}</button>)}
+          </>)}
         </div>
       </div>
     </div>
@@ -833,16 +887,19 @@ function Gone() {
 export function EditRail() {
   const { draft, sel, err, pending, opened } = useEdit();
   const data = useStore((s) => s.data);
-  if (!draft || !sel || (sel.kind === "flow" && !opened)) return null;
-  const section = SECTION[sel.kind];
-  const entry = obj(draft[section])[sel.id];
+  if (!draft || !sel || ((sel.kind === "flow" || sel.kind === "adapter") && !opened)) return null;
+  // An adapter's panel is its own: its code as the file holds it, the lines that use it, and a sample.
+  if (sel.kind === "adapter") return <AdapterPanel name={sel.id} at={sel.at} />;
+  const named: Named = { kind: sel.kind, id: sel.id };
+  const section = SECTION[named.kind];
+  const entry = obj(draft[section])[named.id];
   const self = data?.net.nodes.find((n) => n.self);
   const catalog = [...(data?.catalog ?? []), ...(self?.backends ?? []).flatMap((b) => [...(b.serves ?? []), ...(b.loaded ?? [])])];
   // An action taken away is taken off every line that ran it, so the file still loads.
   // Every path a backend declares: what a rule can take besides chat.
   const paths = [...new Set(Object.values(obj(draft.backends)).flatMap((b) => (Array.isArray(obj(b).routes) ? (obj(b).routes as unknown[]) : []).map((r) => text(obj(r).path)).filter(Boolean)))];
   // What runs this action, so taking it away is not a surprise.
-  const users = sel.kind === "action" ? linesRunning(draft, sel.id) : [];
+  const users = named.kind === "action" ? linesRunning(draft, named.id) : [];
   // The names a rule can be given: the draft's own types and the ones still waiting for a line, then every model.
   // A type the draft has renamed or removed is still in what the running node lists, and is left out.
   const mine = new Set(Object.values(obj(draft.flows)).flatMap((f) => list(obj(f).inputs)));
@@ -850,14 +907,14 @@ export function EditRail() {
   const offered = [...new Set([...pending, ...mine, ...refsOf(draft, catalog).models])].filter((n) => n !== "*" && !gone.has(n));
   const name = (
         <div className="min-w-0 font-normal">
-          <div className="text-[11px] uppercase tracking-wide text-dim">{sel.kind === "flow" ? "routing rule" : "action"}</div>
+          <div className="text-[11px] uppercase tracking-wide text-dim">{named.kind === "flow" ? "routing rule" : "action"}</div>
           {isObj(entry)
             ? <input key={sel.id} aria-label="name" title="click to rename" defaultValue={sel.id} className={cx("w-full truncate rounded border border-transparent bg-transparent text-base font-semibold hover:border-line focus:border-accent focus:outline-none", mono)}
-                     onBlur={(e) => { rename(sel, e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.stopPropagation(); e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
+                     onBlur={(e) => { rename(named, e.target.value); e.target.value = sel.id; }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.stopPropagation(); e.currentTarget.value = sel.id; e.currentTarget.blur(); } }} />
             : <div className={cx("truncate text-base font-semibold", mono)}>{sel.id}</div>}
         </div>
   );
-  const bin = isObj(entry) && <button className="text-dim hover:text-bad" aria-label={`delete ${sel.id}`} onClick={() => remove(sel)}><Trash2 size={15} /></button>;
+  const bin = isObj(entry) && <button className="text-dim hover:text-bad" aria-label={`delete ${named.id}`} onClick={() => remove(named)}><Trash2 size={15} /></button>;
   const body = (
       <Refs.Provider value={refsOf(draft, catalog)}>
         {!isObj(entry) ? <Gone />

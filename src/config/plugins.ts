@@ -50,8 +50,12 @@ export interface PluginDecl {
   key: string | null;
   /** For a service: headers sent on every call beside (or instead of) its key, such as an API that reads its key from `X-Api-Key`. Values may be `env:NAME`. */
   headers: Record<string, string>;
-  /** Another plugin that answers `/plugins/<name>/*` when this one cannot, with the same request: one hop, same API. */
-  fallback: { plugin: string } | null;
+  /**
+   * Another plugin that answers `/plugins/<name>/*` when this one cannot: one hop. With `adapt`, an
+   * adapter plugin translates both ways, so the fallback may speak a different API; without it the
+   * fallback is sent the same request.
+   */
+  fallback: { plugin: string; adapt?: string } | null;
   /** Narrows what the plugin itself declares; absent hooks all of it. */
   kinds: Partial<Record<RequestKind, PluginStage[]>> | null;
   when: PluginWhen | null;
@@ -90,6 +94,23 @@ export function slotModels(raw: unknown, at: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [slot, id] of Object.entries(asRecord(raw, at))) out[slot] = str(id, `${at}.${slot}`);
   return out;
+}
+
+/**
+ * An adapter a line's target, or a plugin's fallback, names: a `trust: code` plugin whose `setup`
+ * hands back an `adapt`, loaded from a file or a package the operator named. A service, or an MCP
+ * server hearth starts, has no `setup` to return one from, so it is refused here rather than at the
+ * first request.
+ */
+export function adaptOf(raw: unknown, at: string, plugins: Readonly<Record<string, PluginDecl>>): string | undefined {
+  if (raw === undefined) return undefined;
+  const name = str(raw, at);
+  const p = plugins[name];
+  if (p === undefined) throw bad(at, `names ${name}, which is not a plugin under plugins:`);
+  if (p.trust !== "code" || p.use === null || !/^(file|npm):/.test(p.use)) {
+    throw bad(at, `names ${name}, which is not a trust: code plugin with a file: or npm: use`);
+  }
+  return name;
 }
 
 function pluginWhen(raw: unknown, at: string): PluginWhen | null {
@@ -178,10 +199,10 @@ export function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     let fallback: PluginDecl["fallback"] = null;
     if (r.fallback !== undefined) {
       const f = typeof r.fallback === "string" ? { plugin: r.fallback } : asRecord(r.fallback, `${at}.fallback`);
-      if (f.adapt !== undefined) throw bad(`${at}.fallback.adapt`, "was removed before it shipped: an adapter is a flow line's `adapt:` now, on a second line — see docs/routing.md");
-      if (typeof r.fallback !== "string") only(f, ["plugin"], `${at}.fallback`);
+      if (typeof r.fallback !== "string") only(f, ["plugin", "adapt"], `${at}.fallback`);
       if (serves === null || mcp !== null) throw bad(`${at}.fallback`, "is for a plugin that serves an API other than MCP");
-      fallback = { plugin: str(f.plugin, `${at}.fallback.plugin`) };
+      // `adapt` may name a plugin declared later, so which one it is is checked once every plugin is known.
+      fallback = { plugin: str(f.plugin, `${at}.fallback.plugin`), ...(f.adapt !== undefined ? { adapt: str(f.adapt, `${at}.fallback.adapt`) } : {}) };
     }
     out[name] = {
       use, serves, mcp, run, trust, integrity, key, headers, fallback, kinds, when: pluginWhen(r.when, `${at}.when`), timeoutMs,
@@ -196,6 +217,7 @@ export function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     };
   }
   // A fallback is one hop: the plugin it names answers with its own API and is not followed further.
+  // Its `adapt`, when it has one, is an adapter plugin like a line's: code, from a file or a package.
   for (const [name, p] of Object.entries(out)) {
     if (p.fallback === null) continue;
     const at = `plugins.${name}.fallback`;
@@ -203,6 +225,7 @@ export function pluginDecls(raw: unknown): Record<string, PluginDecl> {
     if (p.fallback.plugin === name) throw bad(at, "names the plugin itself");
     if (!to) throw bad(at, `names ${p.fallback.plugin}, which is not a plugin under plugins:`);
     if (to.serves === null || to.mcp !== null) throw bad(at, `names ${p.fallback.plugin}, which serves no API other than MCP`);
+    if (p.fallback.adapt !== undefined) adaptOf(p.fallback.adapt, `${at}.adapt`, out);
   }
   return out;
 }

@@ -4,7 +4,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { DEFAULT_ROUTER } from "../config/flows.js";
+import { DEFAULT_ROUTER, type Flow, type FlowTo } from "../config/flows.js";
 import { json, keyId } from "../wire/http.js";
 import { termsFor } from "../peers/lending.js";
 import { LIVE_KINDS, LIVE_STAGES, placements } from "../plugins/plugins.js";
@@ -14,7 +14,7 @@ import { CONSOLE_CSP, CONSOLE_HTML } from "../ui.js";
 import { KEEP_DAYS, Usage } from "../observe/usage.js";
 import { type CallerUse, type KeyInfo, type LedgerRow, createViews } from "../observe/views.js";
 import type { Call, RouteContext } from "./context.js";
-import type { UiData } from "../observe/uidata.js";
+import type { AdapterLine, AdaptersView, UiData } from "../observe/uidata.js";
 
 export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: ReadonlySet<{ id: string; backend: string; model: string | null }> }) {
   const { cfg, pool, peers, plugins, controls, config, canary, usage, borrowed, history, callers, limits, worlds, requests, notWork, lifecycle } = ctx;
@@ -313,6 +313,32 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
     res.end(html);
   }
 
+  /**
+   * Every adapter plugin a line's `adapt:` can name, as the routing map draws it: the code each side
+   * runs, the lines of every router that hand it a request, and how its last real call went. The
+   * console can only read it: an adapter is `trust: code`, so its code is the operator's file.
+   */
+  const adaptersView = (): AdaptersView => {
+    /** The adapter a target names, where a target may name one at all. */
+    const adaptNamed = (to: FlowTo): string | undefined => ("adapt" in to ? to.adapt : undefined);
+    /** One line per step that hands a request to an adapter, as its place in its own rulebook. */
+    const linesIn = (flows: Record<string, Flow>, router: string | null): (AdapterLine & { adapt: string })[] =>
+      Object.entries(flows).flatMap(([flow, f]) => f.steps.flatMap((s, step) => {
+        const adapt = adaptNamed(s.to);
+        return adapt === undefined ? [] : [{ router, flow, step, adapt }];
+      }));
+    const used = [...linesIn(cfg.flows, null), ...Object.entries(cfg.routers).flatMap(([name, r]) => linesIn(r.flows, name))];
+    return {
+      adapters: plugins.adapterPlugins().map((a) => ({
+        name: a.name, use: a.use, timeoutMs: a.timeoutMs, state: a.state, error: a.error,
+        request: a.source?.request ?? null, response: a.source?.response ?? null, whole: a.source?.whole ?? "",
+        ...(a.source?.note !== undefined ? { note: a.source.note } : {}),
+        used: used.filter((l) => l.adapt === a.name).map(({ adapt: _adapt, ...line }) => line),
+        ...(a.last !== undefined ? { last: a.last } : {}),
+      })),
+    };
+  };
+
   const { uiPayload, networkView } = createViews({
     cfg, pool, peers, history, controls, config, proxying, writeMode,
     shared: (peer?: string) => limits.shared(peer),
@@ -326,6 +352,7 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
     lendDefaults: () => ({ tokensPerDay: cfg.lendTokensPerDay, maxConcurrent: cfg.peerMaxConcurrent, rateLimit: cfg.peerRateLimit }),
     update: () => lifecycle.update,
     recent: () => requests.recent(),
+    adapters: adaptersView,
     plugins: () => {
       // The callers the console draws everywhere: everyone else, this machine, and each labelled key.
       const callers = ["*", "local", ...cfg.apiKeyLabels.filter(Boolean)];

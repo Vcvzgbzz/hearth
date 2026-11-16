@@ -2,8 +2,7 @@
  * Adapters: a `trust: code` plugin a flow line names with `adapt:`, which reshapes what that
  * line's plugin is sent, and the answer that plugin gives back.
  *
- *   - config: an unknown adapter, a plugin that does not run code, `adapt:` beside a model, and
- *     `fallback.adapt` still refused with a pointer to `adapt:`
+ *   - config: an unknown adapter, a plugin that does not run code, and `adapt:` beside a model
  *   - `null` from request() means "no counterpart": the line fails and the next one is tried
  *   - a line that answers is not adapted, and its adapter does not run
  *   - a non-2xx answer is never adapted; a response() that throws is a 502 naming the adapter
@@ -45,12 +44,8 @@ refuses(() => line({ model: "m", adapt: "gate" }), /sends to a plugin/);
 assert.deepEqual(line({ plugin: "alt", adapt: "gate" }).flows.f!.steps[0]!.to, { plugin: "alt", adapt: "gate" });
 assert.deepEqual(line({ asked: true, adapt: "gate" }).flows.f!.steps[0]!.to, { asked: true, adapt: "gate" });
 assert.deepEqual(line({ plugin: "alt" }).flows.f!.steps[0]!.to, { plugin: "alt" });
-// `fallback.adapt` is gone: an adapter is a line's `adapt:` now, and a file that still carries it is told so.
-refuses(
-  () => parseConfig({ ...base, plugins: { a: svc({ fallback: { plugin: "b", adapt: "x" } }), b: svc() } }),
-  /fallback\.adapt[\s\S]*adapt:/,
-  "fallback.adapt points at adapt: on a flow line",
-);
+// A plugin's fallback may name an adapter too, held to the same rule as a line's (test/fallbackadapt.test.ts).
+refuses(() => parseConfig({ ...base, plugins: { a: svc({ fallback: { plugin: "b", adapt: "x" } }), b: svc() } }), /names x, which is not a plugin under plugins:/);
 
 // --- a node with an adapter plugin ------------------------------------------
 const seenAt: { path: string; query: Record<string, string>; authorization?: string | string[]; key?: string | string[] }[] = [];

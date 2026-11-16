@@ -41,7 +41,11 @@ Eleven pages, and ⌘K (Ctrl+K) jumps between them and to anything on Topology:
 - **Routing**: every model name, the rules some pass through, and where each
   ends up, as a map you edit. Plugins on a line are blocks between its
   conditions and where it sends the request; plugins that run on every line
-  are a badge on the router. See [Editing on the graph](#editing-on-the-graph).
+  are a badge on the router. An adapter on a line is a block of its own, in a
+  column to the right of the plugin boxes: the line arrives at its input dot,
+  its code is shown as two areas (IN and OUT), and its output dot is wired to a
+  tag for the service it ends at. See
+  [Editing on the graph](#editing-on-the-graph).
 - **Plugins**: every plugin, what it runs as (in-process or a service), the
   kinds of request it handles, the models wired into its slots, the lines it
   runs on and how it is doing. A plugin's panel wires its model slots (each
@@ -289,6 +293,40 @@ line; **+ type** brings one onto the map.
   menu wires its model slots for this line, moves it earlier or later, or takes
   it off. A block with an empty model slot is amber and requests pass by it; a
   plugin that only watches the finished exchange is drawn dashed.
+- **An adapter on a line** is drawn as a block of its own when that line's
+  target names one with `adapt:`, in a column to the right of the plugin boxes
+  and level with the plugin box it sends to. The line arrives at the block's
+  input dot; the block's output dot goes on to a small tag naming the plugin and
+  the address it `serves`, so the picture reads rule → plugin box → adapter →
+  service. The block shows the module as the two sides a line runs: **IN** is
+  `request()` and **OUT** is `response()`, both read from the plugin's file,
+  monospace and scrollable, and both **read-only**: an adapter is
+  `trust: code`, so the code is the operator's file and a restart is what reads
+  a change. A module whose two sides cannot be told apart is shown whole
+  instead. The header carries the plugin's name, its `use:` file and its
+  `timeoutMs`, and a button that takes the adapter off the line (the line then
+  sends straight to its plugin). The block lights for a few seconds each time a
+  real call goes through it, and turns red when the last call through it failed,
+  with the side that failed and the reason on hover. Click it for its panel:
+  **used on** (every line of every router that names it, each with a way to take
+  it off) and **try it**, which runs one side against a sample request or answer
+  with only the adapter running and hearth sending nothing, held to its own
+  `timeoutMs`.
+- **Putting an adapter on a line.** A line that sends to a plugin draws a
+  dot at its row's right end as any line does; let go on empty map, the list of
+  places opens, and for such a line it also offers **a new adapter…** (how to
+  add one: a file path, a starter module, and the `plugins:` entry) and **reuse
+  adapter ▸** (the adapter plugins the node has). Either one puts the adapter
+  between the line and the plugin it already sends to, and the line keeps its
+  target. The plugin box's own right-hand dot, labelled with the line
+  (`API · 3`), does the same for that line; a plugin with no adapter on any line
+  yet has a dashed **adapt** dot, which asks which line when several send there.
+  Dropping any of those dots on a block puts that adapter on the line, and
+  dropping the block's own output dot on another plugin box sends the line
+  there through the same adapter. A line's ⋯ menu has **adapt it** as well, with
+  the same choices. Everything here is part of the routing draft, so it is
+  published with the rest of the map, from the same review: what the draft
+  changes is the line's `adapt:`, never the adapter's code.
 - **A line's conditions are changed where they stand.** Click the sentence a
   line reads as, or **choose a condition** on a new one, and its conditions
   open in the box; the line's first word closes them again. Under a heading

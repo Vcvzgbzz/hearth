@@ -2,8 +2,8 @@
  * A plugin's fallback: another plugin that answers /plugins/<name>/* when this one cannot.
  *
  *   - config: a fallback is a plugin that serves an API other than MCP, not the plugin itself
- *   - a fallback is one hop, with the same request: `fallback.adapt` was removed before it shipped,
- *     and a file that still carries it is refused with a pointer to `adapt:` on a flow line
+ *   - a fallback is one hop, with the same request unless it names an adapter: `fallback.adapt` is a
+ *     `trust: code` adapter plugin, and a name that is no such plugin is refused (test/fallbackadapt.test.ts)
  *   - a plugin that cannot be reached, answers 5xx or 429 hands the request to its fallback; one
  *     that answers 4xx does not
  *   - the fallback is sent the same request and its own headers, not the plugin's
@@ -35,8 +35,8 @@ assert.throws(() => withPlugins({ a: svc({ fallback: "b" }), b: svc({ mcp: true 
 // An adapter is a line's `adapt:` now, so the removed key is refused with the way to write what it meant.
 assert.throws(
   () => withPlugins({ a: svc({ fallback: { plugin: "b", adapt: "x" } }), b: svc() }),
-  (e: unknown) => e instanceof ConfigError && /fallback\.adapt/.test(e.message) && /adapt:/.test(e.message),
-  "fallback.adapt points at adapt: on a flow line",
+  (e: unknown) => e instanceof ConfigError && /fallback\.adapt names x, which is not a plugin/.test(e.message),
+  "a fallback's adapt must name an adapter plugin",
 );
 
 // --- a node with fallbacks ---------------------------------------------------

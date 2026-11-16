@@ -28,6 +28,7 @@ import { tailscaleWhois } from "./peers/tailscale.js";
 import { Usage } from "./observe/usage.js";
 import { Worlds } from "./routing/world.js";
 import { adminRoutes } from "./routes/admin.js";
+import { adapterRoutes } from "./routes/adapters.js";
 import { chatRoutes } from "./routes/chat.js";
 import { consoleRoutes } from "./routes/console.js";
 import type { Call, Handler, RouteContext } from "./routes/context.js";
@@ -164,6 +165,7 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
 
   const passArea = passthroughRoutes(ctx);
   const consoleArea = consoleRoutes(ctx, { proxying: passArea.proxying });
+  const adapterArea = adapterRoutes(ctx);
   const chatArea = chatRoutes(ctx);
   const modelArea = modelRoutes(ctx);
   const peerArea = peerRoutes(ctx);
@@ -329,6 +331,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/config/draft", methods: ["GET", "PUT", "DELETE"], auth: "local", handler: adminArea.routeConfigDraft },
     { path: "/config/versions", methods: ["GET", "POST"], auth: "local", handler: adminArea.routeConfigVersions },
     { path: "/flows/try", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsTry },
+    // One side of an adapter, run against a sample: what the map's panel tries before the operator
+    // edits the adapter's file. The plugin is `trust: code` already, and hearth sends nothing for it.
+    { path: "/ui/adapters/try", methods: ["POST"], auth: "local", handler: adapterArea.routeAdapterTry },
     { path: "/flows/replay", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsReplay },
     { path: "/queue", auth: "local", handler: consoleArea.routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: consoleArea.routeQueueEvents },

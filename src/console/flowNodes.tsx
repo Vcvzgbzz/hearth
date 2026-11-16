@@ -5,11 +5,11 @@
  * them by node type; how each behaves when a line is drawn is NODES in draft.ts.
  */
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
-import { ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, MoreHorizontal, Pencil, Plus, Puzzle, Split, Trash2, X, Zap } from "lucide-react";
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { ArrowRightLeft, ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, MoreHorizontal, Pencil, Plus, Puzzle, Split, Trash2, X, Zap } from "lucide-react";
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { ACTIONS, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
-import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
+import { ACTIONS, ADAPTER_NOTE, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withAdapt, withFallbackAdapt, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
+import { addName, change, choose, dropName, hover, openAdapter, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { openPlugin, useStore } from "./store.js";
 import type { PluginView, PluginsView } from "../observe/uidata.js";
 import { cx } from "./ui.js";
@@ -313,6 +313,7 @@ export const HUE: Record<string, { dot: string; stroke: string; says: string }> 
   action: { dot: "!bg-warn", stroke: "var(--warn)", says: "an action" },
   mcp: { dot: "!bg-mcp", stroke: "var(--mcp)", says: "a plugin that is an MCP server" },
   api: { dot: "!bg-api", stroke: "var(--api)", says: "a plugin that serves an API" },
+  adapt: { dot: "!bg-adapt", stroke: "var(--adapt)", says: "an adapter between two plugins" },
   unset: { dot: "!bg-dim", stroke: "var(--dim)", says: "nowhere yet" },
 };
 const hue = (kind: string) => HUE[kind] ?? HUE.unset!;
@@ -361,7 +362,7 @@ const BIN = "nodrag nopan grid h-6 w-6 shrink-0 place-items-center rounded-md te
 /** What is known about a line: `bad` is why it cannot work, `unsure` that its target has not said whether it can take what the line tests. */
 export type Mark = { bad: string } | { unsure: true } | null;
 
-export type SwitchBox = { /** The orders its lines hand to, by flow name, each as the places in it. */ orders?: Record<string, End[]>; marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** The models that run on a provider's server. */ cloud?: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean };
+export type SwitchBox = { /** The orders its lines hand to, by flow name, each as the places in it. */ orders?: Record<string, End[]>; marks?: Mark[]; /** The names that enter it: a line that sends one of them to itself is "its own model". */ inputs?: string[]; name: string; steps: Doc[]; selected?: boolean; editable?: boolean; lit?: number; models: string[]; lanes: string[]; /** Every action a line could run. */ actions: string[]; /** The models that run on a provider's server. */ cloud?: string[]; /** Switched off: drawn, but it takes nothing. */ off?: boolean; note?: string; /** It keeps a conversation where it started. */ sticky?: boolean; /** Request paths it takes besides chat. */ takes?: string[]; /** How many times each line has decided since the rules last changed. */ hits?: number[]; /** No name enters it and no rule hands work to it. */ orphan?: boolean; /** Lines that reach their plugin through an adapter, whose own dot is not drawn. */ viaAdapter?: number[] };
 
 export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<SwitchBox>>) {
   const from = useWireFrom();
@@ -484,7 +485,7 @@ export const SwitchNode = memo(function SwitchNode({ id, data }: NodeProps<Node<
                 <MoreHorizontal size={13} />
               </button>
             )}
-            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : order ? hue("fastest").dot : to.kind === "asked" ? hue(to.kind).dot : worn(to).dot, !data.editable && "!pointer-events-none")} style={{ right: -6 }} />
+            <Handle type="source" id={`step-${i}`} position={Position.Right} className={cx(PORT, data.lit === i ? "!bg-accent" : order ? hue("fastest").dot : to.kind === "asked" ? hue(to.kind).dot : worn(to).dot, !data.editable && "!pointer-events-none", data.viaAdapter?.includes(i) && "!opacity-0 !pointer-events-none")} style={{ right: -6 }} />
           </div>
           {group?.to === i && group.foot && (
             <div className="relative flex items-center px-3 text-[10px] italic text-dim" style={{ height: GROUP.foot }}>
@@ -710,7 +711,15 @@ export const HubNode = memo(function HubNode({ data }: NodeProps<Node<Hub>>) {
   );
 });
 
-export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; /** A model on a provider's server. */ cloud?: boolean; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean; /** Where its backend's route sends a request it fails, as "model on backend". */ fallback?: string };
+export type Dest = { /** The hardware its backend runs on, to tell two copies of a model apart at a glance. */ hardware?: { name: string; cpu: boolean }[]; title: string; sub: string; /** `model` or `peer`. */ kind: string; /** A model on a provider's server. */ cloud?: boolean; on?: boolean; /** Not somewhere a chat request can run. */ shut?: boolean; /** A peer that cannot be reached. */ down?: boolean; /** Where its backend's route sends a request it fails, as "model on backend". */ fallback?: string;
+  /** On a plugin's box: one right-hand dot for each line that names an adapter, labelled with the line. */
+  adaptLines?: { flow: string; step: number; label: string; on?: boolean }[];
+  /** On a plugin's box with no adapter on any line: one dot to put an adapter in front of a line that sends here. */
+  adaptAny?: boolean;
+  /** On the plugin a line's adapter hands its translated request to: one right-hand dot for each such line. */
+  adaptIn?: { flow: string; step: number; label: string; on?: boolean }[];
+  /** On a plugin whose fallback names an adapter: the dot its fallback chain leaves from. */
+  fallbackAdapt?: { adapt: string } };
 
 /** A model or a peer a line ends at. Only the ones a line uses are drawn; the rest are picked from a list when wanted. */
 export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) {
@@ -729,6 +738,37 @@ export const DestNode = memo(function DestNode({ data }: NodeProps<Node<Dest>>) 
         ))}
       </div>
       <div className={cx("truncate text-[10px]", data.down ? "text-bad" : "text-dim")}>{data.sub}</div>
+      {(data.adaptLines ?? []).map((l) => (
+        // One dot per line that names an adapter: where the block's input is drawn from.
+        <div key={`${l.flow}:${l.step}`} className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim">
+          <span className="shrink-0 rounded border border-line px-1 uppercase">{l.label}</span>
+          <span className="min-w-0 flex-1 truncate" title={`${l.flow} line ${l.step + 1} hands this plugin's request to an adapter`}>to an adapter</span>
+          <Handle type="source" id={`to:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-adapt", "!opacity-100")} style={{ right: -6, top: "50%" }} />
+        </div>
+      ))}
+      {(data.adaptIn ?? []).map((l) => (
+        // Where an adapter's translated request arrives: this plugin answers the line.
+        <div key={`in:${l.flow}:${l.step}`} className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim">
+          <span className="shrink-0 rounded border border-line px-1 uppercase">{l.label}</span>
+          <span className="min-w-0 flex-1 truncate" title={`${l.flow} line ${l.step + 1} reaches this plugin through an adapter`}>from the adapter</span>
+          <Handle type="target" id={`from:${l.flow}:${l.step}`} position={Position.Right} className={cx(PORT, l.on ? "!bg-accent" : "!bg-dim")} style={{ right: -6, top: "50%" }} />
+        </div>
+      ))}
+      {data.fallbackAdapt !== undefined && (
+        // Its fallback runs through an adapter: the chain leaves from this dot.
+        <div className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim" title={`when this plugin cannot answer, ${data.fallbackAdapt.adapt} carries the request to its fallback`}>
+          <span className="shrink-0 rounded border border-line px-1 uppercase">fallback</span>
+          <span className="min-w-0 flex-1 truncate">through an adapter</span>
+          <Handle type="source" id="fallback" position={Position.Right} className={cx(PORT, "!bg-adapt", "!opacity-100")} style={{ right: -6, top: "50%" }} />
+        </div>
+      )}
+      {data.adaptAny === true && (
+        <div className="relative mt-0.5 flex h-4 items-center gap-1 border-t border-line/60 pt-0.5 text-[9px] text-dim" title="put an adapter in front of a line that sends here">
+          <span className="shrink-0 rounded border border-dashed border-line px-1 uppercase">adapt</span>
+          <span className="min-w-0 flex-1 truncate">in front of a line</span>
+          <Handle type="source" id="adapt" position={Position.Right} className={cx(PORT, "!bg-adapt", "!opacity-100")} style={{ right: -6, top: "50%" }} />
+        </div>
+      )}
       {data.fallback && (
         <div title="Where this backend's route sends a request it fails before answering. A strict router's callers skip it." className="mt-0.5 truncate border-t border-dashed border-line pt-0.5 text-[10px] text-dim">
           ↳ falls back to <span className="font-mono">{data.fallback}</span>
@@ -760,5 +800,153 @@ export const ActionNode = memo(function ActionNode({ data }: NodeProps<Node<Acti
   );
 });
 
+export type AdapterBox = { /** The colour of what its OUT dot is wired to; grey with nothing there. */ outHue?: string;
+  /** On a plugin's fallback rather than a line: the plugin whose fallback it translates for. */
+  fallbackOf?: string;
+  /** The adapter plugin's name, as a line's `adapt:` writes it. */
+  name: string;
+  /** The line it stands on, and the rule that holds it. */
+  flow: string;
+  step: number;
+  /** Where it comes from, as the config writes it. */
+  use?: string;
+  /** Each side's deadline, from the plugin's own `timeoutMs`. */
+  timeoutMs?: number;
+  /** Whether its plugin started; a line that names one that did not cannot run. */
+  state?: "running" | "failed" | "off";
+  error?: string | null;
+  /** IN and OUT: each side's source as the file holds it; null when the two could not be told apart. */
+  request?: string | null;
+  response?: string | null;
+  /** The whole module, shown in IN when the sides could not be told apart. */
+  whole?: string;
+  /** Why the sides are not shown apart, when they are not. */
+  note?: string;
+  editable?: boolean;
+  /** A tried or replayed request went down this line: the adapter is what carried it. */
+  on?: boolean;
+  /** How the last real call through it went, from the node. */
+  last?: { t: number; side: string; ok: boolean; error?: string };
+};
+
+/** The block's measurements: the layout puts one beside its plugin box and wires its two dots, so they must match what is drawn. */
+export const ADAPTER = { width: 440, head: 28, label: 16, pad: 6, area: 128, gap: 4, note: 20 };
+/** Where the input dot sits, level with the IN area, and the output dot, level with the OUT area. */
+export const ADAPTER_IN_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTER.area / 2;
+export const ADAPTER_OUT_Y = ADAPTER.head + ADAPTER.pad + ADAPTER.label + ADAPTER.area + ADAPTER.gap + ADAPTER.pad + ADAPTER.label + ADAPTER.area / 2;
+/** How long a call through an adapter lights its block: long enough to see a request pass, then dark again. */
+export const ADAPTER_LIT_MS = 5_000;
+
+/** A side's source as it reads on its own: tabs as two spaces, and the indent it had inside the module taken off. */
+export function tidy(code: string): string {
+  const lines = code.replace(/\t/g, "  ").replace(/\s+$/, "").split("\n");
+  const indents = lines.slice(1).filter((l) => l.trim() !== "").map((l) => l.length - l.trimStart().length);
+  const cut = indents.length ? Math.min(...indents) : 0;
+  return [lines[0]!, ...lines.slice(1).map((l) => l.slice(Math.min(cut, l.length - l.trimStart().length)))].join("\n");
+}
+
+const WORDS = new Set(["const", "let", "var", "return", "if", "else", "for", "of", "in", "while", "function", "export", "default", "async", "await", "throw", "new", "null", "undefined", "true", "false", "typeof", "try", "catch"]);
+/** Light colour for adapter source: keywords, strings, numbers and comments. Read-only text, so no parser is needed. */
+export function tint(code: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d[\d_.]*\b)|([A-Za-z_$][\w$]*)/g;
+  let at = 0;
+  for (const m of code.matchAll(re)) {
+    if (m.index! > at) out.push(code.slice(at, m.index));
+    const [t, comment, str, num, word] = m;
+    const k = out.length;
+    if (comment) out.push(<span key={k} className="italic text-dim">{t}</span>);
+    else if (str) out.push(<span key={k} className="text-ok/80">{t}</span>);
+    else if (num) out.push(<span key={k} className="text-dim">{t}</span>);
+    else if (word && WORDS.has(word)) out.push(<span key={k} className="text-info">{t}</span>);
+    else out.push(t);
+    at = m.index! + t.length;
+  }
+  if (at < code.length) out.push(code.slice(at));
+  return out;
+}
+
+/**
+ * An adapter on a line: the block a request goes through between what the rule decided and the plugin
+ * it sends to. IN is `request()`, OUT is `response()`, both read from the plugin's module file and
+ * never edited here — `trust: code` is the operator's own code, so the file is theirs to change and a
+ * restart is what reads it. A call that just went through lights it; a failed one turns it red.
+ */
+export const AdapterNode = memo(function AdapterNode({ data }: NodeProps<Node<AdapterBox>>) {
+  const [, redraw] = useState(0);
+  const calledAt = data.last?.t;
+  useEffect(() => {
+    if (calledAt === undefined) return;
+    const left = calledAt + ADAPTER_LIT_MS - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => redraw((n) => n + 1), left + 50);
+    return () => clearTimeout(t);
+  }, [calledAt]);
+  const failed = data.last !== undefined && !data.last.ok;
+  // Lit by traffic that has just gone through it, or by a request tried or replayed down its line.
+  const lit = data.on === true || (calledAt !== undefined && Date.now() - calledAt < ADAPTER_LIT_MS);
+  const split = data.request !== null && data.request !== undefined && data.response !== null && data.response !== undefined;
+  const dot = cx(failed ? "!bg-bad" : lit ? "!bg-accent" : "!bg-adapt", "!opacity-100");
+  const said = failed ? `${data.last!.side}() failed: ${data.last!.error ?? "no message"}` : "an adapter: it reshapes what the plugin is sent, and the answer it gives — click for its code, the lines that use it, and try it";
+  const areas: { side: "request" | "response"; label: string; text: string; says: string }[] = split
+    ? [{ side: "request", label: "IN", text: data.request ?? "", says: "the request, as the plugin is about to be sent it" },
+       { side: "response", label: "OUT", text: data.response ?? "", says: "the answer, as the caller is about to get it" }]
+    : [{ side: "request", label: "IN", text: data.whole ?? "", says: "the whole module: its two sides could not be told apart" },
+       { side: "response", label: "OUT", text: "", says: "not shown apart" }];
+  return (
+    <div className={cx("rounded-xl border bg-panel shadow-sm", failed ? "border-bad" : lit ? "border-accent bg-accent/10" : "border-line")} title={said}
+         style={{ width: ADAPTER.width }}>
+      <Handle type="target" position={Position.Left} className={cx(PORT, dot)} style={{ left: -7, top: ADAPTER_IN_Y }} />
+      <div className="flex items-center gap-1.5 border-b border-line px-2.5" style={{ height: ADAPTER.head }}>
+        <ArrowRightLeft size={12} className={cx("shrink-0", failed ? "text-bad" : lit ? "text-accent" : "text-adapt")} />
+        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-adapt">adapter</span>
+        <span className="min-w-0 truncate font-mono text-[12px] font-medium" title={data.use}>{data.name}</span>
+        {data.timeoutMs !== undefined && <span className="shrink-0 rounded border border-line px-1 text-[9px] uppercase text-dim" title="each side's deadline">{data.timeoutMs} ms</span>}
+        {data.state !== undefined && data.state !== "running" && (
+          <span className="shrink-0 rounded border border-bad px-1 text-[9px] font-medium text-bad" title={data.error ?? undefined}>{data.state === "off" ? "off" : "did not start"}</span>
+        )}
+        {failed && <span className="shrink-0 rounded border border-bad px-1 text-[9px] font-medium text-bad">fails</span>}
+        {data.editable && (
+          <button type="button" aria-label={`edit adapter ${data.name}`} title="open this adapter: its code, the lines that use it, and try it"
+                  className={cx(BIN, "ml-auto hover:!text-fg")} onClick={(e) => { e.stopPropagation(); openAdapter(data.name, data.fallbackOf !== undefined ? undefined : { flow: data.flow, step: data.step }); }}><Pencil size={13} /></button>
+        )}
+        {data.editable && (
+          // The line keeps its plugin: this only takes the adapter out from in front of it.
+          <button type="button" aria-label={`take ${data.name} off this line`} title="take it off this line: the line sends straight to its plugin again"
+                  className={BIN}
+                  onClick={(e) => { e.stopPropagation(); change((d) => (data.fallbackOf !== undefined ? withFallbackAdapt(d, data.fallbackOf, null) : withAdapt(d, data.flow, data.step, null)) ?? d); }}><X size={11} /></button>
+        )}
+      </div>
+      {areas.map(({ side, label, text: body, says }) => (
+        <div key={side} className="px-2.5" style={{ paddingTop: ADAPTER.pad }}>
+          <div className="flex items-center gap-1.5 text-[9px] text-dim" style={{ height: ADAPTER.label }} title={says}>
+            <span className="shrink-0 rounded border border-line px-1 uppercase leading-[12px]">{label}</span>
+            <span className="truncate font-mono">{side}()</span>
+            <span className="ml-auto shrink-0">{side === "request" ? "→ the plugin" : "→ the caller"}</span>
+          </div>
+          <pre className="nowheel m-0 w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-line bg-bg px-2 py-1 font-mono text-[11px] leading-[1.5] [scrollbar-width:thin]"
+               style={{ height: ADAPTER.area }}
+               aria-label={`${data.name} ${side}()`}>{body ? tint(tidy(body)) : <span className="italic text-dim">{split ? `no ${side}() in the file` : data.note ?? "the module could not be read"}</span>}</pre>
+        </div>
+      ))}
+      <div className="truncate px-2.5 pt-1 text-[9px] text-dim" style={{ minHeight: ADAPTER.note }} title={ADAPTER_NOTE}>{ADAPTER_NOTE}</div>
+      <Handle id="out" type="source" position={Position.Right} className={cx(PORT, failed ? "!bg-bad" : lit ? "!bg-accent" : data.outHue !== undefined ? hue(data.outHue).dot : "!bg-dim", "!opacity-100")} style={{ right: -7, top: ADAPTER_OUT_Y }} />
+    </div>
+  );
+});
+
+export type ServiceTag = { /** The plugin the adapter hands the request to, and where that plugin's API is. */ title: string; sub: string; on?: boolean };
+
+/** A small tag at the end of an adapter's line: the service the adapter's answer comes from. */
+export const TagNode = memo(function TagNode({ data }: NodeProps<Node<ServiceTag>>) {
+  return (
+    <div className={cx("w-[190px] rounded-lg border bg-panel px-2 py-1 shadow-sm", data.on ? "border-accent bg-accent/10" : "border-line")}>
+      <Handle type="target" position={Position.Left} className={cx(PORT, "!bg-api")} style={{ left: -6, top: "50%" }} />
+      <div className="truncate font-mono text-[11px] font-medium">{data.title}</div>
+      <div className="truncate text-[10px] text-dim" title={data.sub}>{data.sub}</div>
+    </div>
+  );
+});
+
 /** Every node the routing map draws, by its React Flow type. */
-export const VIEWS = { hub: HubNode, flow: SwitchNode, fastest: FastestNode, order: OrderNode, refuse: RefuseNode, dest: DestNode, action: ActionNode };
+export const VIEWS = { hub: HubNode, flow: SwitchNode, fastest: FastestNode, order: OrderNode, refuse: RefuseNode, dest: DestNode, action: ActionNode, adapt: AdapterNode, tag: TagNode };
