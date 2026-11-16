@@ -54,6 +54,8 @@ import { fire, seedOf, STOKE, stokeOf } from "../src/console/fire.js";
   assert.equal(req({ backend: "provider" }), STOKE.cloud, "a request a provider answered leaves through the top");
   assert.equal(req({ peer: "friend" }), STOKE.peerOut, "a request sent to a peer drifts off the side");
   assert.equal(req({ caller: "peer:friend", backend: "local" }), STOKE.peerIn, "a request in from a peer is blue-hot");
+  assert.equal(req({ caller: "peer:friend", backend: "provider" }), STOKE.peerIn, "a peer's request a provider answered stays blue-hot");
+  assert.equal(req({ peer: "friend", backend: "provider" }), STOKE.peerOut, "a request sent to a peer drifts off the side whatever backend it names");
   assert.equal(req({ ok: false, backend: "provider" }), STOKE.rain, "a provider's failure is rain like any other");
   assert.equal(req({ ok: false }), null, "a refusal that never ran sends nothing");
   assert.equal(new Set(Object.values(STOKE)).size, Object.keys(STOKE).length, "every kind is its own number");

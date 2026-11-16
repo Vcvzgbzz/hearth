@@ -18,12 +18,13 @@ export const STOKE = { cloud: 0.6, request: 0.5, peerIn: 0.4, peerOut: 0.3, rain
  * The stoke for one finished request, or null for none: a failure that ran somewhere is rain, one
  * refused before it ran is nothing; one sent to a peer drifts off the side, one a provider answered
  * leaves through the top, one in from a peer is blue-hot, and the rest are the fire's own sparks.
+ * A peer's request keeps its peer kind even when a provider answered it.
  */
 export function stokeOf(r: { ok: boolean; caller: string; backend?: string; peer?: string }, clouds: ReadonlySet<string>): number | null {
   if (!r.ok) return r.backend || r.peer ? STOKE.rain : null;
   if (r.peer) return STOKE.peerOut;
-  if (r.backend && clouds.has(r.backend)) return STOKE.cloud;
   if (r.caller.startsWith("peer:")) return STOKE.peerIn;
+  if (r.backend && clouds.has(r.backend)) return STOKE.cloud;
   return STOKE.request;
 }
 
