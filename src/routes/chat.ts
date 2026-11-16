@@ -3,6 +3,7 @@
  * through its flow, and run it on a local backend or a peer, falling back where the flow allows.
  */
 import { pipeline as pipelineCb } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { type ActionFacts, actionDecls } from "../routing/actions.js";
@@ -15,7 +16,7 @@ import { ConfigError } from "../config/read.js";
 import { emulatedRequest, relayEmulated } from "../wire/emulate.js";
 import { KEY_REFUSED, fail, headersOf, jobId, json, pipeThrough, refusedKey, relayable } from "../wire/http.js";
 import { MessagesResponse, chatOf } from "../wire/messages.js";
-import { type Active, type HookRequest, PluginRefusal, replyText } from "../plugins/plugins.js";
+import { type Active, type HookRequest, PluginRefusal, ReplyStream, replyText } from "../plugins/plugins.js";
 import { type Timing, type Traced, firstByte, notRun } from "../observe/requestlog.js";
 import { REQUESTS_KEPT } from "../observe/requests.js";
 import type { RequestTrace } from "../observe/uidata.js";
@@ -25,6 +26,35 @@ import { fitOutput, type Need, needsOf, unfit } from "../routing/stats.js";
 import { send } from "../wire/upstream.js";
 import { type Meter, meter, withoutUsage } from "../observe/usage.js";
 import type { Call, RouteContext } from "./context.js";
+
+/**
+ * What a written answer gives a plugin that reads the reply: a streamed answer as its text, read a chunk
+ * at a time so the raw frames are never kept, and any other answer as the bytes written, up to the cap.
+ * An encoded body is not kept.
+ */
+export function keepReplyStream(streamed: boolean, cap = 2_000_000): { write: (chunk: string | Buffer) => void; end: () => void; text: () => string | null } {
+  const parts: Buffer[] = [];
+  const stream = streamed ? new ReplyStream() : null;
+  // A character split across two chunks is decoded whole once its last byte arrives.
+  const utf8 = new StringDecoder("utf8");
+  let size = 0;
+  const keep = (chunk: string | Buffer): void => {
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (stream) return stream.write(utf8.write(b), cap);
+    if (size > cap) return;
+    size += b.length;
+    if (size <= cap) parts.push(b);
+  };
+  return {
+    write: keep,
+    end: () => {
+      if (!stream) return;
+      stream.write(utf8.end(), cap);
+      stream.end(cap);
+    },
+    text: () => (stream ? stream.text() : Buffer.concat(parts).toString("utf8")),
+  };
+}
 
 export function chatRoutes(ctx: RouteContext) {
   const { cfg, log, pool, peers, plugins, canary, answers, callers, limits, worlds, requests, readJson, degraded, backendDeadline } = ctx;
@@ -237,28 +267,52 @@ export function chatRoutes(ctx: RouteContext) {
       for (const tell of ended) tell(error);
       if (r.plugins) {
         plugins.observe(error === null ? "log" : "error", r.plugins.active, {
-          ...r.plugins.hook, status: status || 200, error, reply: reply ? replyText(reply()) : null, ms: Date.now() - startedAt,
+          ...r.plugins.hook, status: status || 200, error, reply: keptReply(reply), ms: Date.now() - startedAt,
         });
       }
     }
   }
 
-  /** A copy of what is written to a response, up to a cap, for plugins that read the reply. Encoded bodies are not kept. */
-  function keepCopy(res: ServerResponse, cap = 2_000_000): () => string {
-    const parts: Buffer[] = [];
-    let size = 0;
+  /**
+   * The assistant's text in what is written to a response, for plugins that read the reply.
+   * A streamed answer keeps only the text its `data:` lines carry, since the raw bytes are
+   * mostly envelope; any other answer is kept as it is written. Encoded bodies are not kept.
+   */
+  function keepCopy(res: ServerResponse, cap = 2_000_000): { text: () => string | null; streamed: () => boolean } {
+    // Which kind of answer this is, decided at the first chunk.
+    let kept = keepReplyStream(false, cap);
+    let streamed = false;
+    let decided = false;
     const keep = (chunk: unknown): void => {
-      if (size > cap || chunk === undefined || chunk === null || typeof chunk === "function") return;
+      if (chunk === undefined || chunk === null || typeof chunk === "function") return;
       const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
-      size += b.length;
-      if (size <= cap) parts.push(b);
+      if (!decided) {
+        decided = true;
+        streamed = /^text\/event-stream/i.test(String(res.getHeader("content-type") ?? ""));
+        if (streamed) kept = keepReplyStream(true, cap);
+      }
+      kept.write(b);
     };
     const write = res.write.bind(res) as (...a: unknown[]) => boolean;
     const end = res.end.bind(res) as (...a: unknown[]) => ServerResponse;
     res.write = ((chunk: unknown, ...rest: unknown[]) => { keep(chunk); return write(chunk, ...rest); }) as typeof res.write;
-    res.end = ((chunk?: unknown, ...rest: unknown[]) => { if (typeof chunk !== "function") keep(chunk); return end(chunk, ...rest); }) as typeof res.end;
-    return () => (res.getHeader("content-encoding") ? "" : Buffer.concat(parts).toString("utf8"));
+    res.end = ((chunk?: unknown, ...rest: unknown[]) => { if (typeof chunk !== "function") keep(chunk); kept.end(); return end(chunk, ...rest); }) as typeof res.end;
+    return {
+      text: () => (res.getHeader("content-encoding") ? null : kept.text()),
+      // A streamed answer's kept text is the reply already; a JSON body still has to be read out of it.
+      streamed: () => streamed,
+    };
   }
+
+  /**
+   * What plugins are told the reply was. A streamed answer is already its text by the time it is kept, so
+   * only a JSON body is read here; a kept stream must not be read twice.
+   */
+  const keptReply = (reply: { text: () => string | null; streamed: () => boolean } | null): string | null => {
+    if (!reply) return null;
+    const kept = reply.text();
+    return reply.streamed() || kept === null ? kept : replyText(kept);
+  };
 
   /** A model that runs at a cloud provider: it would take a request off this machine. */
   const offHere = (model: string): boolean => pool.models.for(model).cfg.cloud;

@@ -163,6 +163,8 @@ const MCP_RECHECK_MS = 60_000;
 const runLine = (r: { command: string; args: string[] }) => [r.command, ...r.args].join(" ");
 const BREAK_MS = 30_000;
 const OBSERVE_MS = 10_000;
+/** How much of a streamed reply's text is kept for plugins that read a reply. */
+const REPLY_KEPT_MAX = 2_000_000;
 const CREDENTIALS = new Set(["authorization", "cookie", "x-api-key"]);
 /** How often a service that was not there at startup is asked again. */
 const RETRY_MS = 30_000;
@@ -234,6 +236,55 @@ export function matches(when: PluginWhen | null, r: HookRequest): boolean {
   return true;
 }
 
+/** What one line of a relayed answer adds to the assistant's text, and nothing for a line that adds none. */
+function replyLine(line: string): string {
+  if (!line.startsWith("data:")) return "";
+  const data = line.slice(5).trim();
+  if (data === "[DONE]") return "";
+  try {
+    const c = (JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
+    return typeof c === "string" ? c : "";
+  } catch {
+    // A comment, or a line that is not one of ours: the text before it still stands.
+    return "";
+  }
+}
+
+/**
+ * Reads a streamed chat answer as it arrives, a chunk at a time, keeping only the text it carries.
+ * The result is the text `replyText` gives for the whole body, without keeping the body itself.
+ */
+export class ReplyStream {
+  /** A line that did not end in the chunk it started in, to finish on the next one. */
+  private partial = "";
+  private out = "";
+
+  /** Take the next chunk of the stream. `cap` bounds the text kept, not the stream read. */
+  write(chunk: string, cap = REPLY_KEPT_MAX): void {
+    // Over the cap, add nothing but still end every line, so a later read starts on a line.
+    const room = this.out.length < cap;
+    const lines = (this.partial + chunk).split("\n");
+    this.partial = lines.pop() ?? "";
+    if (!room) return;
+    for (const line of lines) {
+      if (this.out.length >= cap) return;
+      this.out += replyLine(line);
+    }
+    if (this.out.length > cap) this.out = this.out.slice(0, cap);
+  }
+
+  /** Finish the stream: a last line with no newline after it still counts. */
+  end(cap = REPLY_KEPT_MAX): void {
+    if (this.partial !== "" && this.out.length < cap) this.out = (this.out + replyLine(this.partial)).slice(0, cap);
+    this.partial = "";
+  }
+
+  /** The assistant's text so far, or null when no line carried any. */
+  text(): string | null {
+    return this.out === "" ? null : this.out;
+  }
+}
+
 /** The assistant's text in a relayed chat answer: a JSON completion, or a stream of `data:` lines. */
 export function replyText(raw: string): string | null {
   const t = raw.trimStart();
@@ -246,20 +297,10 @@ export function replyText(raw: string): string | null {
       return null;
     }
   }
-  let out = "";
-  let any = false;
-  for (const line of raw.split("\n")) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (data === "[DONE]") continue;
-    try {
-      const c = (JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
-      if (typeof c === "string") { out += c; any = true; }
-    } catch {
-      // A line split across chunks or a comment: the text before it still stands.
-    }
-  }
-  return any ? out : null;
+  const stream = new ReplyStream();
+  stream.write(raw);
+  stream.end();
+  return stream.text();
 }
 
 /** Why a service could not be reached, said the way an operator can act on it. */
