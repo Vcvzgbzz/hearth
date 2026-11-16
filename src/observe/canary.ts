@@ -1239,15 +1239,29 @@ function probeBody(wire: string, spec: CanaryProbe): Record<string, unknown> {
   };
 }
 
-/** The expectation, compiled once per pattern: probes run on a timer and the regex never changes. */
+/**
+ * The expectation, compiled once per pattern: probes run on a timer and the regex never changes.
+ * A node's configuration changes over its life, so the cache keeps only the most recent
+ * expectations and drops the oldest once it is full.
+ */
 const patterns = new Map<string, RegExp>();
-function pattern(expect: string): RegExp {
+const PATTERN_CACHE_MAX = 256;
+
+/** The compiled expectation, kept for later probes of the same one. */
+export function pattern(expect: string): RegExp {
   let re = patterns.get(expect);
   if (re === undefined) {
+    // Map keeps insertion order, so the first key is the least recently added.
+    if (patterns.size >= PATTERN_CACHE_MAX) patterns.delete(patterns.keys().next().value!);
     re = new RegExp(expect, "i");
     patterns.set(expect, re);
   }
   return re;
+}
+
+/** How many compiled expectations are kept, which never grows past its cap. */
+export function patternCacheSize(): number {
+  return patterns.size;
 }
 
 /** Ask the question and judge the answer. Never throws: a fault is a verdict. */
