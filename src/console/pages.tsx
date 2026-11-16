@@ -3,6 +3,7 @@ import { ChevronRight, Link2, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 
 import type { UiData, Used } from "../observe/uidata.js";
+import { short } from "./count.js";
 import { Refs, refsOf, Value } from "./config.js";
 import { draftView, isObj, obj, put } from "./draft.js";
 import { change, useEdit } from "./editStore.js";
@@ -316,8 +317,7 @@ export function Models() {
 const lentOnlyTo = (d: UiData, model: string): string[] =>
   d.configuredShare.includes(model) ? [] : (d.ledger ?? []).filter((l) => l.own?.includes("models") && !l.terms?.off && l.terms?.models.includes(model)).map((l) => l.peer);
 
-/** A count as a person reads it: 950, 12.4k, 3.1M. */
-export const short = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
+export { short };
 
 /** Dollars as a person reads them: cents for small sums, whole dollars for large ones. */
 export const money = (n: number): string => `$${n < 10 ? n.toFixed(2) : n < 1000 ? n.toFixed(0) : short(Math.round(n))}`;
