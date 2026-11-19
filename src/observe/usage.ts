@@ -33,6 +33,9 @@ export class Meter {
   private events = 0;
   private started = false;
 
+  /** `saidOnly`: count only what the answer reports, never an estimate, for answers that may not be text at all. */
+  constructor(private readonly saidOnly = false) {}
+
   feed(chunk: unknown): void {
     try {
       const text = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("latin1") : "";
@@ -67,14 +70,15 @@ export class Meter {
     if (i !== null && o !== null) return { in: i, out: o, est: false, ...(cached ? { cached } : {}), ...(written ? { written } : {}) };
     // An answer that writes no tokens (embeddings) reports its input alone.
     if (i !== null && this.events === 0) return { in: i, out: 0, est: false };
+    if (this.saidOnly) return null;
     // The first event names the role and the last says it is done; what is between is the answer.
     return { in: fallbackIn, out: Math.max(0, this.events - 2), est: true };
   }
 }
 
 /** Watch everything written to `res` from here on. */
-export function meter(res: ServerResponse): Meter {
-  const m = new Meter();
+export function meter(res: ServerResponse, saidOnly = false): Meter {
+  const m = new Meter(saidOnly);
   const { write, end } = res;
   res.write = function (this: ServerResponse, chunk: unknown, ...rest: unknown[]) {
     m.feed(chunk);
