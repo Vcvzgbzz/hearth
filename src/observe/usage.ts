@@ -57,8 +57,8 @@ export class Meter {
   read(fallbackIn = 0): Counted | null {
     if (this.tail === "") return null;
     const at = this.tail.lastIndexOf('"usage"');
-    // An answer too long to keep whole can carry its `usage` first, as an embeddings list may, ahead of the vectors.
-    const first = at === -1 ? /"usage"\s*:\s*\{/.exec(this.head) : null;
+    // A routed path's answer too long to keep whole can carry its `usage` first, as an embeddings list may, ahead of the vectors.
+    const first = at === -1 && this.saidOnly ? /"usage"\s*:\s*\{\s*"prompt_tokens"/.exec(this.head) : null;
     const said = at !== -1 ? this.tail.slice(at) : first ? this.head.slice(first.index) : "";
     const num = (key: string): number | null => {
       const m = new RegExp(`"${key}"\\s*:\\s*(\\d+)`).exec(said);
@@ -68,9 +68,10 @@ export class Meter {
     const cached = num("cached_tokens");
     const written = num("cache_write_tokens");
     if (i !== null && o !== null) return { in: i, out: o, est: false, ...(cached ? { cached } : {}), ...(written ? { written } : {}) };
-    // An answer that writes no tokens (embeddings) reports its input alone.
-    if (i !== null && this.events === 0) return { in: i, out: 0, est: false };
-    if (this.saidOnly) return null;
+    if (this.saidOnly) {
+      // A routed path's answer that writes no tokens (embeddings) reports its input alone.
+      return i !== null && this.events === 0 ? { in: i, out: 0, est: false } : null;
+    }
     // The first event names the role and the last says it is done; what is between is the answer.
     return { in: fallbackIn, out: Math.max(0, this.events - 2), est: true };
   }

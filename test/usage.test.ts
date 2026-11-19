@@ -37,15 +37,23 @@ cache.feed('{"usage":{"prompt_tokens":50,"completion_tokens":2,"prompt_tokens_de
 assert.deepEqual(cache.read(), { in: 50, out: 2, est: false, cached: 30, written: 15 }, "input read from and written to a prompt cache is each counted");
 
 const vector = `[${Array.from({ length: 1024 }, (_, n) => (n / 1e4).toFixed(8)).join(",")}]`;
-const embedFirst = new Meter();
+const embedFirst = new Meter(true);
 embedFirst.feed('{"model":"my-model","object":"list","usage":{"prompt_tokens":12,"total_tokens":12},"data":[');
 for (let n = 0; n < 4; n++) embedFirst.feed(`${n ? "," : ""}{"index":${n},"embedding":${vector}}`);
 embedFirst.feed("]}");
 assert.deepEqual(embedFirst.read(), { in: 12, out: 0, est: false }, "an embeddings answer's usage is found ahead of its vectors");
 
-const embedLast = new Meter();
+const embedLast = new Meter(true);
 embedLast.feed(`{"object":"list","data":[{"index":0,"embedding":${vector}}],"model":"my-model","usage":{"prompt_tokens":7,"total_tokens":7}}`);
 assert.deepEqual(embedLast.read(), { in: 7, out: 0, est: false }, "input alone is counted when nothing was written");
+
+const halfSaid = new Meter();
+halfSaid.feed('{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":7}}');
+assert.deepEqual(halfSaid.read(30), { in: 30, out: 0, est: true }, "a chat answer missing its output count is still estimated");
+
+const quoted = new Meter(true);
+quoted.feed(`{"note":"a \\"usage\\":{\\"prompt_tokens\\":99}","data":[{"embedding":${vector}},{"embedding":${vector}}]}`);
+assert.equal(quoted.read(), null, "text that only quotes a usage object is not read as one");
 
 // The ledger.
 let now = Date.UTC(2030, 0, 10, 12);
