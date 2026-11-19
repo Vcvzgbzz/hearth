@@ -9,6 +9,7 @@ import { KEY_REFUSED, deliveredWhole, fail, headersOf, jobId, pipeThrough, refus
 import { multipartField, replaceMultipartField } from "../wire/multipart.js";
 import type { BackendSlot } from "../queue/pool.js";
 import { type Traced, firstByte, notRun } from "../observe/requestlog.js";
+import { meter } from "../observe/usage.js";
 import { type World, resolve } from "../routing/route.js";
 import { send } from "../wire/upstream.js";
 import type { Call, RouteContext } from "./context.js";
@@ -248,7 +249,8 @@ export function passthroughRoutes(ctx: RouteContext) {
         const model = pool.models.routedModel(routed.slot, routed.rule, asked);
         // Queued on the backend that runs it, and recorded in history like any local use.
         const run = async (to: BackendSlot, as: string, sendBody: Buffer | undefined, orFail: boolean): Promise<void> => {
-          const t = firstByte(res, notRun());
+          // A routed path's answer is counted where it reports `usage` (embeddings do); audio or a file is not guessed at.
+          const t = firstByte(res, { ...notRun(), meter: meter(res, true) });
           const route: Traced = { ...decided, ...(failed.length > 0 && failed[0] !== as ? { fallbackFrom: failed[0] } : {}) };
           try {
             await to.scheduler.submit(
