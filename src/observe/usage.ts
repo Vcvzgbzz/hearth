@@ -18,7 +18,7 @@ export interface Counted {
   written?: number;
 }
 
-/** How much of an answer's end is kept to find its `usage` in. */
+/** How much of an answer's start and end is kept to find its `usage` in. */
 const TAIL = 4096;
 
 /**
@@ -27,6 +27,7 @@ const TAIL = 4096;
  * what a backend sends. Never throws into the write it watches.
  */
 export class Meter {
+  private head = "";
   private tail = "";
   private carry = "";
   private events = 0;
@@ -43,6 +44,7 @@ export class Meter {
       for (let at = joined.indexOf("\ndata:"); at !== -1; at = joined.indexOf("\ndata:", at + 6)) this.events++;
       this.carry = joined.slice(-5);
       this.tail = (this.tail + text).slice(-TAIL);
+      if (this.head.length < TAIL) this.head = (this.head + text).slice(0, TAIL);
     } catch {
       // Counting must never be able to break the answer.
     }
@@ -52,7 +54,9 @@ export class Meter {
   read(fallbackIn = 0): Counted | null {
     if (this.tail === "") return null;
     const at = this.tail.lastIndexOf('"usage"');
-    const said = at === -1 ? "" : this.tail.slice(at);
+    // An answer too long to keep whole can carry its `usage` first, as an embeddings list may, ahead of the vectors.
+    const first = at === -1 ? /"usage"\s*:\s*\{/.exec(this.head) : null;
+    const said = at !== -1 ? this.tail.slice(at) : first ? this.head.slice(first.index) : "";
     const num = (key: string): number | null => {
       const m = new RegExp(`"${key}"\\s*:\\s*(\\d+)`).exec(said);
       return m ? Number(m[1]) : null;
@@ -61,6 +65,8 @@ export class Meter {
     const cached = num("cached_tokens");
     const written = num("cache_write_tokens");
     if (i !== null && o !== null) return { in: i, out: o, est: false, ...(cached ? { cached } : {}), ...(written ? { written } : {}) };
+    // An answer that writes no tokens (embeddings) reports its input alone.
+    if (i !== null && this.events === 0) return { in: i, out: 0, est: false };
     // The first event names the role and the last says it is done; what is between is the answer.
     return { in: fallbackIn, out: Math.max(0, this.events - 2), est: true };
   }

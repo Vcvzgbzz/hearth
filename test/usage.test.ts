@@ -36,6 +36,17 @@ const cache = new Meter();
 cache.feed('{"usage":{"prompt_tokens":50,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":15}}}');
 assert.deepEqual(cache.read(), { in: 50, out: 2, est: false, cached: 30, written: 15 }, "input read from and written to a prompt cache is each counted");
 
+const vector = `[${Array.from({ length: 1024 }, (_, n) => (n / 1e4).toFixed(8)).join(",")}]`;
+const embedFirst = new Meter();
+embedFirst.feed('{"model":"my-model","object":"list","usage":{"prompt_tokens":12,"total_tokens":12},"data":[');
+for (let n = 0; n < 4; n++) embedFirst.feed(`${n ? "," : ""}{"index":${n},"embedding":${vector}}`);
+embedFirst.feed("]}");
+assert.deepEqual(embedFirst.read(), { in: 12, out: 0, est: false }, "an embeddings answer's usage is found ahead of its vectors");
+
+const embedLast = new Meter();
+embedLast.feed(`{"object":"list","data":[{"index":0,"embedding":${vector}}],"model":"my-model","usage":{"prompt_tokens":7,"total_tokens":7}}`);
+assert.deepEqual(embedLast.read(), { in: 7, out: 0, est: false }, "input alone is counted when nothing was written");
+
 // The ledger.
 let now = Date.UTC(2030, 0, 10, 12);
 const ledger = new Usage(() => now);
