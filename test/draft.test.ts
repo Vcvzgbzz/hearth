@@ -316,7 +316,11 @@ const outlet = (d: Doc, node: string, handle: string | null) => nodeOf(node).kin
   };
   refused({ pick: { inputs: ["other"], steps: [{ when: { images: true }, to: { peer: "friend" } }, { to: "chat" }] } }, "pick", 0, /sent "other" as asked, which it does not lend/);
   refused({ pick: { inputs: ["auto"], steps: [{ when: { images: true }, to: { peer: "friend", model: "gone" } }, { to: "chat" }] } }, "pick", 0, /does not lend "gone"/);
-  refused({ pick: { inputs: ["auto"], steps: [{ to: { peer: "friend" } }] } }, "pick", 0, /the last line has to answer every time/);
+  refused({ "anything-else": { inputs: ["*"], steps: [{ to: { peer: "friend", model: "chat" } }] } }, "anything-else", 0, /the rule for every other name has to answer every time/);
+  // Any other rule may end at a peer: when it is down, the request passes on to the next rule that takes it.
+  const passes = { ...withRest(doc(), "asked"), flows: { ...(withRest(doc(), "asked").flows as Doc), pick: { inputs: ["auto"], steps: [{ to: { peer: "friend", model: "chat" } }] } } };
+  assert.doesNotThrow(() => parseConfig(passes));
+  assert.equal(lineTrouble(passes, "pick", 0), null, "a rule that is not for every other name may end at a peer");
   refused({ pick: { inputs: ["auto"], steps: [{ when: { images: true }, to: "image" }, { to: { flow: "heavy" } }] }, heavy: undefined }, "pick", 1, /hands to the rule "heavy", which is gone/);
 
   const fine = { ...withRest(doc(), "asked"), flows: { ...(withRest(doc(), "asked").flows as Doc), pick: { inputs: ["auto"], steps: [{ when: { images: true }, to: { peer: "friend" } }, { when: { tools: true }, to: { peer: "friend", model: "chat" } }, { to: "chat" }] } } };

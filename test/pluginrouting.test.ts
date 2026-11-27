@@ -28,8 +28,11 @@ const flows = (steps: unknown[]) => ({ flows: { rest: { inputs: ["*"], steps } }
 assert.deepEqual(parseConfig({ ...base, ...flows([{ to: { plugin: "tools" } }, { to: { asked: true } }]) }).flows.rest!.steps[0]!.to, { plugin: "tools" });
 assert.throws(() => parseConfig({ ...base, ...flows([{ to: { plugin: "tools" } }]) }), ConfigError, "a model request passes a plugin step over, so it cannot be the last");
 assert.throws(() => parseConfig({ ...base, ...flows([{ to: { fastest: [{ plugin: "a" }, "m"] } }]) }), ConfigError, "fastest chooses between models and peers");
-assert.throws(() => parseConfig({ ...base, ...flows([{ to: { plugin: "tools", model: "m" } }, { to: { asked: true } }]) }), /a plugin/, "a step says a plugin or a model, not both");
-assert.throws(() => parseConfig({ ...base, ...flows([{ to: { plugin: "tools", refuse: "no" } }, { to: { asked: true } }]) }), /a plugin/);
+// A rule may take the type a plugin serves, by name, as it takes a backend's path. The types a node offers
+// come from the plugins it declares, so a name none of them serves is refused as any other typo would be.
+const served = { ...base, plugins: { plain: { serves: "http://127.0.0.1:1/p", trust: "http" }, speaking: { serves: "http://127.0.0.1:1/s", trust: "http", mcp: true } } };
+assert.deepEqual(parseConfig({ ...served, flows: { door: { inputs: ["Agents"], takes: ["MCP"], steps: [{ to: { plugin: "plain" } }] }, ...flows([{ to: { asked: true } }]).flows } }).flows.door!.takes, ["MCP"]);
+assert.throws(() => parseConfig({ ...served, flows: { door: { inputs: ["Agents"], takes: ["SMTP"], steps: [{ to: { plugin: "plain" } }] }, ...flows([{ to: { asked: true } }]).flows } }), /neither a path a backend declares/);
 
 // --- a node with plugins and routers -------------------------------------------
 const backend = createServer((rq, rs) => {
@@ -75,6 +78,19 @@ routers:
     flows:
       none: {inputs: [MCP, API], steps: [{to: {refuse: "no plugins for this caller"}}]}
       rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+  split:
+    flows:
+      well-known:
+        inputs: [MCP, API]
+        steps:
+          - {when: {variant: [tools]}, to: {asked: true}}
+          - {when: {variant: [crawl]}, to: {plugin: crawl}}
+      door:
+        inputs: [MCP]
+        steps:
+          - {when: {variant: [dsh]}, to: {asked: true}}
+          - {to: {refuse: "no such door"}}
+      rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
   picky:
     flows:
       tools-only:
@@ -85,17 +101,32 @@ routers:
           - {when: {variant: [web-get]}, to: {plugin: crawl}}
           - {when: {variant: [crawl]}, to: {model: m}}
           - {to: {refuse: "only the tools are open to you"}}
+      late-door:
+        inputs: [MCP]
+        steps:
+          - {when: {variant: [dsh]}, to: {asked: true}}
       rest: {inputs: ["*"], steps: [{to: {asked: true}}]}
+  agents:
+    flows:
+      door:
+        inputs: [Agents]
+        steps:
+          - {when: {variant: [DSH]}, to: {plugin: dsh}}
+          - {to: {refuse: "no such agent"}}
+      rest: {inputs: ["*"], steps: [{to: {refuse: "not for this caller"}}]}
 apiKeys:
+  - {key: k-agents, label: agents}
   - {key: k-app, label: app}
   - {key: k-closed, label: closed}
   - {key: k-picky, label: picky}
   - {key: k-shut, label: shut}
-callers: {closed: closed, picky: picky, shut: shut}
+  - {key: k-split, label: split}
+callers: {agents: agents, closed: closed, picky: picky, shut: shut, split: split}
 plugins:
   crawl: {serves: "${serviceUrl}/crawl", trust: http}
   old-search: {serves: "${serviceUrl}/old", trust: http}
   tools: {serves: "${serviceUrl}/tools", trust: http, mcp: true}
+  dsh: {serves: "${serviceUrl}/dsh", trust: http, mcp: true}
 `);
 const node = createNode(loadConfig(cfgPath), silentLogger);
 node.start();
@@ -128,6 +159,23 @@ try {
   assert.deepEqual(await call("/plugins/web-get/page", "k-picky"), { status: 200, body: { at: "/crawl/page" } }, "a router's own name for a plugin reaches it");
   assert.deepEqual(await call("/plugins/web-put/page", "k-picky"), { status: 403, body: { error: "only the tools are open to you" } }, "a name no step gives is refused in the router's words");
   assert.equal((await call("/plugins/web-put/page", "k-app")).status, 404, "on rules that run names as asked, a name no plugin has is not found");
+  const split = await call("/plugins/web-put%2Fpage/x", "k-app");
+  assert.equal(split.status, 404);
+  assert.match(split.body.error!, /one path segment/, "a name that decodes to two path segments is refused before any rule is asked");
+
+  // Several rules take one type, tried in order. A rule with no Otherwise passes what it does not take on.
+  assert.deepEqual(await call("/plugins/tools/mcp", "k-split"), { status: 200, body: { at: "/tools/mcp" } }, "the first rule takes its own variant");
+  assert.deepEqual(await call("/plugins/dsh/x", "k-split"), { status: 200, body: { at: "/dsh/x" } }, "the first rule passes dsh on, and the second rule takes it");
+  assert.deepEqual(await call("/plugins/old-search/q", "k-split"), { status: 200, body: { at: "/old/q" } }, "API:old-search: no API rule takes it, so the rule for every other name decides");
+  // A rule with an Otherwise decides everything that reaches it: the rule after it never sees the request.
+  assert.deepEqual(await call("/plugins/dsh/x", "k-picky"), { status: 403, body: { error: "only the tools are open to you" } }, "an Otherwise stops a request going on");
+
+  // A router's own type reaches a plugin: a name asked as type:variant goes as written, and a rule that takes
+  // one kind of plugin request is passed over for the other.
+  assert.deepEqual(await call("/plugins/Agents:DSH/x", "k-agents"), { status: 200, body: { at: "/dsh/x" } }, "Agents:DSH reaches the plugin its rule names");
+  assert.deepEqual(await call("/plugins/Agents%3ADSH/x", "k-agents"), { status: 200, body: { at: "/dsh/x" } }, "the colon may be escaped");
+  assert.deepEqual(await call("/plugins/Agents:Other/x", "k-agents"), { status: 403, body: { error: "no such agent" } }, "a variant no line takes meets the rule's Otherwise");
+  assert.equal((await call("/plugins/dsh/x", "k-agents")).status, 403, "a plain plugin name is asked as MCP:dsh, which no rule of this router takes");
 
   // On a model request, the step that names a plugin is passed over and the model runs.
   const chat = await fetch(`${url}/v1/chat/completions`, { method: "POST", headers: { Authorization: "Bearer k-app", "Content-Type": "application/json" }, body: JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] }) });
