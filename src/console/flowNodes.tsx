@@ -8,7 +8,7 @@ import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyf
 import { ArrowUp, ChevronDown, CircuitBoard, Cloud, Cpu, Lock, MoreHorizontal, Pencil, Plus, Puzzle, Split, Trash2, X, Zap } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 
-import { ACTIONS, ANY, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
+import { ACTIONS, ANY, blankList, dropPlace, editStep, GROUP, groupsOf, list, movedName, movePlugin, moveStep, NODES, obj, placedOn, put, raisePlace, rawTo, text, toOf, toText, wireSlot, withDo, withPlugin, withRest, type Doc, type End, type Placed } from "./draft.js";
 import { addName, change, choose, dropName, hover, openRule, pick, remove, rename, retype, type Choice } from "./editStore.js";
 import { openPlugin, useStore } from "./store.js";
 import type { PluginView, PluginsView } from "../observe/uidata.js";
@@ -168,10 +168,11 @@ const nameOf = (c: Cond) => (c.kind === "bool" ? c.yes : c.kind === "idle" ? "a 
   : c.kind === "header" ? (c.key === "header" ? "a header it carries is …" : "a header it carries is not …") : `${c.before} …`);
 const seedOf = (c: Cond): unknown => (c.kind === "bool" ? true : c.kind === "num" ? c.seed : c.kind === "idle" ? { ms: 600_000 } : c.kind === "time" ? { from: "22:00", to: "06:00" } : c.kind === "header" ? { "": [] } : []);
 /** A condition and its value as one phrase, for a line that is read and not edited. */
+const unfilled = (c: Cond, v: unknown): boolean => c.kind === "list" && blankList(v);
 const phrase = (c: Cond, v: unknown): string =>
   c.kind === "bool" ? (v === false ? c.no : c.yes)
   : c.kind === "num" ? `${c.before} ${String(v)} ${c.after}`
-  : c.kind === "list" ? `${c.before} ${list(v).join(" or ")}`
+  : c.kind === "list" ? (unfilled(c, v) ? `${c.before} (nothing yet: matches no request)` : `${c.before} ${list(v).filter((x) => x.trim() !== "").join(" or ")}`)
   : c.kind === "time" ? `it is between ${text(obj(v).from)} and ${text(obj(v).to)}`
   // No values is the header being there at all, or for the opposite, not there.
   : c.kind === "header" ? Object.entries(obj(v)).map(([n, vals]) => `the header ${n} ${c.key === "header" ? (list(vals).length ? `is ${list(vals).join(" or ")}` : "is sent") : (list(vals).length ? `is not ${list(vals).join(" or ")}` : "is not sent")}`).join(" and ")
@@ -233,8 +234,11 @@ export function Conds({ when, models, optional, onChange }: { when: Doc; models:
             ) : c.kind === "list" ? (
               <>
                 <span className="shrink-0 whitespace-nowrap">{c.before}</span>
-                <input aria-label={c.before} autoFocus={fresh === c.key} className={cx(FIELD, "w-0 min-w-10 max-w-40 flex-1 font-mono")} placeholder={c.hint} value={list(v).join(", ")}
-                       onChange={(e) => onChange({ ...when, [c.key]: e.target.value.split(",").map((x) => x.trim()).filter((x, k, all) => x !== "" || k === all.length - 1) })} />
+                <input aria-label={c.before} autoFocus={fresh === c.key} className={cx(FIELD, "w-0 min-w-10 max-w-40 flex-1 font-mono", unfilled(c, v) && "border-warn")} placeholder={c.hint} value={list(v).join(", ")}
+                       title={unfilled(c, v) ? "Empty: this line matches no request until it names one" : undefined}
+                       onChange={(e) => onChange({ ...when, [c.key]: e.target.value.split(",").map((x) => x.trim()).filter((x, k, all) => x !== "" || k === all.length - 1) })}
+                       // Leaving the field drops the empty entries typing keeps open at its end.
+                       onBlur={() => { if (list(v).some((x) => x.trim() === "")) onChange({ ...when, [c.key]: list(v).filter((x) => x.trim() !== "") }); }} />
                 {drop}
               </>
             ) : c.kind === "header" ? (() => {
