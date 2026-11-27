@@ -23,6 +23,7 @@
   --pick: oklch(0.6 0.11 200);
   --mcp: oklch(0.62 0.17 128);
   --api: oklch(0.55 0.2 280);
+  --adapt: oklch(0.6 0.25 320);
 }
 .dark {
   --bg: oklch(0.155 0.005 60);
@@ -40,6 +41,7 @@
   --cloud: oklch(0.74 0.16 350);
   --mcp: oklch(0.86 0.19 125);
   --api: oklch(0.68 0.19 280);
+  --adapt: oklch(0.74 0.22 320);
   --pick: oklch(0.74 0.11 200);
 }
 
@@ -58,6 +60,7 @@
   --color-peer: var(--peer);
   --color-mcp: var(--mcp);
   --color-api: var(--api);
+  --color-adapt: var(--adapt);
   --color-cloud: var(--cloud);
   --color-pick: var(--pick);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;

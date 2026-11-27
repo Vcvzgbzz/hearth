@@ -20,6 +20,7 @@ import { troubleSays } from "../queue/backend.js";
 import type { BackendPool } from "../queue/pool.js";
 import type { ModelStats } from "../config/models.js";
 import type { Canary, Node, PluginsView, UiData } from "./uidata.js";
+import type { AdaptersView } from "./uidata.js";
 
 /** One api key, as the keys page draws it: who it is, what it may run, when it last spoke to this node. */
 /** What was used, and what it cost in dollars at the prices the models carry now. */
@@ -101,12 +102,14 @@ export interface ViewDeps {
   recent: () => RecentCall[];
   /** Plugins, where they are placed and what each router does with them, for the Plugins page and the Routing map. */
   plugins: () => PluginsView;
+  /** The adapter plugins a line's `adapt:` can name, with their code, the lines that use them, and their last call. */
+  adapters: () => AdaptersView;
 }
 
 /** Which console this node serves. A page that was loaded from another one reloads itself when it sees this change. */
 const build = createHash("sha256").update(CONSOLE_HTML).digest("hex").slice(0, 12);
 
-export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults, update, recent, plugins }: ViewDeps) {
+export function createViews({ cfg, pool, peers, history, controls, config, shared, proxying, writeMode, canary, flowHits, keys, others, ledger, lendDefaults, update, recent, plugins, adapters }: ViewDeps) {
   /**
    * Everything the page draws, shared by /ui/data and the event stream. Uses ensureFresh, never probeAll.
    */
@@ -194,6 +197,8 @@ export function createViews({ cfg, pool, peers, history, controls, config, share
       update: update(),
       recent: recent(),
       plugins: plugins(),
+      // The adapters a line's `adapt:` can name: their code, the lines that use them, and the last call.
+      adapters: adapters(),
       // Each action by name and kind. Its settings stay in the file: a URL or a header can be a secret.
       actions: Object.fromEntries(Object.entries(cfg.actions).map(([name, action]) => [name, { kind: action.kind }])),
       // Where the operator placed topology nodes; the page lays out the rest.
