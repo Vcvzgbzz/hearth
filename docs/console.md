@@ -160,8 +160,9 @@ thicker and quicker the more the node has queued and running. The load is a
 fire under it: coals along the bottom light the nearest wisps in the theme's
 fire colours, and embers rise off them, more the busier the node. The fire
 tells the truth about the work: each request that finishes sends up a spark,
-blue-hot when it ran on a peer or came in from one; a failed request is a drop
-of rain that hisses on the coals; after a big load falls away, ash drifts down
+blue-hot when it ran on a peer or came in from one, and one a cloud backend
+answered goes straight up the chimney in the cloud colour, still hot as it
+leaves the top; a failed request is a drop of rain that hisses on the coals; after a big load falls away, ash drifts down
 for a while; five idle minutes and the fire ashes over, until the next request
 catches it again. A wind leans it all, stronger the busier the node. Clicking
 the empty floor stokes it where you click, and hovering the flame in the

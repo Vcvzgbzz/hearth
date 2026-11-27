@@ -16,7 +16,7 @@
  * moves.
  */
 import { useEffect, useRef } from "react";
-import { fire, seedOf } from "./fire.js";
+import { fire, seedOf, STOKE, stokeOf } from "./fire.js";
 import { useStore } from "./store.js";
 import type { UiData } from "../observe/uidata.js";
 
@@ -71,11 +71,11 @@ float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 const VS = "#version 300 es\nin vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}";
 
 // One texel per cell, all 0..1: r = the sheet-lit smoke, g = the fire-lit smoke, b = a passing thing's
-// brightness and a = its kind in the top two bits (fire ember, peer ember, raindrop, ash) with its age
-// in the rest, or the cell's heat when nothing passes. uLoad is how busy the node is, uHeat and
+// brightness and a = its kind in the top three bits (fire ember, peer ember, raindrop, ash, cloud
+// ember) with its age in the rest, or the cell's heat when nothing passes. uLoad is how busy the node is, uHeat and
 // uEmbers its fire, uSeed the node's own noise slice, light, flicker, coals and embers. uStoke holds
-// the last twelve stokes, each (cell x, cell y, when, kind): 1 a click, 0.5 a finished request, 0.4
-// a request in from a peer, 0.3 one sent out to a peer, 0.2 a failed request. uDrift is how far the
+// the last twelve stokes, each (cell x, cell y, when, kind): 1 a click, 0.6 a request a provider
+// answered, 0.5 a finished request, 0.4 one in from a peer, 0.3 one sent out to a peer, 0.2 a failure. uDrift is how far the
 // wind has carried the smoke, uWind its strength now, uCursor the pointer (cell x, cell y, speed),
 // uThin how far the fire has ashed over idle, uAsh how much ash is falling after a load fell away.
 const FS_DENSITY = `#version 300 es
@@ -129,7 +129,8 @@ void main(){
   }
   // The stokes, by kind. A click flares and lifts the smoke around it and six sparks leave it fanning
   // upward. A finished request sends one spark up from the coals; one that ran on a peer, or came in
-  // from one, sends a blue-hot one, the outgoing drifting off the slice's edge. A failed request is a
+  // from one, sends a blue-hot one, the outgoing drifting off the slice's edge; one a provider answered
+  // goes up the chimney, straight and quick and still hot as it leaves the top. A failed request is a
   // drop of rain: it falls from the top and hisses where it meets the coals, cooling them for a moment
   // under a wisp of steam. Sparks climb their own height like embers; a click's burn for SPARK seconds.
   float stoke=0.0, steam=0.0;
@@ -152,7 +153,7 @@ void main(){
       }
       continue;
     }
-    bool click=st.w>0.75, peer=st.w<0.45, outward=st.w<0.35;
+    bool click=st.w>0.75, cloud=st.w>0.55&&!click, peer=st.w<0.45, outward=st.w<0.35;
     if(a>(click?STOKE:8.0)) continue;
     if(click){
       vec2 dp=(c-st.xy)*vec2(1.0,1.6);
@@ -165,19 +166,20 @@ void main(){
       if(!click&&k>0) break;
       float h=hash(vec2(st.z*7.0+float(k),float(s)+1.0));
       float h2=hash(vec2(float(k)+0.5,st.z*3.0));
-      float ang=1.5708+(h-0.5)*(click?1.4:0.5);
-      float sp=click?5.0+6.0*h2:uGrid.y*(0.12+0.08*h2), reach=uGrid.y*(0.45+0.3*h2);
+      float ang=1.5708+(h-0.5)*(click?1.4:cloud?0.12:0.5);
+      float sp=click?5.0+6.0*h2:uGrid.y*(cloud?0.3:0.12+0.08*h2), reach=cloud?uGrid.y+6.0:uGrid.y*(0.45+0.3*h2);
       vec2 vel=vec2(cos(ang),-sin(ang))*sp;
       if(outward) vel.x=(st.x<uGrid.x*0.5?-1.0:1.0)*uGrid.x*0.12;
-      for(int j=0;j<3;j++){
-        float ago=a-float(j)*0.12;
+      for(int j=0;j<5;j++){
+        if(!cloud&&j>2) break;
+        float ago=a-float(j)*(cloud?0.06:0.12);
         if(ago<0.0||(click?ago>=SPARK:ago*sp>=reach)) break;
-        vec2 q=st.xy+vel*ago+vec2(sin(ago*3.0+h*6.28)*0.6+uWind*3.0*ago,click?2.0*ago*ago:0.0);
+        vec2 q=st.xy+vel*ago+vec2(sin(ago*3.0+h*6.28)*(cloud?0.25:0.6)+uWind*3.0*ago,click?2.0*ago*ago:0.0);
         if(floor(q.x)!=floor(c.x)||floor(q.y)!=floor(c.y)) continue;
-        float u=click?ago/SPARK:smoothstep(fireTop,reach,ago*sp);
-        float keep=j==0?1.0:0.4*pow(0.55,float(j-1));
+        float u=click?ago/SPARK:cloud?0.0:smoothstep(fireTop,reach,ago*sp);
+        float keep=j==0?1.0:(cloud?0.5:0.4)*pow(cloud?0.7:0.55,float(j-1));
         float b=keep*(1.0-u)*(0.8+0.2*sin(t*13.0+h*20.0));
-        if(b>ember){ember=b;age=j==0?(click?u:ago*sp/reach):1.0;kind=peer?1.0:0.0;}
+        if(b>ember){ember=b;age=j==0?(click?u:min(ago*sp/reach,0.98)):1.0;kind=cloud?4.0:peer?1.0:0.0;}
         break;
       }
     }
@@ -237,7 +239,7 @@ void main(){
   // lights even thin smoke, so the flare shows wherever the click lands, but never past a plus.
   float glow=(d*heat+max(stoke,0.0)*(0.25+0.5*d))*0.8*top;
   ember*=top;
-  o=vec4(smoke+steam*0.6,glow,ember,ember>0.0?(kind*64.0+floor(age*63.0))/255.0:heat);
+  o=vec4(smoke+steam*0.6,glow,ember,ember>0.0?(kind*32.0+floor(age*31.0))/255.0:heat);
 }`;
 
 // Every pixel: which cell it is in and that cell's glyph from the atlas, in the page's greys where
@@ -248,7 +250,7 @@ precision highp float;
 uniform sampler2D uDensity; uniform sampler2D uAtlas; uniform vec2 uCellDev; uniform float uCanvasH;
 uniform float uN; uniform float uNSmoke; uniform float uNFire; uniform float uNEmber; uniform float uNSpeck; uniform float uNRain; uniform float uNAsh;
 uniform float uGain; uniform float uAlpha; uniform float uWarm;
-uniform vec3 uDim; uniform vec3 uHot; uniform vec3 uRed; uniform vec3 uOrange; uniform vec3 uTip; uniform vec3 uBlue; uniform vec3 uPeer;
+uniform vec3 uDim; uniform vec3 uHot; uniform vec3 uRed; uniform vec3 uOrange; uniform vec3 uTip; uniform vec3 uBlue; uniform vec3 uPeer; uniform vec3 uCloudHot; uniform vec3 uCloud;
 out vec4 o;
 vec3 fireOf(float h){vec3 c=mix(uRed,uOrange,smoothstep(0.0,0.55,h));return mix(c,uTip,smoothstep(0.6,1.0,h));}
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
@@ -259,15 +261,17 @@ void main(){
   vec2 inC=fract(f/uCellDev);
   float gi; vec3 col; float a;
   if(d.b>0.0){
-    // Something passing: its kind in the top two bits of the age channel, its age in the rest. An ember
-    // leaves the coals orange and cools to red, never the tip's yellow; a peer's is blue-hot cooling
-    // to the peer colour; a raindrop and a flake of ash are the smoke's own grey.
-    float raw=floor(d.a*255.0+0.5), k=floor(raw/64.0), age=mod(raw,64.0)/63.0;
+    // Something passing: its kind in the top three bits of the age channel, its age in the rest. An
+    // ember leaves the coals orange and cools to red, never the tip's yellow; a peer's is blue-hot
+    // cooling to the peer colour; a cloud ember stays round, white-hot settling to the cloud colour, with
+    // a speck trail; a raindrop and a flake of ash are the smoke's own grey.
+    float raw=floor(d.a*255.0+0.5), k=floor(raw/32.0), age=mod(raw,32.0)/31.0;
     float glyph=floor((1.0-age)*(uNEmber-1.0)+0.5);
     if(k<0.5){gi=uNSmoke+uNFire+glyph;col=fireOf(0.5-0.4*age);}
     else if(k<1.5){gi=uNSmoke+uNFire+glyph;col=mix(uBlue,uPeer,age);}
     else if(k<2.5){gi=uNSmoke+uNFire+uNEmber+uNSpeck;col=uDim;}
-    else {gi=uNSmoke+uNFire+uNEmber+uNSpeck+uNRain+floor(age*(uNAsh-0.001));col=mix(uDim,uHot,0.3);}
+    else if(k<3.5){gi=uNSmoke+uNFire+uNEmber+uNSpeck+uNRain+floor(age*(uNAsh-0.001));col=mix(uDim,uHot,0.3);}
+    else {gi=uNSmoke+uNFire+(age>0.99?0.0:uNEmber-1.0);col=mix(uCloudHot,uCloud,smoothstep(0.0,0.4,age));}
     a=d.b*clamp(0.8+0.2*uWarm,0.0,1.0);
   } else {
     // The brighter of the two lights picks the glyph, from its own ramp; the cell's colour is
@@ -316,22 +320,25 @@ export function NodeSmoke() {
   const slots = useStore((s) => s.data?.q.capacity.slots ?? 1);
   const name = useStore((s) => s.data?.net.nodes.find((n) => n.self)?.name ?? "");
   const recent = useStore((s) => s.data?.recent);
-  return <Smoke load={jobs / Math.max(4, slots * 2)} seed={seedOf(name)} recent={recent} />;
+  const backends = useStore((s) => s.data?.net.nodes.find((n) => n.self)?.backends);
+  const clouds = new Set((backends ?? []).filter((b) => b.cloud).map((b) => b.name));
+  return <Smoke load={jobs / Math.max(4, slots * 2)} seed={seedOf(name)} recent={recent} clouds={clouds} />;
 }
 
 /**
  * `load` is how busy the node is, 0 for idle to 1 for a full queue; it eases, so a burst does not
  * jolt. `seed` is the node's own four numbers in [0, 1). `recent` is the latest requests, newest
- * first; each new one sends something up: a spark, a blue one for a peer's, a raindrop for a failure.
+ * first; each new one sends something up: a spark, a blue one for a peer's, one up the chimney for a
+ * provider's, a raindrop for a failure. `clouds` names the backends that are a provider's server.
  */
-function Smoke({ load, seed, recent }: { load: number; seed: [number, number, number, number]; recent: UiData["recent"] }) {
+function Smoke({ load, seed, recent, clouds }: { load: number; seed: [number, number, number, number]; recent: UiData["recent"]; clouds: ReadonlySet<string> }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const target = useRef(load);
   target.current = Math.max(0, Math.min(1, load));
   const own = useRef(seed);
   own.current = seed;
   // The last twelve stokes, as (cell x, cell y, when, kind), oldest overwritten first: kind 1 is a
-  // click, 0.5 a finished request, 0.4 one in from a peer, 0.3 one sent to a peer, 0.2 a failure.
+  // click, the rest are STOKE in fire.ts.
   // The grid size rides along so a spark can start on the bottom row and a drop at the top.
   const ring = useRef({ v: new Float32Array(48), next: 0, cols: 1, rows: 1, sized: false }).current;
   const put = (x: number, y: number, kind: number) => {
@@ -347,12 +354,8 @@ function Smoke({ load, seed, recent }: { load: number; seed: [number, number, nu
     if (!recent?.length) return;
     if (seen.current && ring.sized) {
       for (let i = 0, n = 0; i < recent.length && recent[i]!.t > seen.current && n < 4; i++, n++) {
-        const r = recent[i]!;
-        // A request that ran and failed is rain; one refused before it ran, with nowhere it ran, is nothing.
-        if (!r.ok) { if (r.backend || r.peer) put(Math.random() * ring.cols, 0, 0.2); }
-        else if (r.peer) put(Math.random() * ring.cols, ring.rows - 0.5, 0.3);
-        else if (r.caller.startsWith("peer:")) put(Math.random() * ring.cols, ring.rows - 0.5, 0.4);
-        else put(Math.random() * ring.cols, ring.rows - 0.5, 0.5);
+        const k = stokeOf(recent[i]!, clouds);
+        if (k !== null) put(Math.random() * ring.cols, k === STOKE.rain ? 0 : ring.rows - 0.5, k);
       }
     }
     const ok = recent.find((r) => r.ok);
@@ -453,7 +456,7 @@ function Smoke({ load, seed, recent }: { load: number; seed: [number, number, nu
     const GREY: RGB = [0.55, 0.55, 0.55];
     let dim = GREY, hot = GREY, alpha = 0.4, warm = 0.5;
     let red: RGB = [0.72, 0.25, 0.2], orange: RGB = [0.9, 0.5, 0.2], tip: RGB = [0.95, 0.75, 0.4];
-    let blue: RGB = [0.6, 0.75, 1], peer: RGB = [0.7, 0.45, 0.9];
+    let blue: RGB = [0.6, 0.75, 1], peer: RGB = [0.7, 0.45, 0.9], cloudHot: RGB = [1, 0.8, 0.9], cloud: RGB = [0.85, 0.3, 0.6];
     const mix = (a: RGB, b: RGB, t: number): RGB => [0, 1, 2].map((i) => a[i]! + (b[i]! - a[i]!) * t) as RGB;
     const colours = () => {
       const s = getComputedStyle(document.documentElement);
@@ -470,6 +473,9 @@ function Smoke({ load, seed, recent }: { load: number; seed: [number, number, nu
       // A peer's ember starts blue-hot, --info pushed toward white on a dark page, and cools to --peer.
       blue = deepen(mix(rgb(v("--info"), blue), [1, 1, 1], dark ? 0.45 : 0));
       peer = deepen(rgb(v("--peer"), peer));
+      // A provider's ember leaves white-hot, --cloud pushed toward white on a dark page, and settles to --cloud.
+      cloud = deepen(rgb(v("--cloud"), cloud));
+      cloudHot = deepen(mix(rgb(v("--cloud"), cloudHot), [1, 1, 1], dark ? 0.55 : 0.1));
       alpha = dark ? 0.42 : 0.4;
       warm = dark ? 0.5 : 1.5;
     };
@@ -571,6 +577,8 @@ function Smoke({ load, seed, recent }: { load: number; seed: [number, number, nu
       gl.uniform1f(pG.u.uNAsh!, ASH.length);
       gl.uniform3fv(pG.u.uBlue!, blue);
       gl.uniform3fv(pG.u.uPeer!, peer);
+      gl.uniform3fv(pG.u.uCloudHot!, cloudHot);
+      gl.uniform3fv(pG.u.uCloud!, cloud);
       gl.uniform1f(pG.u.uGain!, GAIN);
       gl.uniform1f(pG.u.uAlpha!, alpha);
       gl.uniform1f(pG.u.uWarm!, warm);
