@@ -91,3 +91,24 @@ export function byDay(usage: UsageSnapshot, by: By, names: string[], days: strin
     return bar;
   });
 }
+
+/** One peer's counts by day and model, lent (it ran here) and borrowed (this node ran there), as `GET /ui/lending` answers it. */
+export interface PeerDays { peer: string; byDayModel: { lent: Record<string, Record<string, Row>>; borrowed: Record<string, Record<string, Row>> } }
+/** A peer or model with what was lent and borrowed, and the same for each of the other side's names. */
+export interface LendRow { name: string; lent: Entry; borrowed: Entry; parts: { name: string; lent: Entry; borrowed: Entry }[] }
+
+/** Every peer's lending over `days` as two snapshots shaped like `/usage`, with the peer in the caller's place. */
+export function lendingBooks(peers: PeerDays[], days: string[]): { lent: UsageSnapshot; borrowed: UsageSnapshot } {
+  const book = (side: "lent" | "borrowed"): UsageSnapshot =>
+    Object.fromEntries(days.map((day) => [day, Object.fromEntries(peers.flatMap((p) => (p.byDayModel[side][day] ? [[p.peer, p.byDayModel[side][day]!]] : [])))]));
+  return { lent: book("lent"), borrowed: book("borrowed") };
+}
+
+/** Lent and borrowed side by side, by peer (`caller`) or model, busiest first. */
+export function lendingRows(books: { lent: UsageSnapshot; borrowed: UsageSnapshot }, prices: Prices, by: By): LendRow[] {
+  const lent = totalsBy(books.lent, prices, by), borrowed = totalsBy(books.borrowed, prices, by);
+  const pair = (a: Entry[], b: Entry[]) => [...new Set([...a, ...b].map((e) => e.name))].map((name) => ({ name, lent: a.find((e) => e.name === name) ?? blank(name), borrowed: b.find((e) => e.name === name) ?? blank(name) }));
+  const size = (r: { name: string; lent: Entry; borrowed: Entry }) => ({ ...blank(r.name), requests: r.lent.requests + r.borrowed.requests, in: r.lent.in + r.borrowed.in, out: r.lent.out + r.borrowed.out });
+  const order = <T extends { name: string; lent: Entry; borrowed: Entry }>(rows: T[]): T[] => rows.sort((x, y) => biggest(size(x), size(y)));
+  return order(pair(lent, borrowed).map((r) => ({ ...r, parts: order(pair(lent.find((g) => g.name === r.name)?.parts ?? [], borrowed.find((g) => g.name === r.name)?.parts ?? [])) })));
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { byDay, callerName, costOf, daysEnding, topN, totalsBy, type UsageSnapshot } from "../src/console/tally.js";
+import { byDay, callerName, costOf, tokens, daysEnding, lendingBooks, lendingRows, topN, totalsBy, type UsageSnapshot } from "../src/console/tally.js";
 
 const usage: UsageSnapshot = {
   "2026-01-01": { "key:a": { m1: { requests: 2, failed: 1, in: 100, out: 50 }, m2: { requests: 1, failed: 0, in: 10, out: 5, cached: 4 } }, local: { m1: { requests: 1, failed: 0, in: 1, out: 1 } } },
@@ -53,4 +53,18 @@ assert.deepEqual(daysEnding(3, Date.UTC(2026, 0, 3)), days);
 assert.equal(callerName("local"), "this machine, no key");
 assert.equal(callerName("peer:x"), "peer x");
 assert.equal(callerName("key:a"), "a");
+// lending: each peer in the caller's place, only the days in range, lent and borrowed side by side
+const r = (n: number) => ({ requests: 1, failed: 0, in: n, out: 0 });
+const books = lendingBooks([
+  { peer: "a", byDayModel: { lent: { "2026-01-01": { m1: r(10) }, "2025-12-31": { m1: r(999) } }, borrowed: { "2026-01-03": { m2: r(5) } } } },
+  { peer: "b", byDayModel: { lent: { "2026-01-01": { m1: r(30) }, "2026-01-02": { m2: r(1) } }, borrowed: {} } },
+], days);
+assert.deepEqual(Object.keys(books.lent), days);
+assert.equal(books.lent["2025-12-31"], undefined, "a day out of range is left out");
+assert.equal(byDay(books.lent, "caller", ["a", "b"], days)[0]!.parts["b"], 30);
+const peerRows = lendingRows(books, {}, "caller");
+assert.deepEqual(peerRows.map((x) => [x.name, tokens(x.lent), tokens(x.borrowed)]), [["b", 31, 0], ["a", 10, 5]]);
+assert.deepEqual(peerRows[1]!.parts.map((x) => [x.name, tokens(x.lent), tokens(x.borrowed)]), [["m1", 10, 0], ["m2", 0, 5]]);
+assert.deepEqual(lendingRows(books, {}, "model").map((x) => [x.name, tokens(x.lent), tokens(x.borrowed)]), [["m1", 40, 0], ["m2", 1, 5]]);
+assert.deepEqual(lendingRows(lendingBooks([], days), {}, "caller"), []);
 console.log("usage-page.test.ts ok");

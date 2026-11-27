@@ -112,7 +112,7 @@ const as = (token: string) => ({ Authorization: `Bearer ${token}`, "Content-Type
 const chat = (token: string, model: string) =>
   fetch(`${url}/v1/chat/completions`, { method: "POST", headers: as(token), body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }) });
 const serves = async (token: string): Promise<string[]> => ((await (await fetch(`${url}/peer/state`, { headers: as(token) })).json()) as { serves: string[] }).serves;
-type Ledger = { peers: { peer: string; lentToday?: Record<string, number>; received?: Record<string, { theirs: string; terms?: Record<string, number> }>; byModel: { lent: Record<string, { requests: number }> }; byDay: { lent: Record<string, number>; borrowed: Record<string, number> }; closed?: string | null; lent: { month: { in: number; out: number } }; borrowed: { month: { in: number; out: number } } }[] };
+type Ledger = { peers: { peer: string; lentToday?: Record<string, number>; received?: Record<string, { theirs: string; terms?: Record<string, number> }>; byModel: { lent: Record<string, { requests: number }> }; byDay: { lent: Record<string, number>; borrowed: Record<string, number> }; byDayModel: { lent: Record<string, Record<string, { requests: number }>>; borrowed: Record<string, Record<string, { requests: number }>> }; closed?: string | null; lent: { month: { in: number; out: number } }; borrowed: { month: { in: number; out: number } } }[] };
 const ledger = async (peer: string) => ((await (await fetch(`${url}/lending`)).json()) as Ledger).peers.find((p) => p.peer === peer)!;
 
 try {
@@ -179,6 +179,7 @@ try {
   assert.equal(row.byModel.lent.big?.requests, 1, "by model");
   assert.deepEqual(row.received, { away: { theirs: "theirs", terms: { tokensPerDay: 5000, maxConcurrent: 1, rateLimit: 30, usedToday: 40 } } }, "and what the peer holds this node to, under this node's own id");
   assert.deepEqual([Object.values(row.byDay.lent), Object.values(row.byDay.borrowed)], [[60], [40]], "and by day");
+  assert.deepEqual([Object.values(row.byDayModel.lent).map((d) => d.big?.requests), Object.values(row.byDayModel.borrowed).map((d) => d.away?.requests)], [[1], [1]], "and by day and model");
   assert.equal((await fetch(`${url}/ui/lending`)).status, 200, "the page reads the same from its own route");
 
   // A model taken back is taken from a peer's own list too, in the file as well: that list would go on lending it.
