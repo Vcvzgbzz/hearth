@@ -4,8 +4,8 @@
  *
  * The adapter is a `trust: code` plugin, so the panel only ever reads it: the code is the operator's
  * file, and a restart is what reads a change. What the console can do is run one side against a
- * sample, which is what `/ui/adapters/try` is for — the same auth as `/flows/try`, and held to the
- * adapter plugin's own `timeoutMs`.
+ * sample, which is what `/ui/adapters/try` is for: a logged-in operator's alone, since it runs the plugin's
+ * code, and held to the adapter plugin's own `timeoutMs`.
  *
  *     npx tsx test/adapterui.test.ts
  */
@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { hashPassword } from "../src/access/login.js";
 import { loadConfig } from "../src/config/config.js";
 import { silentLogger } from "../src/observe/log.js";
 import { splitAdapterSource } from "../src/routing/adapterSource.js";
@@ -89,7 +90,9 @@ for (const [name, body] of [["gate.mjs", GATE], ["boom.mjs", BOOM], ["slow.mjs",
 
 const free = await port();
 const cfgPath = join(dir, "hearth.yaml");
+const passHash = await hashPassword("right-horse");
 writeFileSync(cfgPath, `version: 3
+operator: {user: op, passHash: "${passHash}"}
 name: t
 listen: {host: 127.0.0.1, port: ${free}}
 backends:
@@ -123,7 +126,11 @@ const base = `http://127.0.0.1:${free}`;
 type Ui = { adapters?: { adapters: { name: string; use: string; timeoutMs: number; state: string; request: string | null; response: string | null; whole: string; note?: string; used: { router: string | null; flow: string; step: number }[]; last?: { side: string; ok: boolean; error?: string; t: number } }[] } };
 const ui = async (): Promise<Ui> => (await fetch(`${base}/ui/data`)).json() as Promise<Ui>;
 /** A run of one side. This node has keys, so a local caller presents one, as the console does. */
-const tryIt = async (body: unknown, headers: Record<string, string> = { Authorization: "Bearer k-app" }) => {
+// The console's own session: trying an adapter runs its code, which an api key may not.
+const login = await fetch(`${base}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: "op", pass: "right-horse" }) });
+assert.equal(login.status, 200, "the operator logs in");
+const session = (login.headers.get("Set-Cookie") ?? "").split(";")[0]!;
+const tryIt = async (body: unknown, headers: Record<string, string> = { Cookie: session }) => {
   const r = await fetch(`${base}/ui/adapters/try`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   return { status: r.status, body: await r.json() as Record<string, unknown> };
 };
@@ -164,14 +171,16 @@ try {
   assert.deepEqual([reddened.last?.ok, reddened.last?.side], [false, "response"], "a failed call is remembered too");
   assert.match(String(reddened.last?.error), /no results list/, "with the reason it gave");
 
-  // --- try it: auth like /flows/try ----------------------------------------------------------
+  // --- try it: a logged-in operator's alone ----------------------------------------------------
   const anonymous = await tryIt({ adapter: "gate", side: "request", req: { method: "GET", path: "/page", query: {} } }, {});
-  assert.equal(anonymous.status, 401, "no credential, no run");
+  assert.equal(anonymous.status, 403, "no session, no run, even from this machine once an operator exists");
   const scoped = await tryIt({ adapter: "gate", side: "request", req: { method: "GET", path: "/page", query: {} } }, { Authorization: "Bearer k-chat" });
-  assert.equal(scoped.status, 403, "a key scoped to chat on its models does not reach the console's routes");
-  assert.match(why(scoped.body), /scoped to chat/, "and is told why");
+  assert.equal(scoped.status, 403, "a key scoped to chat does not run it");
   const unscoped = await tryIt({ adapter: "gate", side: "request", req: { method: "GET", path: "/page", query: {} } }, { Authorization: "Bearer k-app" });
-  assert.equal(unscoped.status, 200, "an unscoped key of this node may run it");
+  assert.equal(unscoped.status, 403, "an unscoped key does not run it either: it runs the plugin's code");
+  assert.match(why(unscoped.body), /logged-in operator/, "and is told why");
+  const operator = await tryIt({ adapter: "gate", side: "request", req: { method: "GET", path: "/page", query: {} } });
+  assert.equal(operator.status, 200, "the operator's session runs it");
 
   // --- try it: an ok run ---------------------------------------------------------------------
   const ran = await tryIt({ adapter: "gate", side: "request", req: { method: "GET", path: "/page", query: { q: "hearth" }, contentType: null, body: null } });

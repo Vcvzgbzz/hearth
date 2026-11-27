@@ -239,7 +239,9 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     /** This machine, or one of our api keys. Never a peer. */
     | "local"
     /** Either — work a peer may send us, and we may ask for ourselves. */
-    | "either";
+    | "either"
+    /** A logged-in operator, never an api key or a peer; before any operator exists, this machine without a key. */
+    | "operator";
 
   interface Route {
     path: string | string[];
@@ -269,6 +271,15 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
         return null;
       }
       return { ...base, peer: null, caller: op !== null ? "operator:" + op : "", models: null };
+    }
+
+    if (r.auth === "operator") {
+      // Running code an operator placed on the node is the operator's to do: a key's holder may not.
+      const op = callers.operator(req);
+      if (op !== null) return { ...base, peer: null, caller: "operator:" + op, models: null };
+      if (cfg.operator === null && bearer(req) === "" && isLoopback(req)) return { ...base, peer: null, caller: "local", models: null };
+      refuse(res, 403, "this runs a plugin's code: it takes a logged-in operator, not an api key", env);
+      return null;
     }
 
     const asPeer = r.auth === "local" ? null : callers.peer(req);
@@ -332,8 +343,8 @@ export function createNode(cfg: HearthConfig, baseLog: Logger, opts: { plugins?:
     { path: "/config/versions", methods: ["GET", "POST"], auth: "local", handler: adminArea.routeConfigVersions },
     { path: "/flows/try", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsTry },
     // One side of an adapter, run against a sample: what the map's panel tries before the operator
-    // edits the adapter's file. The plugin is `trust: code` already, and hearth sends nothing for it.
-    { path: "/ui/adapters/try", methods: ["POST"], auth: "local", handler: adapterArea.routeAdapterTry },
+    // edits the adapter's file. It runs the plugin's code, so it is the operator's alone; hearth sends nothing for it.
+    { path: "/ui/adapters/try", methods: ["POST"], auth: "operator", handler: adapterArea.routeAdapterTry },
     { path: "/flows/replay", methods: ["POST"], auth: "local", handler: chatArea.routeFlowsReplay },
     { path: "/queue", auth: "local", handler: consoleArea.routeQueue },
     { path: "/queue/events", methods: ["GET"], auth: "local", handler: consoleArea.routeQueueEvents },
