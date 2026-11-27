@@ -36,6 +36,25 @@ const cache = new Meter();
 cache.feed('{"usage":{"prompt_tokens":50,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":15}}}');
 assert.deepEqual(cache.read(), { in: 50, out: 2, est: false, cached: 30, written: 15 }, "input read from and written to a prompt cache is each counted");
 
+const vector = `[${Array.from({ length: 1024 }, (_, n) => (n / 1e4).toFixed(8)).join(",")}]`;
+const embedFirst = new Meter(true);
+embedFirst.feed('{"model":"my-model","object":"list","usage":{"prompt_tokens":12,"total_tokens":12},"data":[');
+for (let n = 0; n < 4; n++) embedFirst.feed(`${n ? "," : ""}{"index":${n},"embedding":${vector}}`);
+embedFirst.feed("]}");
+assert.deepEqual(embedFirst.read(), { in: 12, out: 0, est: false }, "an embeddings answer's usage is found ahead of its vectors");
+
+const embedLast = new Meter(true);
+embedLast.feed(`{"object":"list","data":[{"index":0,"embedding":${vector}}],"model":"my-model","usage":{"prompt_tokens":7,"total_tokens":7}}`);
+assert.deepEqual(embedLast.read(), { in: 7, out: 0, est: false }, "input alone is counted when nothing was written");
+
+const halfSaid = new Meter();
+halfSaid.feed('{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":7}}');
+assert.deepEqual(halfSaid.read(30), { in: 30, out: 0, est: true }, "a chat answer missing its output count is still estimated");
+
+const quoted = new Meter(true);
+quoted.feed(`{"note":"a \\"usage\\":{\\"prompt_tokens\\":99}","data":[{"embedding":${vector}},{"embedding":${vector}}]}`);
+assert.equal(quoted.read(), null, "text that only quotes a usage object is not read as one");
+
 // The ledger.
 let now = Date.UTC(2030, 0, 10, 12);
 const ledger = new Usage(() => now);
@@ -74,6 +93,10 @@ const backend = createServer((req, res) => {
       return;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.url === "/v1/embeddings") {
+      res.end(`{"model":"embed","object":"list","usage":{"prompt_tokens":9,"total_tokens":9},"data":[{"index":0,"embedding":${vector}},{"index":1,"embedding":${vector}}]}`);
+      return;
+    }
     res.end(req.url === "/v1/models"
       ? JSON.stringify({ data: [{ id: "chat" }, { id: "broke" }] })
       : JSON.stringify({ choices: [{ message: { role: "assistant", content: "hi" } }], usage: { prompt_tokens: 12, completion_tokens: 3 } }));
@@ -81,7 +104,8 @@ const backend = createServer((req, res) => {
 });
 await new Promise<void>((r) => backend.listen(0, "127.0.0.1", r));
 const node = createNode(parseV1({
-  backend: { url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}`, kind: "none", serves: ["chat", "broke"] },
+  backend: { url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}`, kind: "none", serves: ["chat", "broke", "embed"],
+    routes: [{ path: "/v1/embeddings", model: "embed" }] },
   apiKeys: [{ key: "k", label: "app" }],
 }), silentLogger);
 await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
@@ -95,10 +119,13 @@ assert.notEqual((await chat("no-such-model")).status, 200);
 const refused = await chat("broke");
 assert.notEqual(refused.status, 200);
 await refused.text();
+const embedded = await fetch(`${url}/v1/embeddings`, { method: "POST", headers: auth, body: JSON.stringify({ model: "embed", input: ["a", "b"] }) });
+assert.equal(embedded.status, 200);
+await embedded.text();
 const got = (await (await fetch(`${url}/usage?days=1`, { headers: auth })).json()) as { days: number; usage: Record<string, Record<string, Record<string, unknown>>> };
 assert.equal(got.days, 1);
 const [today] = Object.values(got.usage);
-assert.deepEqual(today, { "key:app": { chat: { requests: 2, failed: 0, in: 24, out: 6 }, broke: { requests: 1, failed: 1, in: 0, out: 0 } } }, "what ran is counted to its key, and what was refused is not; a provider's refusal is a failed request with no tokens");
+assert.deepEqual(today, { "key:app": { chat: { requests: 2, failed: 0, in: 24, out: 6 }, broke: { requests: 1, failed: 1, in: 0, out: 0 }, embed: { requests: 1, failed: 0, in: 9, out: 0 } } }, "what ran is counted to its key, and what was refused is not; a provider's refusal is a failed request with no tokens; an embeddings path counts its input");
 assert.equal((await fetch(`${url}/usage`)).status, 401, "it takes a key");
 
 await node.close();

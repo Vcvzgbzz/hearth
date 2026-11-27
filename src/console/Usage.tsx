@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 
 import { money, short } from "./pages.js";
 import { request } from "./store.js";
-import { byDay, callerName, daysEnding, tokens, topN, totalsBy, type Bar, type By, type Entry, type Prices, type UsageSnapshot } from "./tally.js";
+import { byDay, callerName, daysEnding, lendingBooks, lendingRows, tokens, topN, totalsBy, type Bar, type By, type Entry, type PeerDays, type Prices, type UsageSnapshot } from "./tally.js";
 import { Card, cx, Empty, mono } from "./ui.js";
 
 interface Loaded { usage: UsageSnapshot; prices: Prices }
@@ -27,6 +27,145 @@ function useUsage(days: number): Loaded | null {
     return () => { live = false; clearInterval(id); };
   }, [days]);
   return data;
+}
+
+/** Each peer's lending by day, from `GET /ui/lending`; null until it loads. */
+function useLending(): PeerDays[] | null {
+  const [peers, setPeers] = useState<PeerDays[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => fetch("/ui/lending", { cache: "no-store" }).then((r) => r.json()).then((d: { peers?: PeerDays[] }) => { if (live) setPeers(d.peers ?? []); }).catch(() => {});
+    void load();
+    const id = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => { live = false; clearInterval(id); };
+  }, []);
+  return peers;
+}
+
+type LendBy = "peer" | "model";
+const asBy = (by: LendBy): By => (by === "peer" ? "caller" : "model");
+
+/** Tokens lent per day stacked above the line and borrowed stacked below it, one colour per peer or model. */
+function MirrorChart({ lent, borrowed, names }: { lent: Bar[]; borrowed: Bar[]; names: string[] }) {
+  const W = 1000, H = 160, mid = H / 2;
+  const top = Math.max(1, ...lent.map((b) => b.total), ...borrowed.map((b) => b.total));
+  const w = W / lent.length;
+  const tall = (v: number) => (v / top) * (mid - 2);
+  const segs = (b: Bar) => [...names.map((n, k) => [n, b.parts[n] ?? 0, COLORS[k] ?? OTHERS] as const), ["others", b.others, OTHERS] as const];
+  const tip = (b: Bar, side: string) => `${b.total > 0 ? `${short(b.total)} ${side}` : `nothing ${side}`}${b.failed > 0 ? `, ${b.failed} failed` : ""}${segs(b).filter((s) => s[1] > 0).map((s) => `\n  ${s[0]}: ${short(s[1])}`).join("")}`;
+  return (
+    <div className="px-4 pt-3">
+      <div className="relative">
+      <span className="pointer-events-none absolute left-1 top-0 text-[10px] font-medium uppercase tracking-wide text-dim">lent · peers ran here</span>
+      <span className="pointer-events-none absolute bottom-0 left-1 text-[10px] font-medium uppercase tracking-wide text-dim">borrowed · you ran there</span>
+      <svg role="img" aria-label="tokens lent above the line and borrowed below it, per day" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-40 w-full">
+        <rect x={0} y={mid} width={W} height={H - mid} fill="var(--muted)" opacity={0.35} />
+        {lent.map((b, i) => {
+          const down = borrowed[i]!;
+          let up = mid, low = mid + 1;
+          return (
+            <g key={b.day}>
+              <title>{`${b.day} (UTC)\n${tip(b, "lent")}\n${tip(down, "borrowed")}`}</title>
+              <rect x={i * w} y={0} width={w} height={H} fill="transparent" />
+              {segs(b).map(([n, v, color]) => { const h = tall(v); up -= h; return h > 0 ? <rect key={`l${n}`} x={i * w + w * 0.12} y={up} width={w * 0.76} height={h} fill={color} /> : null; })}
+              {segs(down).map(([n, v, color]) => { const h = tall(v); low += h; return h > 0 ? <rect key={`b${n}`} x={i * w + w * 0.12} y={low - h} width={w * 0.76} height={h} fill={color} opacity={0.6} /> : null; })}
+            </g>
+          );
+        })}
+        <line x1={0} x2={W} y1={mid} y2={mid} stroke="var(--border)" vectorEffect="non-scaling-stroke" />
+      </svg>
+      </div>
+      <div className="mt-1 flex justify-between text-[11px] text-dim"><span>{lent[0]?.day}</span><span>{lent[lent.length - 1]?.day}</span></div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 py-2 text-[12px]">
+        {[...names.map((n, k) => [n, COLORS[k] ?? OTHERS] as const), ["others", OTHERS] as const].map(([n, c]) => (
+          <span key={n} className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{ background: c }} />{n}</span>
+        ))}      </div>
+    </div>
+  );
+}
+
+function LendCells({ lent, borrowed, total }: { lent: Entry; borrowed: Entry; total: number }) {
+  const share = total > 0 ? (tokens(lent) + tokens(borrowed)) / total : 0;
+  const n = (v: number) => (v > 0 ? short(v) : <span className="text-dim">—</span>);
+  const failed = lent.failed + borrowed.failed;
+  return (
+    <>
+      <td className="tabular px-4 py-2 text-right">{n(lent.requests)}</td>
+      <td className="tabular px-4 py-2 text-right">{n(tokens(lent))}</td>
+      <td className="tabular px-4 py-2 text-right">{n(borrowed.requests)}</td>
+      <td className="tabular px-4 py-2 text-right">{n(tokens(borrowed))}</td>
+      <td className={cx("tabular px-4 py-2 text-right", failed > 0 ? "text-bad" : "text-dim")}>{failed > 0 ? short(failed) : "—"}</td>
+      <td className="w-32 px-4 py-2" title={`${(share * 100).toFixed(1)}% of tokens lent and borrowed`}>
+        <div className="h-1.5 rounded-full bg-muted"><div className="h-full rounded-full bg-accent" style={{ width: `${share * 100}%` }} /></div>
+      </td>
+    </>
+  );
+}
+
+/** What peers ran here and what this node ran on theirs, by peer or by model, over its own range. */
+function LendingCard({ peers, prices }: { peers: PeerDays[]; prices: Prices }) {
+  const [days, setDays] = useState(7);
+  const [by, setBy] = useState<LendBy>("peer");
+  const [open, setOpen] = useState<string | null>(null);
+  const range = daysEnding(days, Date.now());
+  const books = lendingBooks(peers, range);
+  const rows = lendingRows(books, prices, asBy(by));
+  const names = rows.slice(0, 5).map((r) => r.name);
+  const sum = (side: "lent" | "borrowed") => rows.reduce((a, r) => a + tokens(r[side]), 0);
+  const lent = sum("lent"), borrowed = sum("borrowed");
+  const other: LendBy = by === "peer" ? "model" : "peer";
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="mr-auto text-[15px] font-semibold">Lending</h2>
+        <Segmented name="lending range" value={days} options={[[7, "7 days"], [31, "31 days"]]} onChange={(d) => setDays(d)} />
+        <Segmented name="lending group by" value={by} options={[["peer", "by peer"], ["model", "by model"]]} onChange={(b) => { setBy(b); setOpen(null); }} />
+      </div>
+      <Card className="overflow-hidden">
+        {lent + borrowed === 0 ? <Empty>Nothing was lent or borrowed in the last {days} days.</Empty> : (
+          <>
+            <MirrorChart lent={byDay(books.lent, asBy(by), names, range)} borrowed={byDay(books.borrowed, asBy(by), names, range)} names={names} />
+            <div className="flex flex-wrap gap-x-6 gap-y-1 border-t border-line px-4 py-2 text-[12px]">
+              <span><b className="tabular">{short(lent)}</b> <span className="text-dim">tokens lent (peers ran here)</span></span>
+              <span><b className="tabular">{short(borrowed)}</b> <span className="text-dim">borrowed (you ran there)</span></span>
+            </div>
+            <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-left">
+              <thead className="border-b border-line bg-muted/50 text-[11px] uppercase tracking-wide text-dim">
+                <tr>
+                  <th className="px-4 py-2 font-medium">{by}</th>
+                  {["lent requests", "lent tokens", "borrowed requests", "borrowed tokens", "failed"].map((h) => <th key={h} className="px-4 py-2 text-right font-medium">{h}</th>)}
+                  <th className="px-4 py-2 font-medium">share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((g) => {
+                  const isOpen = open === g.name;
+                  return (
+                    <Fragment key={g.name}>
+                      <tr onClick={() => setOpen(isOpen ? null : g.name)} className="cursor-pointer border-b border-line/60 hover:bg-muted/40">
+                        <td className={cx("px-4 py-2", by === "model" && mono)}>
+                          <button type="button" aria-expanded={isOpen} className="inline-flex items-center gap-1.5 focus-visible:outline-2 focus-visible:outline-accent">
+                            {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{g.name}
+                          </button>
+                        </td>
+                        <LendCells lent={g.lent} borrowed={g.borrowed} total={lent + borrowed} />
+                      </tr>
+                      {isOpen && g.parts.map((p) => (
+                        <tr key={p.name} className="border-b border-line/40 bg-accent/[0.03] text-[12px]">
+                          <td className={cx("py-1.5 pl-10 pr-4", other === "model" && mono)}>{p.name}</td>
+                          <LendCells lent={p.lent} borrowed={p.borrowed} total={lent + borrowed} />
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table></div>
+          </>
+        )}
+      </Card>
+    </div>
+  );
 }
 
 const label = (by: By, name: string): string => (by === "caller" ? callerName(name) : name);
@@ -98,6 +237,7 @@ export function Usage() {
   const [by, setBy] = useState<By>("caller");
   const [open, setOpen] = useState<string | null>(null);
   const data = useUsage(days);
+  const lending = useLending();
   const groups = data ? totalsBy(data.usage, data.prices, by) : [];
   const other: By = by === "caller" ? "model" : "caller";
   const names = topN(groups, 5);
@@ -155,6 +295,7 @@ export function Usage() {
           </>
         )}
       </Card>
+      {lending && lending.length > 0 && <LendingCard peers={lending} prices={data?.prices ?? {}} />}
       <p className="text-[11px] text-dim">Days are UTC. Cost is at the prices the models carry now.</p>
     </div>
   );

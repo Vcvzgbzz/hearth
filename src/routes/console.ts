@@ -11,7 +11,7 @@ import { LIVE_KINDS, LIVE_STAGES, placements } from "../plugins/plugins.js";
 import { type ReachType, reachOf } from "../routing/reach.js";
 import { flowsOf } from "../routing/route.js";
 import { CONSOLE_CSP, CONSOLE_HTML } from "../ui.js";
-import { KEEP_DAYS, Usage } from "../observe/usage.js";
+import { KEEP_DAYS, Usage, type Row as UsageRow } from "../observe/usage.js";
 import { type CallerUse, type KeyInfo, type LedgerRow, createViews } from "../observe/views.js";
 import type { Call, RouteContext } from "./context.js";
 import type { AdapterLine, AdaptersView, UiData } from "../observe/uidata.js";
@@ -135,6 +135,10 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
       return n > 0 ? [[day, n]] : [];
     }));
 
+  /** One caller's counts for each day kept, by model; a day with none is absent. */
+  const rowsByDay = (book: Usage, caller: string): Record<string, Record<string, UsageRow>> =>
+    Object.fromEntries(Object.entries(book.since()).flatMap(([day, callers]) => (callers[caller] ? [[day, callers[caller]]] : [])));
+
   // The ledger, with each peer's use by model and by day, which the page's own stream leaves out.
   async function routeLending(c: Call): Promise<void> {
     json(c.res, 200, {
@@ -143,6 +147,7 @@ export function consoleRoutes(ctx: RouteContext, { proxying }: { proxying: Reado
         ...row,
         byModel: { lent: usage.byModel(`peer:${row.peer}`, KEEP_DAYS), borrowed: borrowed.byModel(row.peer, KEEP_DAYS) },
         byDay: { lent: tokensByDay(usage, `peer:${row.peer}`), borrowed: tokensByDay(borrowed, row.peer) },
+        byDayModel: { lent: rowsByDay(usage, `peer:${row.peer}`), borrowed: rowsByDay(borrowed, row.peer) },
       })),
     });
   }

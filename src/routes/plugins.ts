@@ -5,7 +5,7 @@
 import { pipeline } from "node:stream/promises";
 
 import { Refusal } from "../errors.js";
-import { pluginAuth } from "../config/plugins.js";
+import { pluginAuth, pluginKinds } from "../config/plugins.js";
 import { ConfigError, resolveSecret } from "../config/read.js";
 import { fail, forwardable, headersOf, json } from "../wire/http.js";
 import { checkHttp } from "../plugins/mcp.js";
@@ -72,13 +72,29 @@ export function pluginRoutes(ctx: RouteContext) {
       json(res, hop.status, { error: hop.why });
       return;
     }
-    // The caller's router decides, as it does for a model: the request is asked of it as MCP:<name> or API:<name>.
-    // With no rule for MCP or API, its flow for every other name decides: one that runs a name as itself lets
-    // plugins through, and one that refuses refuses them until a rule for MCP or API is added. A name that is no
-    // plugin's may be a router's own name for one, so it is asked as either type, and the plugin a step names answers.
-    const asked = m?.[1] ?? "";
+    // The caller's router decides, as it does for a model. A plugin's own name is asked of it as the type that
+    // plugin serves; a name that is no plugin's may be the router's own name for one, so it goes as written. With
+    // no rule for a type, the router's flow for every other name decides: running a name as itself lets plugins
+    // through, and refusing refuses them until a rule for that type is added. The plugin a step names answers.
+    let asked = m?.[1] ?? "";
+    try { asked = decodeURIComponent(asked); } catch { /* left as sent */ }
+    // A name is one path segment: one that decodes to more than one names no plugin, and goes no further.
+    if (asked.includes("/")) {
+      json(res, 404, { error: "a plugin's name is one path segment" });
+      return;
+    }
     const kind = plugins.kindOf(asked);
     const world = { ...worlds.worldFor(c.caller, Object.keys(cfg.scheduler.lanes)[0]!, undefined, worlds.rulesFor(c.caller), headersOf(req)), plugin: asked };
+    // A plugin's own name is asked as the one type that plugin serves. A plain name no plugin has is asked as
+    // each type a plugin on this node serves, since a rule may give that name to a plugin of any of them. A name
+    // that is type:variant already says its type, so it goes as written and the router reads that type itself.
+    const typed = kind === null && asked.includes(":");
+    const tries = kind !== null ? [{ as: kind, named: `${kind}:${asked}` }]
+      : typed ? [{ as: undefined, named: asked }]
+      : pluginKinds(cfg.plugins).map((t) => ({ as: t, named: `${t}:${asked}` }));
+    /** The router's decision on one try, leaving out the plugins in `skip`. */
+    const decide = (t: { as: string | undefined; named: string }, skip: ReadonlySet<string>) =>
+      resolve(t.named, { ...world, ...(t.as !== undefined ? { kind: t.as } : {}), skip });
     const path = m?.[2] ?? "/";
     const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
     let body: Buffer | undefined;
@@ -99,12 +115,11 @@ export function pluginRoutes(ctx: RouteContext) {
     };
     const ctrl = new AbortController();
     res.on("close", () => { if (!res.writableEnded) ctrl.abort(); });
-    const kinds = kind !== null ? [kind] : (["API", "MCP"] as const);
     // A strict router's callers get the plugin their line names or its failure: no next line for them.
     const strict = worlds.routerOf(c.caller)?.strict === true;
     /** Would the router pick another plugin line for this request, leaving these plugins out? */
-    const hasNext = (skip: ReadonlySet<string>): boolean => kinds.some((as) => {
-      const r = resolve(`${as}:${asked}`, { ...world, skip });
+    const hasNext = (skip: ReadonlySet<string>): boolean => tries.some((t) => {
+      const r = decide(t, skip);
       return r.plugin !== undefined && plugins.kindOf(r.plugin) !== null;
     });
 
@@ -228,7 +243,7 @@ export function pluginRoutes(ctx: RouteContext) {
         // The caller's router is asked about the fallback as about any plugin: one it would not send this caller to
         // does not answer in its place, so a fallback is never a way past a refusal.
         const fbKind = plugins.kindOf(fb.plugin);
-        const open = fbKind !== null && resolve(`${fbKind}:${fb.plugin}`, { ...world, plugin: fb.plugin }).plugin === fb.plugin;
+        const open = fbKind !== null && resolve(`${fbKind}:${fb.plugin}`, { ...world, plugin: fb.plugin, kind: fbKind }).plugin === fb.plugin;
         if (!open) {
           log.info("plugin.fallback_refused", { plugin: name, to: fb.plugin, why, caller: c.caller });
           return { failed: `${why}, and its fallback ${fb.plugin} is not open to this caller` };
@@ -420,8 +435,8 @@ export function pluginRoutes(ctx: RouteContext) {
       let name: string | null = null;
       let adapt: string | undefined;
       let refused: string | null = null;
-      for (const as of kinds) {
-        const r = resolve(`${as}:${asked}`, { ...world, skip: tried });
+      for (const t of tries) {
+        const r = decide(t, tried);
         if (r.plugin !== undefined && plugins.kindOf(r.plugin) !== null) { name = r.plugin; adapt = r.adapt; break; }
         if (r.plugin === undefined) refused ??= r.reason;
       }

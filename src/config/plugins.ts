@@ -2,6 +2,7 @@
  * Plugins: what each one is, where it runs, and the lines it sits on.
  */
 import { asRecord, bad, bool, only, resolveSecret, str, stringList } from "./read.js";
+export { pluginKind, pluginKinds } from "./kind.js";
 
 /**
  * What hearth sends a plugin service on every call: its `key` as a bearer token and its own `headers`, names
